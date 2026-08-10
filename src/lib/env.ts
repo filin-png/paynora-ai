@@ -3,16 +3,23 @@ import { z } from "zod";
 /**
  * Environment schema for the current project phase.
  *
- * Nothing here is required to boot the app locally — DATABASE_URL and
- * AI_PROVIDER credentials are introduced by later phases (see ROADMAP.md).
- * Keeping them optional now means Phase 0 never requires a paid or
- * foreign-only service just to run `next dev`.
+ * From Phase 1 onward, DATABASE_URL and AUTH_SECRET are genuinely required
+ * — authentication cannot function without them. Both are free and local
+ * (see DEPLOYMENT.md): a local Postgres instance and a locally generated
+ * secret, no paid or foreign-only service. Missing or malformed values fail
+ * loudly at startup instead of falling back to an insecure default.
  */
 export const envSchema = z.object({
   NODE_ENV: z
     .enum(["development", "test", "production"])
     .default("development"),
-  DATABASE_URL: z.string().url().optional(),
+  DATABASE_URL: z.string().url(),
+  AUTH_SECRET: z
+    .string()
+    .min(
+      32,
+      "AUTH_SECRET must be at least 32 characters — generate one with `openssl rand -base64 33`",
+    ),
   AI_PROVIDER: z.enum(["none", "gigachat"]).default("none"),
 });
 

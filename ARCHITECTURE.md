@@ -10,38 +10,46 @@ benefit. The monolith stays maintainable by enforcing internal module
 boundaries instead of process boundaries.
 
 Boundaries are introduced when a phase actually needs them — not
-speculatively. As of Phase 0, the only boundary that exists in code is
-`src/lib/env.ts`, which validates `process.env` at the trust boundary
-between the OS environment and the application.
+speculatively.
 
 ## Current layout
 
 ```
 src/
-  app/                 Next.js App Router: routes, layouts, pages
-  components/ui/       Reusable, shadcn/ui-style UI primitives (cva + cn)
-  lib/                 Cross-cutting utilities (env validation, cn helper)
+  app/                    Next.js App Router: routes, layouts, pages
+    sign-in/, sign-up/     Public auth pages + their Server Actions
+    app/                   Protected shell (requires auth) and org routes
+      [orgSlug]/            Organization page: members, OWNER-only rename
+      organizations/new/    Organization creation
+    api/auth/[...nextauth]/ Auth.js route handler
+  components/ui/          Reusable, shadcn/ui-style UI primitives (cva + cn)
+  lib/                     Cross-cutting utilities (env validation, cn helper)
+  server/
+    auth/                  Auth.js config, password hashing, registration
+    db/                    Prisma client singleton (+ test-only reset helper)
+    tenancy/               Authorization primitives, org creation, slugs
 prisma/
-  schema.prisma        Prisma schema (datasource + generator only, so far)
-prisma.config.ts        Prisma 7 config (schema path, datasource URL source)
+  schema.prisma            User, Organization, OrganizationMember
+  migrations/               Applied migration history
+prisma.config.ts            Prisma 7 config (schema path, datasource URL source)
 ```
+
+`src/server/*` is server-only code (Prisma queries, password hashing,
+session resolution) — nothing under it is imported by client components.
+`src/server/tenancy/context.ts` is deliberately framework-agnostic (see
+`docs/identity-and-tenancy.md`); `src/server/tenancy/guards.ts` is the thin
+Next.js-specific layer (redirect/notFound) that pages and Server Actions
+actually call.
 
 ## Planned layout (introduced as each phase needs it)
 
-Phase 1 (Identity & Multi-Tenancy) introduces:
-
-```
-src/server/auth/        Session/auth logic
-src/server/tenancy/      Organization-scoped data access helpers
-prisma/schema.prisma      User, Organization, OrganizationMembership models
-```
-
 Phase 2+ introduces domain modules per `docs/domain-model.md` (Customer,
-Invoice, Payment, ...), and Phase 3+ introduces the provider boundaries
-described below. Nothing under `src/core` or `src/server/providers` exists
-yet — creating those directories before there is real code to put in them
-would be dead scaffolding, which this project avoids on principle (see
-Engineering Rules in the project brief).
+Invoice, Payment, ...) under `src/server/`, and Phase 3+ introduces the
+provider boundaries described below under `src/server/providers/`. Nothing
+under `src/core` or `src/server/providers` exists yet — creating those
+directories before there is real code to put in them would be dead
+scaffolding, which this project avoids on principle (see Engineering Rules
+in the project brief).
 
 ## Provider boundaries (design, not yet implemented)
 
@@ -66,13 +74,14 @@ See `docs/ai-architecture.md` for the AI provider design and
 `docs/provider-strategy.md` for the full provider list and the
 Russia-accessibility constraint driving initial adapter choices.
 
-## Multi-tenancy (design, implemented starting Phase 1)
+## Multi-tenancy
 
 All business data belongs to an `Organization`. Authorization is enforced
-server-side on every query and mutation — the UI hiding a control is never
-sufficient. Tenant isolation is a security requirement with automated tests
-attached, not an incidental property of the schema. Details land in
-`docs/domain-model.md` as Phase 1 implements them.
+server-side on every query and mutation via the primitives in
+`src/server/tenancy/context.ts` — the UI hiding a control is never
+sufficient. Tenant isolation has automated tests
+(`src/server/tenancy/context.test.ts`) that run against a real database.
+Full design rationale: `docs/identity-and-tenancy.md`.
 
 ## Validation strategy
 

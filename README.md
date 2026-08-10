@@ -5,20 +5,19 @@ employees) that helps them track accounts receivable, spot payment risk
 early, and automate collection follow-up — without replacing the accounting
 software they already use.
 
-**Project status: Phase 0 — Foundation.** No product features are
-implemented yet. This repository currently contains the technical
-foundation the product will be built on: a booting Next.js application,
-strict TypeScript, the UI/testing/CI toolchain, and baseline documentation.
-See [ROADMAP.md](./ROADMAP.md) for what's next.
+**Project status: Phase 1 — Identity & Multi-Tenancy.** Authentication,
+organizations, and tenant isolation are implemented. Accounts receivable
+features (customers, invoices, AR dashboard) are not — see
+[ROADMAP.md](./ROADMAP.md) for what's next.
 
 ## Tech stack
 
 - **Frontend/Backend**: Next.js (App Router), React, TypeScript (strict mode)
 - **UI**: Tailwind CSS, shadcn/ui-compatible component architecture
-- **Database**: PostgreSQL via Prisma (schema foundation only — no domain
-  models yet)
+- **Database**: PostgreSQL via Prisma — User, Organization, OrganizationMember
+- **Auth**: Auth.js v5 (Credentials + JWT sessions), bcrypt password hashing
 - **Validation**: Zod
-- **Testing**: Vitest
+- **Testing**: Vitest, including real-database tenant-isolation tests
 - **CI**: GitHub Actions
 
 The project is a modular monolith on purpose — see
@@ -37,18 +36,23 @@ implementations can be swapped without touching business logic. See
 
 ## Getting started
 
-Requirements: Node.js 22+, npm.
+Requirements: Node.js 22+, npm, a local PostgreSQL (free — see
+[DEPLOYMENT.md](./DEPLOYMENT.md)).
 
 ```bash
 npm install
-cp .env.example .env.local   # optional in Phase 0 — nothing is required yet
+cp .env.example .env.local
+# then fill in AUTH_SECRET (openssl rand -base64 33) in .env.local —
+# DATABASE_URL's default already matches docker-compose.yml
+docker compose up -d postgres   # or point DATABASE_URL at any local Postgres
+npx prisma migrate dev
 npm run dev
 ```
 
-The app boots at http://localhost:3000 with no environment variables and no
-running database. A PostgreSQL database is only needed starting in Phase 1,
-once domain models exist — see [DEPLOYMENT.md](./DEPLOYMENT.md) for local
-Postgres setup.
+The app boots at http://localhost:3000. See
+[docs/identity-and-tenancy.md](./docs/identity-and-tenancy.md) for the
+authentication/tenancy design and exactly what's required to run it
+locally, including the separate test database integration tests use.
 
 ## Scripts
 
@@ -59,7 +63,7 @@ Postgres setup.
 | `npm run start`        | Run the production build                   |
 | `npm run lint`         | ESLint (Next.js + TypeScript rules)        |
 | `npm run typecheck`    | `tsc --noEmit`, strict mode                |
-| `npm run test`         | Run the Vitest suite once                  |
+| `npm run test`         | Run the Vitest suite once (needs Postgres) |
 | `npm run test:watch`   | Run Vitest in watch mode                   |
 | `npm run db:validate`  | Validate `prisma/schema.prisma`            |
 | `npm run db:generate`  | Generate the Prisma client                 |
@@ -71,7 +75,8 @@ Postgres setup.
 - [CHANGELOG.md](./CHANGELOG.md) — what actually shipped, by date
 - [SECURITY.md](./SECURITY.md) — security baseline and reporting
 - [DEPLOYMENT.md](./DEPLOYMENT.md) — local and future deployment setup
-- [docs/domain-model.md](./docs/domain-model.md) — core domain entities (planned)
+- [docs/identity-and-tenancy.md](./docs/identity-and-tenancy.md) — auth, tenancy, authorization design
+- [docs/domain-model.md](./docs/domain-model.md) — core domain entities
 - [docs/ai-architecture.md](./docs/ai-architecture.md) — AI provider abstraction
 - [docs/provider-strategy.md](./docs/provider-strategy.md) — external provider boundaries
 - [docs/exit-readiness.md](./docs/exit-readiness.md) — commercial/due-diligence tracking

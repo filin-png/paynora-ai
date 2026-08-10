@@ -1,9 +1,11 @@
-// PAYNORA AI — Prisma schema foundation.
+// PAYNORA AI — Prisma schema.
 //
-// Phase 0 establishes the PostgreSQL/Prisma toolchain only. Domain models
-// (User, Organization, Customer, Invoice, ...) are introduced in Phase 1
-// once tenancy and authorization boundaries are designed — see
-// docs/domain-model.md and ROADMAP.md.
+// Phase 1 introduces the identity and multi-tenancy foundation: User,
+// Organization, and OrganizationMember. See docs/identity-and-tenancy.md
+// for the design rationale (auth approach, tenant isolation strategy).
+//
+// Domain models for Phase 2+ (Customer, Invoice, Payment, ...) are not
+// added here yet — see docs/domain-model.md.
 
 generator client {
   provider = "prisma-client-js"
@@ -11,4 +13,50 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+}
+
+enum OrganizationRole {
+  OWNER
+  MEMBER
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships OrganizationMember[]
+
+  @@map("users")
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members OrganizationMember[]
+
+  @@map("organizations")
+}
+
+model OrganizationMember {
+  id             String           @id @default(cuid())
+  userId         String
+  organizationId String
+  role           OrganizationRole
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+  @@map("organization_members")
 }

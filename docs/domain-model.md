@@ -1,11 +1,11 @@
 # Domain Model
 
-**Status: design direction for Phase 1–2. Nothing described here is
-implemented yet** — there are no Prisma models beyond the empty
-datasource/generator declaration in `prisma/schema.prisma`. This document
-exists so Phase 1 has a shared target instead of inventing the domain
-ad hoc, and so it isn't confused with a description of shipped
-functionality.
+**Status: User, Organization, and OrganizationMember are implemented
+(Phase 1) — see `prisma/schema.prisma` and `docs/identity-and-tenancy.md`
+for the actual schema and design rationale. Everything else below
+(Customer, Invoice, Payment, ...) is design direction for Phase 2+, not
+implemented yet.** This document exists so later phases have a shared
+target instead of inventing the domain ad hoc.
 
 ## Conceptual flow
 
@@ -15,13 +15,15 @@ Organization → Customers → Invoices → Risk Analysis → Collection Actions
 
 ## Entities
 
-- **User** — an authenticated application user. Can belong to more than one
-  Organization.
-- **Organization** — the tenant. All business data belongs to exactly one
-  Organization. This is the unit of billing and of data isolation.
-- **OrganizationMembership** — join between User and Organization. Designed
-  to carry a role from the start (e.g. owner/admin/member) even though
-  Phase 1 may ship with a single implicit role.
+- **User** *(implemented)* — an authenticated application user. Can belong
+  to more than one Organization.
+- **Organization** *(implemented)* — the tenant. All business data belongs
+  to exactly one Organization. This is the unit of billing and of data
+  isolation.
+- **OrganizationMember** *(implemented)* — join between User and
+  Organization, carrying a role (`OWNER` | `MEMBER`) from the start. See
+  `docs/identity-and-tenancy.md` for why only two roles exist so far and
+  how the architecture leaves room for more without a redesign.
 - **Customer** — a debtor/client belonging to an Organization.
 - **Invoice** — issued to a Customer. Tracks amount, currency, issue date,
   due date, outstanding amount, payment status, and collection status.
