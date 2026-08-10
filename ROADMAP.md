@@ -1,0 +1,94 @@
+# Roadmap
+
+Status reflects what is actually implemented and verified, not what is
+planned. Do not read a phase as "done" until its checklist is fully
+checked and the acceptance gate (typecheck, lint, test, build) passed on
+the commit that closes it.
+
+## Phase 0 — Foundation — ✅ complete (2026-08-10)
+
+- [x] Next.js + TypeScript (strict mode) application that boots with `npm run dev`
+- [x] Tailwind CSS + shadcn/ui-compatible component architecture (`src/components/ui`)
+- [x] PostgreSQL/Prisma toolchain configured (no domain models yet — Phase 1)
+- [x] Zod-based environment validation (`src/lib/env.ts`), nothing required to boot
+- [x] ESLint (Next.js + TypeScript rules) clean
+- [x] Vitest configured with a real passing test suite
+- [x] GitHub Actions CI (typecheck, lint, test, build)
+- [x] Baseline documentation (this set of files)
+- [x] No paid or foreign-only service required to run the dev workflow
+
+## Phase 1 — Identity & Multi-Tenancy
+
+- [ ] Authentication
+- [ ] Organization model + creation flow
+- [ ] Organization membership (role support designed in from the start)
+- [ ] Server-side authorization on every query/mutation
+- [ ] Tenant isolation enforced at the data-access layer
+- [ ] Automated tenant-isolation tests (Org A cannot read/write Org B's data)
+
+## Phase 2 — Accounts Receivable Core
+
+- [ ] Customer CRUD + archive
+- [ ] Invoice CRUD with amount, currency, issue/due date, outstanding amount
+- [ ] Payment status + collection status lifecycle (invariants evaluated before encoding statuses)
+- [ ] AR dashboard: total outstanding, total overdue, collected, high-risk, avg. delay, upcoming
+- [ ] Activity timeline per customer/invoice
+
+## Phase 3 — AI Collections
+
+- [ ] `AIProvider` interface
+- [ ] GigaChat adapter (first implementation)
+- [ ] Structured, schema-validated AI output
+- [ ] Reminder generation (Friendly / Professional / Firm / Custom tones)
+- [ ] Deterministic payment-risk scoring (no ML infra yet)
+- [ ] Graceful degradation when AI is unavailable
+
+## Phase 4 — Collection Automation
+
+- [ ] Collection sequences (e.g. due date → +3d → +7d → +14d)
+- [ ] Background job scheduling (`JobProvider`)
+- [ ] Idempotent reminder jobs (no duplicate sends on retry)
+- [ ] `EmailProvider` + delivery
+- [ ] Automation controls: global / per-customer / per-invoice disable
+- [ ] Retries and observable permanent-failure states
+
+## Phase 5 — Intelligence
+
+- [ ] Payment behavior analytics
+- [ ] Promise-to-pay tracking, manual first, automatic extraction later
+- [ ] Cashflow forecast (7 / 30 / 60 days)
+- [ ] Risk scoring improvements
+- [ ] Collection performance analytics
+
+## Phase 6 — Monetization
+
+- [ ] Subscription domain model
+- [ ] `BillingProvider` abstraction (no hard-coded Stripe)
+- [ ] Plans, usage limits, entitlements
+- [ ] Subscription lifecycle (trial, active, past-due, cancelled)
+
+## Phase 7 — Integrations (only per validated customer demand)
+
+- [ ] Accounting system integrations (candidates: local/regional + QuickBooks, Xero)
+- [ ] Payment processor integrations (candidates: Stripe once relevant, regional providers)
+- [ ] Invoice import
+
+## Phase 8 — Commercialization
+
+- [ ] Landing page + pricing
+- [ ] Onboarding flow
+- [ ] Transactional communication
+- [ ] Analytics funnel
+- [ ] Legal pages
+- [ ] Support workflow
+
+## Phase 9 — Exit Readiness
+
+- [ ] Remove founder dependencies
+- [ ] Complete operational documentation
+- [ ] Security review
+- [ ] Dependency/license review
+- [ ] Financial exports
+- [ ] Technical due-diligence package
+
+See `docs/exit-readiness.md` for the commercial metrics this phase targets.
