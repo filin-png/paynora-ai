@@ -3,11 +3,8 @@ import { z } from "zod";
 import { prisma } from "@/server/db/client";
 import { recordActivityEvent } from "./activity";
 import { dateOnlySchema, parseDateOnly } from "./dates";
-import {
-  ArResourceNotFoundError,
-  InvoiceCancelledError,
-  OverpaymentError,
-} from "./errors";
+import { InvoiceCancelledError, OverpaymentError } from "./errors";
+import { lockInvoiceForUpdate } from "./invoices";
 import { amountMinorSchema, formatMoney } from "./money";
 
 export const paymentInputSchema = z.object({
@@ -23,27 +20,21 @@ export const paymentInputSchema = z.object({
 
 export type PaymentInput = z.input<typeof paymentInputSchema>;
 
-type LockedInvoiceRow = {
-  id: string;
-  organizationId: string;
-  customerId: string;
-  number: string;
-  currency: string;
-  amountMinor: bigint;
-  status: "OPEN" | "CANCELLED";
-};
-
 /**
  * Records a payment with the invoice row locked for the transaction's
- * duration (`SELECT ... FOR UPDATE`), so two concurrent payments against
- * the same invoice are serialized by Postgres rather than racing: the
- * second transaction blocks until the first commits, then re-reads the
+ * duration (`SELECT ... FOR UPDATE`, via lockInvoiceForUpdate — the same
+ * lock cancelInvoice takes), so two concurrent payments against the same
+ * invoice are serialized by Postgres rather than racing: the second
+ * transaction blocks until the first commits, then re-reads the
  * now-current paid total before deciding whether it would overpay. This
  * is what makes overpayment rejection correct under concurrency, not just
  * in the common single-request case — see
  * docs/accounts-receivable.md#concurrency and
  * src/server/ar/payments.test.ts, which exercises this with two payments
- * fired at the same time.
+ * fired at the same time. Locking against cancelInvoice specifically is
+ * what prevents a payment from landing on an invoice that's being
+ * cancelled concurrently — see src/server/ar/invoices.test.ts for that
+ * race.
  */
 export async function recordPayment(
   organizationId: string,
@@ -53,14 +44,7 @@ export async function recordPayment(
   const input = paymentInputSchema.parse(rawInput);
 
   return prisma.$transaction(async (tx) => {
-    const rows = await tx.$queryRaw<LockedInvoiceRow[]>`
-      SELECT id, "organizationId", "customerId", number, currency, "amountMinor", status
-      FROM invoices
-      WHERE id = ${invoiceId} AND "organizationId" = ${organizationId}
-      FOR UPDATE
-    `;
-    const invoice = rows[0];
-    if (!invoice) throw new ArResourceNotFoundError("Invoice");
+    const invoice = await lockInvoiceForUpdate(tx, organizationId, invoiceId);
     if (invoice.status === "CANCELLED") throw new InvoiceCancelledError();
 
     const paidAgg = await tx.payment.aggregate({

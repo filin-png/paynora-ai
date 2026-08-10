@@ -2,9 +2,22 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/server/db/client";
 import { resetDatabase } from "@/server/db/test-utils";
 import { createCustomer } from "./customers";
-import { computeInvoiceFinancials, createInvoice, getInvoice, listInvoicesWithFinancials } from "./invoices";
-import { ArResourceNotFoundError, DuplicateInvoiceNumberError } from "./errors";
+import {
+  cancelInvoice,
+  computeInvoiceFinancials,
+  createInvoice,
+  getInvoice,
+  getPaidMinorForInvoice,
+  listInvoicesWithFinancials,
+} from "./invoices";
+import {
+  ArResourceNotFoundError,
+  DuplicateInvoiceNumberError,
+  InvoiceCancelledError,
+  InvoiceHasPaymentsError,
+} from "./errors";
 import { majorToMinor } from "./money";
+import { recordPayment } from "./payments";
 import { createTestOrganization } from "./test-fixtures";
 
 beforeEach(resetDatabase);
@@ -132,6 +145,102 @@ describe("tenant isolation", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0]?.invoice.organizationId).toBe(orgA.id);
+  });
+});
+
+describe("cancelInvoice", () => {
+  it("cancels an open invoice with no payments", async () => {
+    const { organization, customer } = await setupOrgWithCustomer();
+    const invoice = await createInvoice(organization.id, { ...validInvoice, customerId: customer.id });
+
+    const cancelled = await cancelInvoice(organization.id, invoice.id);
+
+    expect(cancelled.status).toBe("CANCELLED");
+  });
+
+  it("records an INVOICE_CANCELLED activity event", async () => {
+    const { organization, customer } = await setupOrgWithCustomer();
+    const invoice = await createInvoice(organization.id, { ...validInvoice, customerId: customer.id });
+
+    await cancelInvoice(organization.id, invoice.id);
+
+    const events = await prisma.activityEvent.findMany({
+      where: { invoiceId: invoice.id, type: "INVOICE_CANCELLED" },
+    });
+    expect(events).toHaveLength(1);
+  });
+
+  it("is idempotent — cancelling twice does not duplicate the event or error", async () => {
+    const { organization, customer } = await setupOrgWithCustomer();
+    const invoice = await createInvoice(organization.id, { ...validInvoice, customerId: customer.id });
+
+    await cancelInvoice(organization.id, invoice.id);
+    const secondCancel = await cancelInvoice(organization.id, invoice.id);
+
+    expect(secondCancel.status).toBe("CANCELLED");
+    const events = await prisma.activityEvent.findMany({
+      where: { invoiceId: invoice.id, type: "INVOICE_CANCELLED" },
+    });
+    expect(events).toHaveLength(1);
+  });
+
+  it("rejects cancelling an invoice that already has a recorded payment", async () => {
+    const { organization, customer } = await setupOrgWithCustomer();
+    const invoice = await createInvoice(organization.id, { ...validInvoice, customerId: customer.id });
+    await recordPayment(organization.id, invoice.id, { amountMinor: majorToMinor(100), paidAt: "2026-08-05" });
+
+    await expect(cancelInvoice(organization.id, invoice.id)).rejects.toThrow(InvoiceHasPaymentsError);
+
+    const stillOpen = await prisma.invoice.findUniqueOrThrow({ where: { id: invoice.id } });
+    expect(stillOpen.status).toBe("OPEN");
+  });
+
+  it("rejects cancelling another organization's invoice", async () => {
+    const { organization: orgA } = await setupOrgWithCustomer("Org A");
+    const { organization: orgB, customer: customerB } = await setupOrgWithCustomer("Org B");
+    const invoice = await createInvoice(orgB.id, { ...validInvoice, customerId: customerB.id });
+
+    await expect(cancelInvoice(orgA.id, invoice.id)).rejects.toThrow(ArResourceNotFoundError);
+  });
+});
+
+describe("concurrency — cancelInvoice vs. recordPayment", () => {
+  it("never leaves a CANCELLED invoice with a payment recorded, whichever operation wins the race", async () => {
+    // Both operations lock the same invoice row (lockInvoiceForUpdate) and
+    // re-check state only after acquiring that lock, so exactly one of
+    // these two concurrent calls must succeed and the other must be
+    // rejected — never both, and never a silently inconsistent result.
+    const { organization, customer } = await setupOrgWithCustomer();
+    const invoice = await createInvoice(organization.id, { ...validInvoice, customerId: customer.id });
+
+    const [cancelResult, paymentResult] = await Promise.allSettled([
+      cancelInvoice(organization.id, invoice.id),
+      recordPayment(organization.id, invoice.id, { amountMinor: majorToMinor(500), paidAt: "2026-08-05" }),
+    ]);
+
+    const fulfilledCount = [cancelResult, paymentResult].filter((r) => r.status === "fulfilled").length;
+    expect(fulfilledCount).toBe(1);
+
+    const finalInvoice = await prisma.invoice.findUniqueOrThrow({ where: { id: invoice.id } });
+    const paidMinor = await getPaidMinorForInvoice(invoice.id);
+
+    if (finalInvoice.status === "CANCELLED") {
+      // Cancellation won: no payment can have landed.
+      expect(paidMinor).toBe(0n);
+      expect(cancelResult.status).toBe("fulfilled");
+      expect(paymentResult.status).toBe("rejected");
+      if (paymentResult.status === "rejected") {
+        expect(paymentResult.reason).toBeInstanceOf(InvoiceCancelledError);
+      }
+    } else {
+      // The payment won: cancellation must have been rejected, not silently skipped.
+      expect(paidMinor).toBe(majorToMinor(500));
+      expect(paymentResult.status).toBe("fulfilled");
+      expect(cancelResult.status).toBe("rejected");
+      if (cancelResult.status === "rejected") {
+        expect(cancelResult.reason).toBeInstanceOf(InvoiceHasPaymentsError);
+      }
+    }
   });
 });
 

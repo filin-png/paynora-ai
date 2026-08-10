@@ -159,10 +159,14 @@ for. Revisit if/when a real workflow needs it.
 
 ## Concurrency
 
-Two payments recorded against the same invoice at the same time must not
-be able to jointly overpay it, even though each individually looks valid
-against the balance it read. `recordPayment` protects this with a
-row-level lock, not just an application-level check:
+Two operations against the same invoice at the same time must not be able
+to produce an inconsistent result — neither "two payments jointly overpay
+it" nor "an invoice ends up `CANCELLED` with a payment recorded against
+it" — even though each operation individually looks valid against the
+state it read. Every mutation that touches an invoice's financial state
+(`recordPayment` in `payments.ts`, `cancelInvoice` in `invoices.ts`) goes
+through the same row-level lock, `lockInvoiceForUpdate`
+(`src/server/ar/invoices.ts`), not just an application-level check:
 
 ```sql
 SELECT id, "organizationId", ..., "amountMinor", status
@@ -174,20 +178,39 @@ FOR UPDATE
 This runs inside `prisma.$transaction`, via `tx.$queryRaw` (verified to
 return a native `bigint` for the `amountMinor` column, not a string — see
 the money-representation section above on why that matters). The lock is
-held for the transaction's duration: a second concurrent `recordPayment`
-call against the same invoice blocks at this `SELECT ... FOR UPDATE` until
-the first transaction commits, then re-reads the now-current paid total
-before deciding whether it would overpay. This is what makes overpayment
-rejection correct under concurrency, not just in the common single-request
-case.
+held for the transaction's duration: a second concurrent call against the
+same invoice — whether it's another payment or a cancellation — blocks at
+this `SELECT ... FOR UPDATE` until the first transaction commits, then
+re-reads the now-current state before deciding anything. Both operations
+re-check what they care about only *after* acquiring the lock, never from
+a value read before the transaction started:
+
+- `recordPayment` re-reads the paid total and re-checks `status` — an
+  invoice cancelled by a transaction that committed first is correctly
+  seen as `CANCELLED` and the payment is rejected
+  (`InvoiceCancelledError`), not silently recorded against a cancelled
+  invoice.
+- `cancelInvoice` re-reads the paid total *inside* the lock — a payment
+  that committed first is correctly seen in the sum, and the cancellation
+  is rejected (`InvoiceHasPaymentsError`), not applied on top of a stale
+  "no payments yet" read.
+
+Whichever operation reaches the lock first determines the outcome; the
+other is rejected. There is no interleaving that leaves the invoice in a
+state where both a cancellation and a payment "took."
 
 This is exercised directly, not just documented:
-`src/server/ar/payments.test.ts` fires two real concurrent `recordPayment`
-calls (`Promise.allSettled`) for amounts that individually fit but
-together would overpay, and asserts exactly one succeeds, the other is
-rejected with `OverpaymentError`, and the final outstanding balance is
-correct and non-negative — proving the actual locking mechanism, not a
-mocked stand-in for it.
+
+- `src/server/ar/payments.test.ts` fires two real concurrent
+  `recordPayment` calls (`Promise.allSettled`) for amounts that
+  individually fit but together would overpay, and asserts exactly one
+  succeeds, the other is rejected with `OverpaymentError`, and the final
+  outstanding balance is correct and non-negative.
+- `src/server/ar/invoices.test.ts` fires a concurrent `cancelInvoice` and
+  `recordPayment` against the same invoice and asserts, whichever one
+  wins: exactly one of the two succeeds, and the final persisted state is
+  never `CANCELLED` with a nonzero paid amount — proving the actual
+  locking mechanism, not a mocked stand-in for it.
 
 ## Activity timeline
 

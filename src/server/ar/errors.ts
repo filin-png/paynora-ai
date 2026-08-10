@@ -27,6 +27,13 @@ export class InvoiceCancelledError extends Error {
   }
 }
 
+export class InvoiceHasPaymentsError extends Error {
+  constructor() {
+    super("Cannot cancel an invoice that has recorded payments");
+    this.name = "InvoiceHasPaymentsError";
+  }
+}
+
 export class OverpaymentError extends Error {
   constructor(outstandingMinor: bigint) {
     super(`Payment exceeds the outstanding balance (${outstandingMinor} minor units remaining)`);

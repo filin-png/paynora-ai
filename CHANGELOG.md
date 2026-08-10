@@ -5,6 +5,23 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — Phase 2: Accounts Receivable Core
+
+- `cancelInvoice` now locks the invoice row (`SELECT ... FOR UPDATE`, the
+  same lock `recordPayment` takes, extracted into a shared
+  `lockInvoiceForUpdate`) and re-checks recorded payments only after
+  acquiring that lock, instead of reading them before the transaction
+  started. Previously, a payment recorded concurrently with a
+  cancellation could commit after `cancelInvoice`'s initial (unlocked)
+  check but before its status update, leaving a `CANCELLED` invoice with
+  a payment against it. Both operations now serialize against each other
+  correctly; whichever commits first determines the outcome, and the
+  other is rejected (`InvoiceCancelledError` or the new
+  `InvoiceHasPaymentsError`). Verified with a concurrency test that fires
+  real concurrent `cancelInvoice`/`recordPayment` calls and asserts the
+  invariant holds regardless of which one wins — see
+  `docs/accounts-receivable.md#concurrency`.
+
 ### Added — Phase 2: Accounts Receivable Core
 
 - `Customer`, `Invoice`, `Payment`, `ActivityEvent` Prisma models and their

@@ -5,11 +5,53 @@ import { prisma } from "@/server/db/client";
 import { recordActivityEvent } from "./activity";
 import { currencySchema } from "./currency";
 import { dateOnlySchema, isPastDue, parseDateOnly } from "./dates";
-import { ArResourceNotFoundError, DuplicateInvoiceNumberError } from "./errors";
+import {
+  ArResourceNotFoundError,
+  DuplicateInvoiceNumberError,
+  InvoiceHasPaymentsError,
+} from "./errors";
 import { amountMinorSchema, formatMoney } from "./money";
 import { getCustomer } from "./customers";
 
 const UNIQUE_CONSTRAINT_VIOLATION = "P2002";
+
+export type LockedInvoiceRow = {
+  id: string;
+  organizationId: string;
+  customerId: string;
+  number: string;
+  currency: string;
+  amountMinor: bigint;
+  status: "OPEN" | "CANCELLED";
+};
+
+/**
+ * Locks the invoice row for the transaction's duration
+ * (`SELECT ... FOR UPDATE`), tenant-scoped. Shared by every operation that
+ * must serialize against concurrent changes to the same invoice —
+ * `recordPayment` (payments.ts) and `cancelInvoice` below both use this,
+ * which is what makes "an invoice can't end up CANCELLED with a payment
+ * recorded against it" true regardless of which operation runs first: the
+ * second one to reach this lock blocks until the first commits, then
+ * re-reads the now-current state before deciding anything. See
+ * docs/accounts-receivable.md#concurrency and
+ * src/server/ar/invoices.test.ts for the cancel↔pay race test.
+ */
+export async function lockInvoiceForUpdate(
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+  invoiceId: string,
+): Promise<LockedInvoiceRow> {
+  const rows = await tx.$queryRaw<LockedInvoiceRow[]>`
+    SELECT id, "organizationId", "customerId", number, currency, "amountMinor", status
+    FROM invoices
+    WHERE id = ${invoiceId} AND "organizationId" = ${organizationId}
+    FOR UPDATE
+  `;
+  const invoice = rows[0];
+  if (!invoice) throw new ArResourceNotFoundError("Invoice");
+  return invoice;
+}
 
 export const invoiceInputSchema = z
   .object({
@@ -167,25 +209,42 @@ export async function listInvoicesWithFinancials(
   }
 }
 
+/**
+ * Locks the same invoice row recordPayment locks, and re-checks recorded
+ * payments only after acquiring that lock — not from a pre-transaction
+ * read. Without this, a payment recorded concurrently with a cancellation
+ * could commit after cancelInvoice's initial (unlocked) check but before
+ * its status update, leaving a CANCELLED invoice with a payment against
+ * it. With both operations locking the same row, whichever transaction
+ * commits first is the one that's true: a payment that lands first makes
+ * the cancellation see paidMinor > 0 and reject; a cancellation that
+ * lands first makes the payment see status CANCELLED and reject.
+ */
 export async function cancelInvoice(organizationId: string, invoiceId: string) {
-  const { invoice, financials } = await getInvoiceWithFinancials(organizationId, invoiceId);
-  if (invoice.status === "CANCELLED") return invoice;
-  if (financials.paidMinor > 0n) {
-    throw new Error("Cannot cancel an invoice that has recorded payments");
-  }
-
   return prisma.$transaction(async (tx) => {
-    const cancelled = await tx.invoice.update({
-      where: { id: invoiceId },
-      data: { status: "CANCELLED" },
-    });
-    await recordActivityEvent(tx, {
-      organizationId,
-      type: "INVOICE_CANCELLED",
-      summary: `Invoice ${cancelled.number} cancelled`,
-      customerId: cancelled.customerId,
-      invoiceId: cancelled.id,
-    });
-    return cancelled;
+    const locked = await lockInvoiceForUpdate(tx, organizationId, invoiceId);
+
+    if (locked.status !== "CANCELLED") {
+      const paidAgg = await tx.payment.aggregate({
+        where: { invoiceId: locked.id },
+        _sum: { amountMinor: true },
+      });
+      const paidMinor = paidAgg._sum.amountMinor ?? 0n;
+      if (paidMinor > 0n) throw new InvoiceHasPaymentsError();
+
+      await tx.invoice.update({
+        where: { id: invoiceId },
+        data: { status: "CANCELLED" },
+      });
+      await recordActivityEvent(tx, {
+        organizationId,
+        type: "INVOICE_CANCELLED",
+        summary: `Invoice ${locked.number} cancelled`,
+        customerId: locked.customerId,
+        invoiceId: locked.id,
+      });
+    }
+
+    return tx.invoice.findUniqueOrThrow({ where: { id: invoiceId } });
   });
 }
