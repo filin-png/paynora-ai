@@ -27,6 +27,6 @@ export async function renameOrganizationAction(
     throw error;
   }
 
-  revalidatePath(`/app/${orgSlug}`);
+  revalidatePath(`/app/${orgSlug}/settings`);
   return null;
 }

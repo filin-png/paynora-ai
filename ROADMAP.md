@@ -28,13 +28,18 @@ the commit that closes it.
 
 See `docs/identity-and-tenancy.md` for the full design.
 
-## Phase 2 — Accounts Receivable Core
+## Phase 2 — Accounts Receivable Core — ✅ complete (2026-08-10)
 
-- [ ] Customer CRUD + archive
-- [ ] Invoice CRUD with amount, currency, issue/due date, outstanding amount
-- [ ] Payment status + collection status lifecycle (invariants evaluated before encoding statuses)
-- [ ] AR dashboard: total outstanding, total overdue, collected, high-risk, avg. delay, upcoming
-- [ ] Activity timeline per customer/invoice
+- [x] Customer CRUD + archive (archiving never affects existing invoice/payment history)
+- [x] Invoice CRUD with amount (integer minor units, `BigInt`), currency, issue/due date, outstanding amount (derived, not persisted)
+- [x] Payment recording — full, partial, multiple payments; overpayment safely rejected under real concurrency (row-level lock, tested with concurrent requests)
+- [x] Invoice lifecycle: `OPEN`/`CANCELLED` persisted, paid/partially-paid/overdue derived — see `docs/accounts-receivable.md`
+- [x] AR dashboard: total outstanding, total overdue, open/overdue counts, recent payments, invoices requiring attention — grouped by currency, real persisted data only
+- [x] Activity timeline per customer/invoice, tenant-isolated
+- [x] Deterministic (non-AI) "requires attention" definition — overdue, then due-soon
+
+See `docs/accounts-receivable.md` for the full design, including the money
+representation, currency model, and concurrency strategy.
 
 ## Phase 3 — AI Collections
 
