@@ -1,0 +1,14 @@
+// PAYNORA AI — Prisma schema foundation.
+//
+// Phase 0 establishes the PostgreSQL/Prisma toolchain only. Domain models
+// (User, Organization, Customer, Invoice, ...) are introduced in Phase 1
+// once tenancy and authorization boundaries are designed — see
+// docs/domain-model.md and ROADMAP.md.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
