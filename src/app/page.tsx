@@ -1,4 +1,7 @@
-import { Button } from "@/components/ui/button";
+import Link from "next/link";
+
+import { buttonVariants } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 const capabilities = [
   {
@@ -26,9 +29,17 @@ export default function Home() {
           <span className="text-lg font-semibold tracking-tight">
             PAYNORA<span className="text-primary"> AI</span>
           </span>
-          <span className="rounded-full border border-border px-3 py-1 text-xs font-medium text-muted">
-            In development
-          </span>
+          <div className="flex items-center gap-4">
+            <span className="rounded-full border border-border px-3 py-1 text-xs font-medium text-muted">
+              In development
+            </span>
+            <Link
+              href="/sign-in"
+              className="text-sm font-medium text-foreground hover:underline"
+            >
+              Sign in
+            </Link>
+          </div>
         </div>
       </header>
 
@@ -44,9 +55,9 @@ export default function Home() {
             already use.
           </p>
           <div>
-            <Button size="lg" disabled>
-              Early access — coming soon
-            </Button>
+            <Link href="/sign-up" className={cn(buttonVariants({ size: "lg" }))}>
+              Create your account
+            </Link>
           </div>
         </section>
 

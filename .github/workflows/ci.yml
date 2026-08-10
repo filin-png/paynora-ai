@@ -9,6 +9,29 @@ jobs:
   verify:
     name: Typecheck, lint, test, build
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: paynora
+          POSTGRES_PASSWORD: paynora
+          POSTGRES_DB: paynora
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U paynora"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://paynora:paynora@localhost:5432/paynora?schema=public
+      TEST_DATABASE_URL: postgresql://paynora:paynora@localhost:5432/paynora_test?schema=public
+      # CI-only value — never used for anything real, just needs to satisfy
+      # the 32-character minimum in src/lib/env.ts.
+      AUTH_SECRET: ci-only-secret-not-used-for-anything-real-00
+
     steps:
       - uses: actions/checkout@v4
 
@@ -28,8 +51,19 @@ jobs:
 
       - name: Validate Prisma schema
         run: npm run db:validate
+
+      - name: Apply migrations
+        run: npx prisma migrate deploy
+
+      - name: Create test database
+        run: |
+          PGPASSWORD=paynora psql -h localhost -U paynora -d postgres \
+            -c "CREATE DATABASE paynora_test OWNER paynora;"
+
+      - name: Apply migrations to test database
+        run: npx prisma migrate deploy
         env:
-          DATABASE_URL: postgresql://user:pass@localhost:5432/paynora?schema=public
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
 
       - name: Test
         run: npm run test

@@ -2,18 +2,32 @@
 
 ## Local development
 
-Requirements: Node.js 22+, npm. Docker is optional, only needed once you
-want a real Postgres instance (Phase 1+).
+Requirements: Node.js 22+, npm, and a local PostgreSQL — required from
+Phase 1 onward (see `docs/identity-and-tenancy.md`). Docker is one way to
+get Postgres, not a requirement; see below.
 
 ```bash
 npm install
 cp .env.example .env.local
+```
+
+Then fill in `.env.local`:
+
+- `DATABASE_URL` — already defaults to the value matching
+  `docker-compose.yml` below; change it if you're using a different local
+  Postgres.
+- `AUTH_SECRET` — required, no default on purpose (see SECURITY.md).
+  Generate one: `openssl rand -base64 33`.
+
+```bash
+docker compose up -d postgres   # or point DATABASE_URL at any local Postgres 14+
+npx prisma migrate dev
 npm run dev
 ```
 
-Nothing above requires a database or any external credential in Phase 0.
+The app boots at http://localhost:3000.
 
-### Local PostgreSQL (needed from Phase 1 onward)
+### Local PostgreSQL
 
 A `docker-compose.yml` at the repo root starts a local Postgres instance
 with no external account or paid service:
@@ -23,17 +37,27 @@ docker compose up -d postgres
 ```
 
 This exposes Postgres on `localhost:5432` with the credentials in
-`docker-compose.yml` (development-only, not used anywhere else). Set:
-
-```
-DATABASE_URL=postgresql://paynora:paynora@localhost:5432/paynora?schema=public
-```
-
-in `.env.local`, then run `npm run db:generate` (and, once migrations
-exist, `prisma migrate dev`).
+`docker-compose.yml` (development-only, not used anywhere else — matches
+the `DATABASE_URL` default in `.env.example`).
 
 If Docker isn't available, any locally installed Postgres 14+ works
 identically — only the connection string changes.
+
+### Test database
+
+`npm run test` runs integration tests against a real Postgres database
+that it truncates between tests — deliberately a separate database from
+the one `npm run dev` uses, so running tests never touches your local dev
+data:
+
+```bash
+createdb -h localhost -U paynora paynora_test   # or: docker compose exec postgres createdb -U paynora paynora_test
+DATABASE_URL=postgresql://paynora:paynora@localhost:5432/paynora_test?schema=public npx prisma migrate deploy
+npm run test
+```
+
+`vitest.config.mts` defaults `DATABASE_URL` for the test run to
+`paynora_test` on `localhost:5432`; set `TEST_DATABASE_URL` to override.
 
 ## Hosting (future)
 
@@ -50,6 +74,6 @@ here when made — not before.
 
 ## Environment variables
 
-See `.env.example` for the authoritative, current list. As of Phase 0,
-every variable is optional and defaulted; nothing needs to be set to run
-the app.
+See `.env.example` for the authoritative, current list. From Phase 1
+onward, `DATABASE_URL` and `AUTH_SECRET` are required — both are free and
+local, no paid or foreign-only service involved.

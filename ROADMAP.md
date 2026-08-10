@@ -17,14 +17,16 @@ the commit that closes it.
 - [x] Baseline documentation (this set of files)
 - [x] No paid or foreign-only service required to run the dev workflow
 
-## Phase 1 — Identity & Multi-Tenancy
+## Phase 1 — Identity & Multi-Tenancy — ✅ complete (2026-08-10)
 
-- [ ] Authentication
-- [ ] Organization model + creation flow
-- [ ] Organization membership (role support designed in from the start)
-- [ ] Server-side authorization on every query/mutation
-- [ ] Tenant isolation enforced at the data-access layer
-- [ ] Automated tenant-isolation tests (Org A cannot read/write Org B's data)
+- [x] Authentication (Auth.js v5, Credentials provider, JWT sessions, bcrypt)
+- [x] Organization model + creation flow (transactional: org + OWNER membership)
+- [x] Organization membership (`OWNER` / `MEMBER`, unique per user+org at the DB level)
+- [x] Server-side authorization on every query/mutation (`src/server/tenancy/context.ts`)
+- [x] Tenant isolation enforced at the data-access layer (slug → membership lookup, never trusted from the client)
+- [x] Automated tenant-isolation tests (Org A cannot read/write Org B's data) — real-database tests, see `docs/identity-and-tenancy.md#testing`
+
+See `docs/identity-and-tenancy.md` for the full design.
 
 ## Phase 2 — Accounts Receivable Core
 
