@@ -116,8 +116,8 @@ export type CollectionStatusView =
   | { kind: "not_enrolled" }
   | { kind: "completed"; stopReason: CollectionStopReason | null }
   | { kind: "stopped"; stopReason: CollectionStopReason | null }
-  | { kind: "paused" }
-  | { kind: "blocked_uncertain" }
+  | { kind: "paused"; sequenceId: string }
+  | { kind: "blocked_uncertain"; sequenceId: string }
   | { kind: "active"; sequenceId: string; stepsCompleted: number; stepCount: number; nextStepDaysAfterDue?: number };
 
 /**
@@ -138,12 +138,12 @@ export async function getCollectionStatusForInvoice(
   if (!sequence) return { kind: "not_enrolled" };
   if (sequence.status === "COMPLETED") return { kind: "completed", stopReason: sequence.stopReason };
   if (sequence.status === "STOPPED") return { kind: "stopped", stopReason: sequence.stopReason };
-  if (sequence.status === "PAUSED") return { kind: "paused" };
+  if (sequence.status === "PAUSED") return { kind: "paused", sequenceId: sequence.id };
 
   const blockingCommunication = await prisma.communication.findFirst({
     where: { invoiceId, status: { in: ["SENDING", "UNCERTAIN"] } },
   });
-  if (blockingCommunication) return { kind: "blocked_uncertain" };
+  if (blockingCommunication) return { kind: "blocked_uncertain", sequenceId: sequence.id };
 
   const [steps, executions] = await Promise.all([
     prisma.collectionPolicyStep.findMany({

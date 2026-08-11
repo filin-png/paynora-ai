@@ -9,9 +9,15 @@ import { getBusinessToday } from "@/server/ar/dates";
 import { getInvoiceWithFinancials } from "@/server/ar/invoices";
 import { formatMoney } from "@/server/ar/money";
 import { listPaymentsForInvoice } from "@/server/ar/payments";
+import { getCollectionStatusForInvoice, type CollectionStatusView } from "@/server/collections/sequences";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
 import { getInvoiceStatusDisplay } from "../status";
-import { cancelInvoiceAction, recordPaymentAction } from "./actions";
+import {
+  cancelInvoiceAction,
+  pauseInvoiceCollectionsAction,
+  recordPaymentAction,
+  resumeInvoiceCollectionsAction,
+} from "./actions";
 import { RecordPaymentForm } from "./payment-form";
 
 export default async function InvoiceDetailPage({
@@ -22,9 +28,10 @@ export default async function InvoiceDetailPage({
   const { orgSlug, invoiceId } = await params;
   const context = await requireOrganizationMembershipForPage(orgSlug);
   const { invoice, financials } = await getInvoiceWithFinancials(context.organization.id, invoiceId);
-  const [payments, activity] = await Promise.all([
+  const [payments, activity, collectionsStatus] = await Promise.all([
     listPaymentsForInvoice(context.organization.id, invoiceId),
     listInvoiceActivity(context.organization.id, invoiceId),
+    getCollectionStatusForInvoice(context.organization.id, invoiceId),
   ]);
 
   const currency = invoice.currency as Currency;
@@ -79,6 +86,13 @@ export default async function InvoiceDetailPage({
 
       {invoice.notes ? <p className="whitespace-pre-wrap text-sm text-muted">{invoice.notes}</p> : null}
 
+      <CollectionsStatusBlock
+        orgSlug={orgSlug}
+        invoiceId={invoiceId}
+        status={collectionsStatus}
+        isOwner={context.role === "OWNER"}
+      />
+
       {canRecordPayment ? (
         <div>
           <h2 className="text-sm font-semibold">Record a payment</h2>
@@ -120,6 +134,97 @@ export default async function InvoiceDetailPage({
           <p className="mt-3 text-sm text-muted">No activity yet.</p>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Honest, per-state collections display — never claims collections are
+ * "in progress" for a paid invoice, and explicitly says when a previous
+ * email's delivery status is unresolved rather than silently doing
+ * nothing. See docs/collections-automation.md#ui.
+ */
+function CollectionsStatusBlock({
+  orgSlug,
+  invoiceId,
+  status,
+  isOwner,
+}: {
+  orgSlug: string;
+  invoiceId: string;
+  status: CollectionStatusView;
+  isOwner: boolean;
+}) {
+  if (status.kind === "not_enrolled") return null;
+
+  if (status.kind === "completed") {
+    return (
+      <div className="rounded-md border border-emerald-600/30 bg-emerald-600/10 p-4 text-sm text-emerald-700 dark:text-emerald-400">
+        Collections completed — invoice paid.
+      </div>
+    );
+  }
+
+  if (status.kind === "stopped") {
+    return (
+      <div className="rounded-md border border-border p-4 text-sm text-muted">
+        Collections stopped ({status.stopReason ?? "unknown reason"}).
+      </div>
+    );
+  }
+
+  if (status.kind === "blocked_uncertain") {
+    return (
+      <div className="flex flex-col gap-2 rounded-md border border-amber-600/30 bg-amber-600/10 p-4 text-sm">
+        <p className="font-medium text-amber-700 dark:text-amber-400">Automation paused</p>
+        <p className="text-muted">
+          Previous email delivery status is uncertain — manual review required before another reminder can be
+          scheduled automatically.
+        </p>
+        {isOwner ? (
+          <form action={pauseInvoiceCollectionsAction.bind(null, orgSlug, invoiceId, status.sequenceId)} className="mt-1">
+            <button type="submit" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
+              Pause collections
+            </button>
+          </form>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (status.kind === "paused") {
+    return (
+      <div className="flex items-center justify-between gap-4 rounded-md border border-border p-4 text-sm">
+        <span className="text-muted">Collections: paused</span>
+        {isOwner ? (
+          <form action={resumeInvoiceCollectionsAction.bind(null, orgSlug, invoiceId, status.sequenceId)}>
+            <button type="submit" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
+              Resume
+            </button>
+          </form>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center justify-between gap-4 rounded-md border border-border p-4 text-sm">
+      <div>
+        <p className="font-medium">Collections: active</p>
+        <p className="mt-1 text-xs text-muted">
+          Step {status.stepsCompleted} of {status.stepCount}
+          {status.nextStepDaysAfterDue !== undefined
+            ? ` — next reminder at day +${status.nextStepDaysAfterDue} overdue`
+            : " — all configured steps have run"}
+        </p>
+      </div>
+      {isOwner ? (
+        <form action={pauseInvoiceCollectionsAction.bind(null, orgSlug, invoiceId, status.sequenceId)}>
+          <button type="submit" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
+            Pause
+          </button>
+        </form>
+      ) : null}
     </div>
   );
 }
