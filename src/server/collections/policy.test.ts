@@ -175,6 +175,41 @@ describe("setCollectionPolicyAutomationMode", () => {
     expect(back.autoSendEnabledByUserId).toBeNull();
     expect(back.autoSendEnabledAt).toBeNull();
   });
+
+  it("leaves an audit trail for both the AUTO_SEND switch and the switch back", async () => {
+    const { organization, user } = await createTestOrganization();
+    const policy = await createCollectionPolicy(organization.id, {
+      name: "P",
+      steps: [{ daysAfterDue: 1, action: "SEND_PAYMENT_REMINDER" }],
+    });
+
+    await setCollectionPolicyAutomationMode(organization.id, policy.id, user.id, "AUTO_SEND");
+    await setCollectionPolicyAutomationMode(organization.id, policy.id, user.id, "APPROVAL_REQUIRED");
+
+    const events = await prisma.activityEvent.findMany({
+      where: { organizationId: organization.id, type: "COLLECTION_POLICY_UPDATED" },
+      orderBy: { createdAt: "asc" },
+    });
+    // One for creation, one for AUTO_SEND, one for the switch back.
+    expect(events.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("rejects a mode switch for a policy belonging to another organization, and never actually switches it", async () => {
+    const { organization } = await createTestOrganization("Owner");
+    const other = await createTestOrganization("Attacker");
+    const policy = await createCollectionPolicy(organization.id, {
+      name: "P",
+      steps: [{ daysAfterDue: 1, action: "SEND_PAYMENT_REMINDER" }],
+    });
+
+    await expect(
+      setCollectionPolicyAutomationMode(other.organization.id, policy.id, other.user.id, "AUTO_SEND"),
+    ).rejects.toThrow();
+
+    const stillApprovalRequired = await prisma.collectionPolicy.findUniqueOrThrow({ where: { id: policy.id } });
+    expect(stillApprovalRequired.automationMode).toBe("APPROVAL_REQUIRED");
+    expect(stillApprovalRequired.autoSendEnabledByUserId).toBeNull();
+  });
 });
 
 describe("renameCollectionPolicy", () => {

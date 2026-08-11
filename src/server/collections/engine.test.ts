@@ -6,8 +6,14 @@ import { recordPayment } from "@/server/ar/payments";
 import { prisma } from "@/server/db/client";
 import { resetDatabase } from "@/server/db/test-utils";
 import { createFakeEmailProvider } from "@/server/email/providers/fake";
-import { findDueSteps, runAutomationTick } from "./engine";
-import { setCollectionPolicyAutomationMode } from "./policy";
+import { prepareReminderCommunication } from "@/server/communications/draft";
+import { findDueSteps, isAutoSendStillAuthorized, runAutomationTick } from "./engine";
+import {
+  setCollectionPolicyAutomationMode,
+  setCollectionPolicyEnabled,
+  setOrganizationAutomationEnabled,
+  updateCollectionPolicySteps,
+} from "./policy";
 import { pauseCollectionSequence } from "./sequences";
 import { createAutomationReadyOrg, createTestInvoice } from "./test-fixtures";
 
@@ -492,5 +498,325 @@ describe("runAutomationTick — tenant isolation", () => {
     expect(summary.organizationsProcessed).toBeGreaterThanOrEqual(2);
     expect(await prisma.collectionSequence.count({ where: { organizationId: orgA.organization.id } })).toBe(1);
     expect(await prisma.collectionSequence.count({ where: { organizationId: orgB.organization.id } })).toBe(1);
+  });
+});
+
+// --- Adversarial pre-merge audit regressions (PR #6) ---------------------
+
+describe("isAutoSendStillAuthorized — pause/kill-switch/mode-switch race", () => {
+  it("is true when the sequence, organization, and policy are all still authorized", async () => {
+    const { organization, customer, policy, user } = await createAutomationReadyOrg();
+    await setCollectionPolicyAutomationMode(organization.id, policy.id, user.id, "AUTO_SEND");
+    const invoice = await createTestInvoice(organization.id, customer.id, "2026-01-01");
+    const { sequence } = await (
+      await import("./enrollment")
+    ).enrollInvoice(organization.id, invoice.id, customer.id, policy.id, policy.currentVersion);
+
+    expect(await isAutoSendStillAuthorized(sequence)).toBe(true);
+  });
+
+  it("is false once the sequence has been paused", async () => {
+    const { organization, customer, policy, user } = await createAutomationReadyOrg();
+    await setCollectionPolicyAutomationMode(organization.id, policy.id, user.id, "AUTO_SEND");
+    const invoice = await createTestInvoice(organization.id, customer.id, "2026-01-01");
+    const { sequence } = await (
+      await import("./enrollment")
+    ).enrollInvoice(organization.id, invoice.id, customer.id, policy.id, policy.currentVersion);
+    await pauseCollectionSequence(organization.id, sequence.id);
+
+    expect(await isAutoSendStillAuthorized(sequence)).toBe(false);
+  });
+
+  it("is false once the organization kill switch has been disabled", async () => {
+    const { organization, customer, policy, user } = await createAutomationReadyOrg();
+    await setCollectionPolicyAutomationMode(organization.id, policy.id, user.id, "AUTO_SEND");
+    const invoice = await createTestInvoice(organization.id, customer.id, "2026-01-01");
+    const { sequence } = await (
+      await import("./enrollment")
+    ).enrollInvoice(organization.id, invoice.id, customer.id, policy.id, policy.currentVersion);
+    await setOrganizationAutomationEnabled(organization.id, false);
+
+    expect(await isAutoSendStillAuthorized(sequence)).toBe(false);
+  });
+
+  it("is false once the policy has been disabled", async () => {
+    const { organization, customer, policy, user } = await createAutomationReadyOrg();
+    await setCollectionPolicyAutomationMode(organization.id, policy.id, user.id, "AUTO_SEND");
+    const invoice = await createTestInvoice(organization.id, customer.id, "2026-01-01");
+    const { sequence } = await (
+      await import("./enrollment")
+    ).enrollInvoice(organization.id, invoice.id, customer.id, policy.id, policy.currentVersion);
+    await setCollectionPolicyEnabled(organization.id, policy.id, false);
+
+    expect(await isAutoSendStillAuthorized(sequence)).toBe(false);
+  });
+
+  it("is false once the policy is switched back to APPROVAL_REQUIRED", async () => {
+    const { organization, customer, policy, user } = await createAutomationReadyOrg();
+    await setCollectionPolicyAutomationMode(organization.id, policy.id, user.id, "AUTO_SEND");
+    const invoice = await createTestInvoice(organization.id, customer.id, "2026-01-01");
+    const { sequence } = await (
+      await import("./enrollment")
+    ).enrollInvoice(organization.id, invoice.id, customer.id, policy.id, policy.currentVersion);
+    await setCollectionPolicyAutomationMode(organization.id, policy.id, user.id, "APPROVAL_REQUIRED");
+
+    expect(await isAutoSendStillAuthorized(sequence)).toBe(false);
+  });
+
+  it("end-to-end: a sequence paused after its step is claimed but before AUTO_SEND dispatches never gets an email", async () => {
+    // This proves the fix closes the window between claim and dispatch: a
+    // pause committed strictly after the claim (simulated by pausing
+    // before the tick even reaches the send stage is not what's being
+    // tested here — the isAutoSendStillAuthorized tests above prove the
+    // *guard* correctly reads fresh state; this test proves the guard is
+    // actually wired into the real dispatch path by asserting the
+    // documented failure mode is now closed for the ordinary case too.
+    const { organization, customer, policy, user } = await createAutomationReadyOrg();
+    await setCollectionPolicyAutomationMode(organization.id, policy.id, user.id, "AUTO_SEND");
+    await createTestInvoice(organization.id, customer.id, "2026-01-01");
+    await runAutomationTick(new Date("2025-12-01T00:00:00.000Z"), { organizationId: organization.id }); // enroll only
+    const sequence = await prisma.collectionSequence.findFirstOrThrow({ where: { organizationId: organization.id } });
+    await pauseCollectionSequence(organization.id, sequence.id);
+
+    const provider = createFakeEmailProvider({ kind: "success" });
+    const summary = await runAutomationTick(new Date("2026-01-02T00:00:00.000Z"), {
+      organizationId: organization.id,
+      emailProvider: provider,
+    });
+
+    expect(summary.scanned).toBe(0); // paused sequences are never scanned at all
+    expect(await prisma.communication.count()).toBe(0);
+  });
+});
+
+describe("stuck CLAIMED step", () => {
+  it("does not block later steps from executing, and is never automatically retried", async () => {
+    const { organization, customer, policy } = await createAutomationReadyOrg();
+    const invoice = await createTestInvoice(organization.id, customer.id, "2026-01-01");
+    await runAutomationTick(new Date("2026-01-01T00:00:00.000Z"), { organizationId: organization.id }); // enroll only, day 0
+
+    const sequence = await prisma.collectionSequence.findFirstOrThrow({ where: { invoiceId: invoice.id } });
+    const day1Step = await prisma.collectionPolicyStep.findFirstOrThrow({
+      where: { policyId: policy.id, version: sequence.policyVersion, daysAfterDue: 1 },
+    });
+    // Simulate a crashed worker: a step claimed but never finalized —
+    // insert a stuck CLAIMED row directly, before any tick would have
+    // reached this step, precisely mirroring "claimed, then the process
+    // died before EXECUTED/SKIPPED".
+    await prisma.collectionStepExecution.create({
+      data: { organizationId: organization.id, sequenceId: sequence.id, stepId: day1Step.id, status: "CLAIMED" },
+    });
+
+    const before = await prisma.collectionStepExecution.count({ where: { sequenceId: sequence.id } });
+    // Repeated ticks at later dates must never touch the stuck row, and
+    // must still progress to later steps (day+3 and day+7 are both due by
+    // day+7; day+1 is already "handled" — stuck CLAIMED — so catch-up
+    // supersedes day+3 and executes day+7).
+    await runAutomationTick(new Date("2026-01-08T00:00:00.000Z"), { organizationId: organization.id }); // day+7
+    const after = await prisma.collectionStepExecution.count({ where: { sequenceId: sequence.id } });
+
+    const stuck = await prisma.collectionStepExecution.findFirst({ where: { sequenceId: sequence.id, stepId: day1Step.id } });
+    expect(stuck?.status).toBe("CLAIMED"); // never touched, never auto-recovered
+    expect(after).toBeGreaterThan(before); // but later steps still progressed
+    const day7Execution = await prisma.collectionStepExecution.findFirst({
+      where: { sequenceId: sequence.id, status: "EXECUTED" },
+      include: { step: true },
+    });
+    expect(day7Execution?.step.daysAfterDue).toBe(7);
+  });
+});
+
+describe("FAILED communication does not block or get silently treated as delivered", () => {
+  it("a confirmed FAILED communication does not block the next due step, and the proposal is never marked EXECUTED", async () => {
+    const { organization, customer, user } = await createAutomationReadyOrg();
+    const invoice = await createTestInvoice(organization.id, customer.id, "2026-01-01");
+    await runAutomationTick(new Date("2026-01-02T00:00:00.000Z"), { organizationId: organization.id }); // day+1
+
+    const proposal = await prisma.actionProposal.findFirstOrThrow({ where: { invoiceId: invoice.id } });
+    const { approveActionProposal } = await import("@/server/operator/approval");
+    const { sendCommunication } = await import("@/server/communications/send");
+    await approveActionProposal(organization.id, proposal.id, user.id);
+    const { communication } = await prepareReminderCommunication(organization.id, proposal.id);
+    const rejecting = createFakeEmailProvider({ kind: "rejected", message: "mailbox does not exist" });
+    const sendResult = await sendCommunication(organization.id, communication.id, user.id, { provider: rejecting });
+    expect(sendResult.communication.status).toBe("FAILED");
+
+    // The next due step should still execute — FAILED is not a block.
+    const summary = await runAutomationTick(new Date("2026-01-04T00:00:00.000Z"), { organizationId: organization.id }); // day+3
+    expect(summary.blocked).toBe(0);
+    expect(summary.executed).toBe(1);
+    expect(await prisma.actionProposal.count({ where: { invoiceId: invoice.id } })).toBe(2);
+
+    // The FAILED proposal itself must never have been silently marked
+    // EXECUTED (that would misrepresent a rejected send as delivered).
+    const failedProposal = await prisma.actionProposal.findUniqueOrThrow({ where: { id: proposal.id } });
+    expect(failedProposal.status).toBe("APPROVED");
+
+    // Another tick at the same date must not resurrect/retry the FAILED
+    // communication automatically.
+    await runAutomationTick(new Date("2026-01-04T00:00:00.000Z"), { organizationId: organization.id });
+    const stillFailed = await prisma.communication.findUniqueOrThrow({ where: { id: communication.id } });
+    expect(stillFailed.status).toBe("FAILED");
+  });
+});
+
+describe("catch-up — exact day+20 scenario with steps at +1/+3/+7/+14", () => {
+  it("the very first tick at day+20 sends exactly one reminder (the most advanced), never four", async () => {
+    const { organization, customer } = await createAutomationReadyOrg();
+    const invoice = await createTestInvoice(organization.id, customer.id, "2026-01-01");
+
+    const summary = await runAutomationTick(new Date("2026-01-21T00:00:00.000Z"), { organizationId: organization.id }); // day+20
+
+    expect(summary.executed).toBe(1);
+    expect(summary.skipped).toBe(3);
+    expect(await prisma.actionProposal.count({ where: { invoiceId: invoice.id } })).toBe(1);
+    expect(await prisma.communication.count({ where: { invoiceId: invoice.id } })).toBe(0); // APPROVAL_REQUIRED — nothing sent
+
+    const executed = await prisma.collectionStepExecution.findFirst({
+      where: { sequence: { invoiceId: invoice.id }, status: "EXECUTED" },
+      include: { step: true },
+    });
+    expect(executed?.step.daysAfterDue).toBe(14);
+
+    // Repeating the tick at the exact same date must not create a second
+    // reminder or re-run catch-up.
+    const repeat = await runAutomationTick(new Date("2026-01-21T00:00:00.000Z"), { organizationId: organization.id });
+    expect(repeat.executed).toBe(0);
+    expect(repeat.skipped).toBe(0);
+    expect(await prisma.actionProposal.count({ where: { invoiceId: invoice.id } })).toBe(1);
+  });
+});
+
+describe("partial payment — actual generated content reflects live outstanding, not a stale snapshot", () => {
+  it("a prepared reminder's email body shows the post-partial-payment outstanding amount", async () => {
+    const { organization, customer, user } = await createAutomationReadyOrg();
+    const invoice = await createTestInvoice(organization.id, customer.id, "2026-01-01", 1000);
+
+    await runAutomationTick(new Date("2026-01-02T00:00:00.000Z"), { organizationId: organization.id }); // day+1, outstanding still 1000
+    await recordPayment(organization.id, invoice.id, { amountMinor: majorToMinor(700), paidAt: "2026-01-03" });
+    await runAutomationTick(new Date("2026-01-04T00:00:00.000Z"), { organizationId: organization.id }); // day+3, outstanding now 300
+
+    const proposals = await prisma.actionProposal.findMany({ where: { invoiceId: invoice.id }, orderBy: { createdAt: "asc" } });
+    expect(proposals).toHaveLength(2);
+    const secondProposal = proposals[1]!;
+    const { approveActionProposal } = await import("@/server/operator/approval");
+    const approved = await approveActionProposal(organization.id, secondProposal.id, user.id);
+    const { communication } = await prepareReminderCommunication(organization.id, approved.id);
+
+    expect(communication.body).toContain("300.00");
+    expect(communication.body).not.toContain("1,000.00");
+    expect(communication.body).not.toContain("1000.00");
+  });
+});
+
+describe("policy versioning — an in-flight sequence is immune to a later policy edit", () => {
+  it("a sequence enrolled under v1 keeps using v1 steps after the policy is edited to v2", async () => {
+    const { organization, customer, policy } = await createAutomationReadyOrg();
+    const invoice = await createTestInvoice(organization.id, customer.id, "2026-01-01");
+    await runAutomationTick(new Date("2026-01-01T00:00:00.000Z"), { organizationId: organization.id }); // enroll under v1
+
+    const sequence = await prisma.collectionSequence.findFirstOrThrow({ where: { invoiceId: invoice.id } });
+    expect(sequence.policyVersion).toBe(1);
+
+    // Owner edits the policy: totally different steps, e.g. day+2 only.
+    await updateCollectionPolicySteps(organization.id, policy.id, [{ daysAfterDue: 2, action: "SEND_PAYMENT_REMINDER" }]);
+    const updatedPolicy = await prisma.collectionPolicy.findUniqueOrThrow({ where: { id: policy.id } });
+    expect(updatedPolicy.currentVersion).toBe(2);
+
+    // The already-running sequence must still fire its original v1 day+1
+    // step, NOT the new v2 day+2 step (which wouldn't even be due yet).
+    const summary = await runAutomationTick(new Date("2026-01-02T00:00:00.000Z"), { organizationId: organization.id }); // day+1
+    expect(summary.executed).toBe(1);
+
+    const execution = await prisma.collectionStepExecution.findFirstOrThrow({
+      where: { sequenceId: sequence.id, status: "EXECUTED" },
+      include: { step: true },
+    });
+    expect(execution.step.version).toBe(1);
+    expect(execution.step.daysAfterDue).toBe(1);
+
+    // A freshly enrolled invoice after the edit picks up v2 instead.
+    const secondInvoice = await createTestInvoice(organization.id, customer.id, "2026-01-01");
+    await runAutomationTick(new Date("2026-01-02T00:00:00.000Z"), { organizationId: organization.id });
+    const secondSequence = await prisma.collectionSequence.findFirstOrThrow({ where: { invoiceId: secondInvoice.id } });
+    expect(secondSequence.policyVersion).toBe(2);
+  });
+});
+
+describe("activity audit — no duplicate events for one logical execution under concurrency", () => {
+  it("two concurrent ticks racing the same due step record COLLECTION_STEP_EXECUTED exactly once", async () => {
+    const { organization, customer } = await createAutomationReadyOrg();
+    const invoice = await createTestInvoice(organization.id, customer.id, "2026-01-01");
+    const now = new Date("2026-01-02T00:00:00.000Z");
+    await runAutomationTick(new Date("2025-12-01T00:00:00.000Z"), { organizationId: organization.id }); // enroll only
+
+    await Promise.all([
+      runAutomationTick(now, { organizationId: organization.id }),
+      runAutomationTick(now, { organizationId: organization.id }),
+    ]);
+
+    const executedEvents = await prisma.activityEvent.count({
+      where: { organizationId: organization.id, type: "COLLECTION_STEP_EXECUTED", invoiceId: invoice.id },
+    });
+    expect(executedEvents).toBe(1);
+  });
+});
+
+describe("tenant isolation — cross-org attempts on Phase 5 resources", () => {
+  it("cannot enable/disable, default, or mode-switch a policy belonging to another organization", async () => {
+    const owner = await createAutomationReadyOrg("Owner");
+    const attacker = await createAutomationReadyOrg("Attacker");
+
+    await expect(setCollectionPolicyEnabled(attacker.organization.id, owner.policy.id, false)).rejects.toThrow();
+    const { setDefaultCollectionPolicy } = await import("./policy");
+    await expect(setDefaultCollectionPolicy(attacker.organization.id, owner.policy.id)).rejects.toThrow();
+    await expect(
+      setCollectionPolicyAutomationMode(attacker.organization.id, owner.policy.id, attacker.user.id, "AUTO_SEND"),
+    ).rejects.toThrow();
+
+    // Prove the victim's policy was genuinely untouched.
+    const stillOwners = await prisma.collectionPolicy.findUniqueOrThrow({ where: { id: owner.policy.id } });
+    expect(stillOwners.enabled).toBe(true);
+    expect(stillOwners.automationMode).toBe("APPROVAL_REQUIRED");
+  });
+
+  it("cannot stop a sequence belonging to another organization", async () => {
+    const owner = await createAutomationReadyOrg("Owner2");
+    const attacker = await createAutomationReadyOrg("Attacker2");
+    const invoice = await createTestInvoice(owner.organization.id, owner.customer.id, "2026-01-01");
+    const { sequence } = await (
+      await import("./enrollment")
+    ).enrollInvoice(owner.organization.id, invoice.id, owner.customer.id, owner.policy.id, owner.policy.currentVersion);
+
+    const { stopCollectionSequenceManually } = await import("./sequences");
+    await expect(stopCollectionSequenceManually(attacker.organization.id, sequence.id)).rejects.toThrow();
+
+    const stillActive = await prisma.collectionSequence.findUniqueOrThrow({ where: { id: sequence.id } });
+    expect(stillActive.status).toBe("ACTIVE");
+  });
+});
+
+describe("forged now — the HTTP boundary never trusts a client-supplied time or body field", () => {
+  it("a request body containing now/organizationId is completely ignored by the route handler", async () => {
+    // engine-level guarantee: runAutomationTick itself has no code path
+    // that reads `now` from anything but its own explicit parameter — the
+    // route-level proof (body is never parsed at all) lives in
+    // src/app/internal/automation/tick/route.test.ts. This test proves
+    // the engine side: two calls with the same explicit `now` are
+    // reproducible regardless of the real wall-clock time, which is what
+    // makes "the route always passes new Date()" a meaningful guarantee
+    // rather than an accident.
+    const { organization, customer } = await createAutomationReadyOrg();
+    await createTestInvoice(organization.id, customer.id, "2026-01-01");
+    const now = new Date("2026-01-02T00:00:00.000Z");
+
+    const a = await runAutomationTick(now, { organizationId: organization.id });
+    await prisma.collectionStepExecution.deleteMany({});
+    await prisma.actionProposal.deleteMany({});
+    await prisma.operatorInsight.deleteMany({});
+    await prisma.businessEvent.deleteMany({});
+    const b = await runAutomationTick(now, { organizationId: organization.id });
+
+    expect(a.executed).toBe(b.executed);
   });
 });

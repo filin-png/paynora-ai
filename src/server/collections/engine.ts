@@ -534,9 +534,17 @@ async function executeAutoSend(
     await approveActionProposal(sequence.organizationId, proposalId, actingUserId);
     const { communication } = await prepareReminderCommunication(sequence.organizationId, proposalId);
 
-    // Defense-in-depth: one more fresh financial re-check immediately
-    // before the external call, since a full round trip through
-    // approve+prepare has elapsed since the last check (section 12).
+    // Defense-in-depth, immediately before the external call, since a full
+    // round trip through approve+prepare has elapsed since the sequence-
+    // status check earlier in processSequenceTick: re-verify the sequence
+    // is still ACTIVE, org automation is still enabled, and the policy is
+    // still AUTO_SEND — an OWNER could have paused this sequence, flipped
+    // the organization kill switch, or switched the policy back to
+    // APPROVAL_REQUIRED while drafting was in flight. None of those are
+    // re-checked anywhere else between the claim and this point.
+    if (!(await isAutoSendStillAuthorized(sequence))) return;
+
+    // Fresh financial re-check for the same reason (section 12).
     const fresh = await getInvoiceWithFinancials(sequence.organizationId, sequence.invoiceId, today);
     if (fresh.financials.isPaid || fresh.invoice.status === "CANCELLED") {
       // Do not send. The proposal/communication are left as-is (APPROVED/
@@ -552,6 +560,33 @@ async function executeAutoSend(
     // retry flow (section 23: no new retry infrastructure).
     logAutoSendFailure(sequence.organizationId, proposalId, error);
   }
+}
+
+/**
+ * Re-verifies, from fresh reads (never the in-memory values threaded
+ * through the tick), that every condition AUTO_SEND depends on still
+ * holds: the sequence hasn't been paused/stopped, the organization kill
+ * switch hasn't been flipped off, and the policy hasn't been disabled or
+ * switched back to APPROVAL_REQUIRED — all of which an OWNER can do at
+ * any moment, including in the window between this step being claimed
+ * and the email actually being dispatched. Exported for direct testing —
+ * see docs/collections-automation.md#concurrency.
+ */
+export async function isAutoSendStillAuthorized(sequence: CollectionSequence): Promise<boolean> {
+  const [currentSequence, organization, policy] = await Promise.all([
+    prisma.collectionSequence.findUnique({ where: { id: sequence.id }, select: { status: true } }),
+    prisma.organization.findUnique({ where: { id: sequence.organizationId }, select: { automationEnabled: true } }),
+    prisma.collectionPolicy.findUnique({
+      where: { id: sequence.policyId },
+      select: { enabled: true, automationMode: true },
+    }),
+  ]);
+  return (
+    currentSequence?.status === "ACTIVE" &&
+    organization?.automationEnabled === true &&
+    policy?.enabled === true &&
+    policy?.automationMode === "AUTO_SEND"
+  );
 }
 
 /**

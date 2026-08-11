@@ -316,6 +316,24 @@ it. The claim itself still exists — this step will never be reconsidered
 even after a later resume, which is intentional: resuming does not
 retroactively execute what a pause interrupted.
 
+**Pause/kill-switch/mode-switch ↔ AUTO_SEND race (closed in the adversarial
+pre-merge audit).** The check above runs once, right after claiming —
+before the proposal is even created. It does not by itself protect the
+*later* `AUTO_SEND` dispatch: between that check and the actual
+`sendCommunication()` call, drafting (`prepareReminderCommunication`,
+which can involve an AI round trip) and an `approveActionProposal` call
+both happen, widening the window in which an OWNER could pause the
+sequence, flip the organization kill switch, or switch the policy back to
+`APPROVAL_REQUIRED`. `executeAutoSend` therefore re-verifies all three —
+sequence still `ACTIVE`, organization `automationEnabled` still true,
+policy still `enabled` and still `AUTO_SEND` — via `isAutoSendStillAuthorized`,
+from fresh reads, immediately before the send, exactly mirroring the
+existing pre-send financial re-check. If any condition no longer holds,
+`executeAutoSend` returns without sending, leaving the drafted
+`Communication` in `DRAFT` for a human to review through the ordinary
+Action Center flow. See `src/server/collections/engine.test.ts`'s
+`isAutoSendStillAuthorized` describe block for the regression coverage.
+
 **Crash recovery / stuck CLAIMED.** If the process dies between claiming a
 step (`CLAIMED`) and marking it `EXECUTED`/`SKIPPED`, that
 `CollectionStepExecution` row stays `CLAIMED` forever — the unique
@@ -526,7 +544,8 @@ Phase 2 established:
 `src/server/collections/*.test.ts` (64 tests), plus
 `src/app/internal/automation/tick/route.test.ts` (4 tests) and four new
 `AUTOMATION_ENABLED`/`AUTOMATION_CRON_SECRET` cases in `src/lib/env.test.ts`
-— 72 new tests in total, all against a real Postgres test database, zero
+— 94 new tests in total (including a targeted adversarial pre-merge audit
+pass, see below), all against a real Postgres test database, zero
 real network calls (the fake email provider from Phase 4 is reused, never
 a real SMTP/vendor connection):
 policy CRUD/versioning/validation, enrollment idempotency and eligibility
@@ -558,7 +577,7 @@ formatted secret; unconfigured deployment).
 ## Verification
 
 Actually run for this phase (not merely claimed): `npm run typecheck`,
-`npm run lint`, `npm run db:validate`, `npm run test` (287/287 passing),
+`npm run lint`, `npm run db:validate`, `npm run test` (309/309 passing),
 `npm run build`; a fresh-DB from-zero migration replay (dev + test
 databases both re-applied the complete Phase 1–5 migration history, with
 the Phase 5 CHECK constraints included, and reconciled via the same

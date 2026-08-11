@@ -96,7 +96,7 @@ was deliberately left out and why.
 - [x] Two independent kill switches (deployment-level `AUTOMATION_ENABLED` env flag, organization-level toggle) — automation is inert unless both are explicitly on
 - [x] Vendor-neutral scheduler adapter (`POST /internal/automation/tick`), `AUTOMATION_CRON_SECRET`-authenticated, no client-suppliable tenant or execution time
 - [x] `/app/[orgSlug]/automation` UI + invoice-level collections status — honestly distinguishes "engine implemented" from "scheduler configured"; a manual tick trigger exists only outside production, clearly labeled dev-only
-- [x] 72 new tests (287 total in the suite) covering worker concurrency, payment/cancellation/partial-payment races, catch-up, repeated-tick idempotency, `UNCERTAIN` blocking, `AUTO_SEND` safety, scheduler auth, tenant isolation, and two full E2E scenarios
+- [x] 94 new tests (309 total in the suite) covering worker concurrency, payment/cancellation/partial-payment races, catch-up, repeated-tick idempotency, `UNCERTAIN` blocking, `AUTO_SEND` safety, scheduler auth, tenant isolation, and two full E2E scenarios — including a targeted adversarial pre-merge audit pass that found and closed a pause/kill-switch/mode-switch race in the `AUTO_SEND` dispatch path (see `docs/collections-automation.md#concurrency`)
 - [x] An outbox/reconciliation strategy for the crash-after-provider-success gap documented in `docs/communications.md#delivery-semantics` — **still not built**, same accepted limitation as Phase 4, not reopened
 
 See `docs/collections-automation.md` for the full design, including the

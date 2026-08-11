@@ -56,10 +56,23 @@ describe("pauseCollectionSequence / resumeCollectionSequence", () => {
     );
   });
 
-  it("rejects pause/resume for a sequence from another organization", async () => {
+  it("rejects pause for a sequence from another organization", async () => {
     const { sequence } = await setup();
     const other = await createAutomationReadyOrg("Other");
     await expect(pauseCollectionSequence(other.organization.id, sequence.id)).rejects.toThrow();
+  });
+
+  it("rejects resume for a sequence from another organization, and never actually resumes it", async () => {
+    const { organization, sequence } = await setup();
+    await pauseCollectionSequence(organization.id, sequence.id);
+    const other = await createAutomationReadyOrg("Other2");
+
+    await expect(resumeCollectionSequence(other.organization.id, sequence.id)).rejects.toThrow();
+
+    const stillPaused = await import("@/server/db/client").then(({ prisma }) =>
+      prisma.collectionSequence.findUniqueOrThrow({ where: { id: sequence.id } }),
+    );
+    expect(stillPaused.status).toBe("PAUSED");
   });
 });
 
@@ -76,6 +89,16 @@ describe("stopCollectionSequenceManually", () => {
     await stopCollectionSequenceManually(organization.id, sequence.id);
     const again = await stopCollectionSequenceManually(organization.id, sequence.id);
     expect(again.status).toBe("STOPPED");
+  });
+
+  it("rejects stopping a sequence from another organization, and never actually stops it", async () => {
+    const { sequence } = await setup();
+    const other = await createAutomationReadyOrg("Other3");
+    await expect(stopCollectionSequenceManually(other.organization.id, sequence.id)).rejects.toThrow();
+
+    const { prisma } = await import("@/server/db/client");
+    const stillActive = await prisma.collectionSequence.findUniqueOrThrow({ where: { id: sequence.id } });
+    expect(stillActive.status).toBe("ACTIVE");
   });
 });
 

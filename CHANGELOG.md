@@ -63,7 +63,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   scheduler it cannot observe. Invoice detail page gets an honest
   collections-status block (active/paused/blocked-uncertain/completed/
   stopped).
-- 72 new tests (287 total) covering policy validation, enrollment
+- 94 new tests (309 total) covering policy validation, enrollment
   idempotency, worker-vs-worker concurrency, repeated-tick idempotency,
   catch-up, full/partial payment, cancellation, archived customer,
   policy-disabled, pause, `UNCERTAIN`/stuck-`SENDING` blocking, `AUTO_SEND`
@@ -72,6 +72,26 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   provider.
 - Manually verified in a real browser end to end (see
   `docs/collections-automation.md#verification`).
+- **Adversarial pre-merge audit** (a separate pass after the above,
+  explicitly trying to break the implementation rather than confirm it):
+  found and closed a real race in the `AUTO_SEND` dispatch path — an
+  OWNER pausing a sequence, disabling organization automation, or
+  switching a policy back to `APPROVAL_REQUIRED` in the window between a
+  step's claim and the actual send was not being re-checked immediately
+  before dispatch. Fixed with `isAutoSendStillAuthorized`
+  (`src/server/collections/engine.ts`), mirroring the existing pre-send
+  financial re-check. 22 new regression tests added for this and for
+  other audited scenarios (stuck-CLAIMED non-blocking of later steps,
+  `FAILED` non-blocking, exact day+20 four-step catch-up, partial-payment
+  content verification, policy-version immunity end-to-end, audit-event
+  deduplication under concurrency, additional tenant-isolation and
+  forged-`now`/malformed-auth coverage) — see
+  `docs/collections-automation.md#concurrency` for the full writeup. No
+  other correctness or security issues found; the documented
+  payment/cancellation race window (between the final pre-send check and
+  the actual provider call) was re-examined and confirmed genuinely
+  irreducible without either holding a transaction across the network
+  call or building an outbox/reconciler — both explicitly out of scope.
 
 ### Added — Phase 4: Communications Foundation + Email Execution
 
