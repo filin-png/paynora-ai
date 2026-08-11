@@ -30,7 +30,12 @@ src/
                                    docs/operator-foundation.md
           [proposalId]/           Review/edit/send an email draft for one
                                    approved proposal — see docs/communications.md
+        automation/              Collections automation: kill switch, policy
+                                   list, active sequences — see
+                                   docs/collections-automation.md
     api/auth/[...nextauth]/ Auth.js route handler
+    internal/automation/tick/ Vendor-neutral scheduler adapter endpoint —
+                             see docs/collections-automation.md#scheduler-deployment
   components/ui/          Reusable, shadcn/ui-style UI primitives (cva + cn)
   lib/                     Cross-cutting utilities (env validation, cn helper)
   server/
@@ -68,11 +73,21 @@ src/
                              customer facts); never writes to Invoice/
                              Payment/Customer; the only code path that calls
                              an EmailProvider.
+    collections/             Collections automation — see
+                             docs/collections-automation.md. Policy CRUD,
+                             idempotent enrollment, the runAutomationTick
+                             engine, and sequence pause/resume/stop. Drives
+                             the existing Operator (src/server/operator) and
+                             Communications (src/server/communications)
+                             pipelines on a schedule; never a second
+                             Operator or a second email sender.
 prisma/
   schema.prisma            User, Organization, OrganizationMember,
                              Customer, Invoice, Payment, ActivityEvent,
                              BusinessEvent, OperatorInsight, ActionProposal,
-                             Communication, DeliveryAttempt
+                             Communication, DeliveryAttempt, CollectionPolicy,
+                             CollectionPolicyStep, CollectionSequence,
+                             CollectionStepExecution
   migrations/               Applied migration history (includes hand-added
                              CHECK constraints — see docs/accounts-receivable.md)
 prisma.config.ts            Prisma 7 config (schema path, datasource URL source)
@@ -115,8 +130,11 @@ EmailProvider (implemented, Phase 4)  send(message) over SMTP — see src/server
 PaymentProvider                       (billing, introduced Phase 6 — not accounting sync)
 AnalyticsProvider                     product analytics
 StorageProvider                       file/document storage
-JobProvider                           background job scheduling — not needed yet; Phase 4's
-                                       "Send" is a synchronous, human-triggered action
+JobProvider                           background job scheduling — Phase 5 needed a *trigger*
+                                       boundary (POST /internal/automation/tick, vendor-neutral,
+                                       auth via AUTOMATION_CRON_SECRET), not a job queue: the
+                                       domain still doesn't know or care which scheduler calls
+                                       it — see docs/collections-automation.md#scheduler-deployment
 ```
 
 See `docs/ai-architecture.md` for the AI provider design and
@@ -125,21 +143,23 @@ Russia-accessibility constraint driving initial adapter choices.
 
 ## Multi-tenancy
 
-All business data belongs to an `Organization` — as of Phase 4 that's
+All business data belongs to an `Organization` — as of Phase 5 that's
 `Customer`, `Invoice`, `Payment`, `ActivityEvent` (Phase 2);
-`BusinessEvent`, `OperatorInsight`, `ActionProposal` (Phase 3); and
-`Communication`, `DeliveryAttempt` (Phase 4) — alongside Phase 1's
-`OrganizationMember`. Authorization is enforced server-side on every
-query and mutation via the primitives in `src/server/tenancy/context.ts`
-— the UI hiding a control is never sufficient. Tenant isolation has
-automated tests for the identity layer
+`BusinessEvent`, `OperatorInsight`, `ActionProposal` (Phase 3);
+`Communication`, `DeliveryAttempt` (Phase 4); and `CollectionPolicy`,
+`CollectionSequence`, `CollectionStepExecution` (Phase 5) — alongside
+Phase 1's `OrganizationMember`. Authorization is enforced server-side on
+every query and mutation via the primitives in
+`src/server/tenancy/context.ts` — the UI hiding a control is never
+sufficient. Tenant isolation has automated tests for the identity layer
 (`src/server/tenancy/context.test.ts`), every Phase 2 resource
 (`src/server/ar/*.test.ts`), every Phase 3 resource
-(`src/server/operator/*.test.ts`), and every Phase 4 resource
-(`src/server/communications/*.test.ts`), all running against a real
+(`src/server/operator/*.test.ts`), every Phase 4 resource
+(`src/server/communications/*.test.ts`), and every Phase 5 resource
+(`src/server/collections/*.test.ts`), all running against a real
 database. Full design rationale: `docs/identity-and-tenancy.md`,
-`docs/accounts-receivable.md`, `docs/operator-foundation.md`, and
-`docs/communications.md`.
+`docs/accounts-receivable.md`, `docs/operator-foundation.md`,
+`docs/communications.md`, and `docs/collections-automation.md`.
 
 ## Validation strategy
 

@@ -6,7 +6,8 @@ import { z } from "zod";
 import { cancelInvoice } from "@/server/ar/invoices";
 import { parseAmountInput } from "@/server/ar/money";
 import { recordPayment } from "@/server/ar/payments";
-import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
+import { pauseCollectionSequence, resumeCollectionSequence } from "@/server/collections/sequences";
+import { requireOrganizationMembershipForPage, requireOrganizationRoleForPage } from "@/server/tenancy/guards";
 
 export type PaymentFormState = { error: string } | null;
 
@@ -51,4 +52,24 @@ export async function cancelInvoiceAction(orgSlug: string, invoiceId: string): P
   await cancelInvoice(context.organization.id, invoiceId);
   revalidatePath(`/app/${orgSlug}/invoices/${invoiceId}`);
   revalidatePath(`/app/${orgSlug}`);
+}
+
+export async function pauseInvoiceCollectionsAction(
+  orgSlug: string,
+  invoiceId: string,
+  sequenceId: string,
+): Promise<void> {
+  const context = await requireOrganizationRoleForPage(orgSlug, "OWNER");
+  await pauseCollectionSequence(context.organization.id, sequenceId);
+  revalidatePath(`/app/${orgSlug}/invoices/${invoiceId}`);
+}
+
+export async function resumeInvoiceCollectionsAction(
+  orgSlug: string,
+  invoiceId: string,
+  sequenceId: string,
+): Promise<void> {
+  const context = await requireOrganizationRoleForPage(orgSlug, "OWNER");
+  await resumeCollectionSequence(context.organization.id, sequenceId);
+  revalidatePath(`/app/${orgSlug}/invoices/${invoiceId}`);
 }

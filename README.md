@@ -5,17 +5,26 @@ employees) that helps them track accounts receivable, spot payment risk
 early, and automate collection follow-up — without replacing the accounting
 software they already use.
 
-**Project status: Phase 4 — Communications Foundation + Email
-Execution.** Authentication, organizations, tenant isolation, customers,
-invoices, payments, and a real AR dashboard are implemented (Phase 1–2).
-Phase 3 added an event → insight → proposal → human-approval pipeline (an
-Action Center that proposes payment reminders for overdue invoices) and a
+**Project status: Phase 5 — Collections Automation Engine.**
+Authentication, organizations, tenant isolation, customers, invoices,
+payments, and a real AR dashboard are implemented (Phase 1–2). Phase 3
+added an event → insight → proposal → human-approval pipeline (an Action
+Center that proposes payment reminders for overdue invoices) and a
 provider-agnostic AI Gateway. Phase 4 carries an approved proposal the
 rest of the way to a real sent email — but **approval never sends
 anything by itself**: a human reviews an editable draft and clicks Send
 as a separate, explicit step, and the UI is always honest about delivery
 state (including "uncertain" when a provider outcome genuinely can't be
-confirmed). See [docs/communications.md](./docs/communications.md),
+confirmed). Phase 5 adds a scheduling layer on top of all of that: a
+tenant-configurable collections policy, and a `runAutomationTick` engine
+that re-checks overdue invoices on a schedule and either prepares a
+reminder for human review (the default) or — only if an organization
+owner explicitly opts in — sends it through the exact same Phase 4 send
+path. **A schedule is never permission to send**: every tick re-verifies
+live financial state, and automation is disabled by default at both the
+deployment and organization level. See
+[docs/collections-automation.md](./docs/collections-automation.md),
+[docs/communications.md](./docs/communications.md),
 [docs/operator-foundation.md](./docs/operator-foundation.md), and
 [ROADMAP.md](./ROADMAP.md) for what's next.
 
@@ -25,7 +34,8 @@ confirmed). See [docs/communications.md](./docs/communications.md),
 - **UI**: Tailwind CSS, shadcn/ui-compatible component architecture
 - **Database**: PostgreSQL via Prisma — User, Organization, OrganizationMember,
   Customer, Invoice, Payment, ActivityEvent, BusinessEvent, OperatorInsight,
-  ActionProposal, Communication, DeliveryAttempt
+  ActionProposal, Communication, DeliveryAttempt, CollectionPolicy,
+  CollectionPolicyStep, CollectionSequence, CollectionStepExecution
 - **Auth**: Auth.js v5 (Credentials + JWT sessions), bcrypt password hashing
 - **Money**: integer minor units as `BigInt` — never floating point; see
   [docs/accounts-receivable.md](./docs/accounts-receivable.md)
@@ -99,6 +109,7 @@ locally, including the separate test database integration tests use.
 - [docs/accounts-receivable.md](./docs/accounts-receivable.md) — money representation, invoice lifecycle, concurrency
 - [docs/operator-foundation.md](./docs/operator-foundation.md) — event → insight → proposal → approval pipeline
 - [docs/communications.md](./docs/communications.md) — draft → review → send email, delivery semantics, idempotency
+- [docs/collections-automation.md](./docs/collections-automation.md) — collection policies, scheduling, catch-up, auto-send safety
 - [docs/domain-model.md](./docs/domain-model.md) — core domain entities
 - [docs/ai-architecture.md](./docs/ai-architecture.md) — AI provider abstraction
 - [docs/provider-strategy.md](./docs/provider-strategy.md) — external provider boundaries

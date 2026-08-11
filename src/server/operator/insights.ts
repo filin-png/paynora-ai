@@ -51,6 +51,14 @@ export type EnsuredInsight = { insight: OperatorInsight; created: boolean };
  * `organizationId`, which is threaded into both the lookup
  * (buildInvoiceOverdueContext re-verifies the invoice belongs to this org)
  * and the row itself.
+ *
+ * Despite the name, nothing here actually depends on `event.type` being
+ * INVOICE_OVERDUE — only on `event.invoiceId` being set. Phase 5's
+ * collections automation engine (src/server/collections/engine.ts) reuses
+ * this exact function for its own COLLECTION_STEP_DUE events rather than
+ * building a second insight generator — see docs/collections-automation.md
+ * #operator-integration for why that's safe (priority/summary are still
+ * computed the same deterministic way either event type).
  */
 export async function ensureInsightForInvoiceOverdueEvent(
   organizationId: string,

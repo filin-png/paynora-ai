@@ -5,6 +5,11 @@ built: the first real external side effect PAYNORA can produce — sending
 an email — reached only through an explicit, reviewable, human-triggered
 path. It does **not** add scheduling, automation, or any channel besides
 email — see [Explicitly out of scope](#explicitly-out-of-scope-in-phase-4).
+Phase 5 (`docs/collections-automation.md`) later added scheduling on top
+of this, without changing anything described in this document —
+`sendCommunication` and every guarantee below apply identically whether a
+`Communication` was created by a human through the Action Center or by
+the Phase 5 automation engine.
 
 ## The core rule: approval ≠ send
 
@@ -401,7 +406,12 @@ terminal state.
   (`EMAIL`) on purpose.
 - Any scheduler, cron job, or background queue — "Send" is a synchronous,
   human-triggered Server Action, exactly like "Run Operator" in Phase 3.
-- Scheduled/automatic reminder sequences (e.g. due date -> +3d -> +7d).
+  **Built in Phase 5** (`runAutomationTick`), which calls this exact
+  `sendCommunication` function unchanged — see
+  `docs/collections-automation.md#auto-send`.
+- Scheduled/automatic reminder sequences (e.g. due date -> +3d -> +7d) —
+  **built in Phase 5** as `CollectionPolicy`/`CollectionSequence`, see
+  `docs/collections-automation.md`.
 - A production, paid vendor account — no API key was created or invented;
   `EMAIL_PROVIDER=none` is the default and the only value exercised in
   tests/CI.

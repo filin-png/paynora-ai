@@ -80,13 +80,27 @@ what was deliberately left out and why.
 See `docs/communications.md` for the full design, including exactly what
 was deliberately left out and why.
 
-## Phase 5 — Collection Automation
+## Phase 5 — Collections Automation Engine — ✅ complete (2026-08-11)
 
-- [ ] Collection sequences (e.g. due date → +3d → +7d → +14d)
-- [ ] Background job scheduling (`JobProvider`)
-- [ ] Idempotent scheduled reminder jobs (no duplicate sends on retry — builds on Phase 4's DeliveryAttempt idempotency)
-- [ ] Automation controls: global / per-customer / per-invoice disable
-- [ ] An outbox/reconciliation strategy for the crash-after-provider-success gap documented in `docs/communications.md#delivery-semantics`
+- [x] Tenant-scoped `CollectionPolicy`/`CollectionPolicyStep`, versioned so editing steps never retroactively changes an in-flight sequence
+- [x] `CollectionSequence` per invoice, snapshotting the policy's version at enrollment; strict state machine (`ACTIVE`/`PAUSED`/`COMPLETED`/`STOPPED` with typed stop reasons)
+- [x] Idempotent, lazy invoice enrollment (bulk-query, no per-invoice cron rows) — scales to future bulk import without special-casing
+- [x] `runAutomationTick(now, options)` — deterministic w.r.t. injected `now`, idempotent under repetition, tenant-safe, testable without a real cron
+- [x] "Schedule ≠ permission to send": every tick re-verifies live financial state (paid/cancelled/archived/policy-disabled/blocked-by-uncertain-delivery) immediately before acting, never trusting what a previous tick decided
+- [x] DB-backed worker-vs-worker invariant (`@@unique([sequenceId, stepId])`) — proven with a real concurrent-tick test, not just asserted
+- [x] Safe catch-up: a scheduler gap executes only the single most-advanced due step, marking earlier ones superseded — never a reminder burst
+- [x] Full payment self-heals the sequence to stopped; partial payment continues with live-recomputed outstanding, never a stale amount
+- [x] `UNCERTAIN`/stuck-`SENDING` delivery blocks further automation on that invoice until a human resolves it — no "wait and send anyway" logic
+- [x] Reuses Phase 3's Operator pipeline (`ensureInsightForInvoiceOverdueEvent`/`ensureReminderProposalForInsight`, the latter extended with an explicit tone) and Phase 4's Communication/send pipeline unchanged — no second Operator, no second email sender
+- [x] `AUTO_SEND` implemented: OWNER-only opt-in, default off, composes only `approveActionProposal`/`sendCommunication` (no bypass, no direct provider call), with a pre-send financial re-check
+- [x] Two independent kill switches (deployment-level `AUTOMATION_ENABLED` env flag, organization-level toggle) — automation is inert unless both are explicitly on
+- [x] Vendor-neutral scheduler adapter (`POST /internal/automation/tick`), `AUTOMATION_CRON_SECRET`-authenticated, no client-suppliable tenant or execution time
+- [x] `/app/[orgSlug]/automation` UI + invoice-level collections status — honestly distinguishes "engine implemented" from "scheduler configured"; a manual tick trigger exists only outside production, clearly labeled dev-only
+- [x] 94 new tests (309 total in the suite) covering worker concurrency, payment/cancellation/partial-payment races, catch-up, repeated-tick idempotency, `UNCERTAIN` blocking, `AUTO_SEND` safety, scheduler auth, tenant isolation, and two full E2E scenarios — including a targeted adversarial pre-merge audit pass that found and closed a pause/kill-switch/mode-switch race in the `AUTO_SEND` dispatch path (see `docs/collections-automation.md#concurrency`)
+- [x] An outbox/reconciliation strategy for the crash-after-provider-success gap documented in `docs/communications.md#delivery-semantics` — **still not built**, same accepted limitation as Phase 4, not reopened
+
+See `docs/collections-automation.md` for the full design, including the
+concurrency/race-condition reasoning and everything deliberately left out.
 
 ## Phase 6 — Intelligence
 
