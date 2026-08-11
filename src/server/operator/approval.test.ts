@@ -147,6 +147,84 @@ describe("dismissActionProposal", () => {
   });
 });
 
+describe("concurrency — approveActionProposal vs. dismissActionProposal", () => {
+  it("never applies both decisions, whichever operation wins the race", async () => {
+    // transitionActionProposal (approval.ts) does an atomic conditional
+    // UPDATE (`WHERE status = 'PENDING'`), so exactly one of these two
+    // concurrent calls for the same proposal can ever succeed — the
+    // other must see the already-decided row and reject, never silently
+    // overwrite it.
+    const { organization, user } = await createTestOrganization();
+    const customer = await createCustomer(organization.id, { name: "Acme Co" });
+    const { proposal } = await createPendingProposal(organization.id, customer.id);
+
+    const [approveResult, dismissResult] = await Promise.allSettled([
+      approveActionProposal(organization.id, proposal.id, user.id),
+      dismissActionProposal(organization.id, proposal.id, user.id),
+    ]);
+
+    const fulfilledCount = [approveResult, dismissResult].filter((r) => r.status === "fulfilled").length;
+    expect(fulfilledCount).toBe(1);
+
+    const finalProposal = await prisma.actionProposal.findUniqueOrThrow({ where: { id: proposal.id } });
+
+    if (finalProposal.status === "APPROVED") {
+      expect(approveResult.status).toBe("fulfilled");
+      expect(dismissResult.status).toBe("rejected");
+      if (dismissResult.status === "rejected") {
+        expect(dismissResult.reason).toBeInstanceOf(InvalidActionProposalTransitionError);
+      }
+    } else {
+      expect(finalProposal.status).toBe("DISMISSED");
+      expect(dismissResult.status).toBe("fulfilled");
+      expect(approveResult.status).toBe("rejected");
+      if (approveResult.status === "rejected") {
+        expect(approveResult.reason).toBeInstanceOf(InvalidActionProposalTransitionError);
+      }
+    }
+
+    // Exactly one decision was recorded — decidedByUserId/decidedAt
+    // reflect the winner, never overwritten by the loser.
+    expect(finalProposal.decidedByUserId).toBe(user.id);
+    expect(finalProposal.decidedAt).not.toBeNull();
+
+    // Exactly one audit event was written for this proposal — the loser
+    // never got far enough to record one of its own.
+    const events = await prisma.activityEvent.findMany({
+      where: {
+        organizationId: organization.id,
+        type: { in: ["ACTION_PROPOSAL_APPROVED", "ACTION_PROPOSAL_DISMISSED"] },
+        invoiceId: finalProposal.invoiceId,
+      },
+    });
+    expect(events).toHaveLength(1);
+  });
+
+  it("never applies both decisions under many repeated concurrent attempts", async () => {
+    // A single race can pass by luck even with a real bug (e.g. if one
+    // side's transaction happens to start first every time locally).
+    // Repeating it several times with a fresh proposal each round makes a
+    // reintroduced race far more likely to be caught.
+    const { organization, user } = await createTestOrganization();
+    const customer = await createCustomer(organization.id, { name: "Acme Co" });
+
+    for (let round = 0; round < 8; round += 1) {
+      const { proposal } = await createPendingProposal(organization.id, customer.id, "2020-01-15");
+
+      const results = await Promise.allSettled([
+        approveActionProposal(organization.id, proposal.id, user.id),
+        dismissActionProposal(organization.id, proposal.id, user.id),
+      ]);
+
+      const fulfilledCount = results.filter((r) => r.status === "fulfilled").length;
+      expect(fulfilledCount).toBe(1);
+
+      const finalProposal = await prisma.actionProposal.findUniqueOrThrow({ where: { id: proposal.id } });
+      expect(["APPROVED", "DISMISSED"]).toContain(finalProposal.status);
+    }
+  });
+});
+
 describe("listPendingActionProposals", () => {
   it("returns only PENDING proposals for the calling organization, highest priority first", async () => {
     const { organization, user } = await createTestOrganization();

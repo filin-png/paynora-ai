@@ -5,6 +5,25 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — Phase 3: Operator Foundation
+
+- `approveActionProposal`/`dismissActionProposal` (`src/server/operator/approval.ts`)
+  read a proposal's status, then updated it unconditionally in a separate
+  step — two concurrent decisions on the same `PENDING` proposal (one
+  approve, one dismiss) could both pass the initial check and both
+  "succeed", with whichever update ran last silently overwriting the
+  other's decision. Fixed with an atomic conditional update
+  (`updateMany` with `WHERE status = 'PENDING'` in the same transaction
+  as the audit event): Postgres serializes concurrent UPDATEs on the same
+  row and re-evaluates the WHERE clause against the just-committed row
+  under READ COMMITTED, so at most one of two concurrent calls can ever
+  match and apply. The other now correctly rejects with
+  `InvalidActionProposalTransitionError` instead of silently losing.
+  Verified with a real concurrency test that fires concurrent
+  approve/dismiss calls (including 8 repeated rounds) and asserts exactly
+  one decision is ever recorded — confirmed to fail against the old
+  implementation before the fix, not just pass against the new one.
+
 ### Added — Phase 3: Operator Foundation
 
 - `BusinessEvent`, `OperatorInsight`, `ActionProposal` Prisma models and

@@ -185,6 +185,30 @@ as `ArResourceNotFoundError`), records who decided and when
 path in Phase 3 — nothing is sent, no external call is made. See
 [Action Center UI](#action-center-ui).
 
+**Concurrent decisions on the same proposal don't race.** Both
+transitions go through one internal `transitionActionProposal` helper
+that applies the status change as a single atomic conditional update
+(`UPDATE ... WHERE id = $1 AND organizationId = $2 AND status = 'PENDING'`,
+via Prisma's `updateMany`) inside the same transaction as the audit
+event — not a separate read-then-write. Postgres locks the target row
+while evaluating that `WHERE` clause, so two concurrent calls for the
+same proposal (e.g. one approve, one dismiss, both racing a doubled
+click or two reviewers) serialize on the row: whichever `UPDATE` reaches
+it first proceeds; the second blocks until the first commits, then — a
+standard Postgres READ COMMITTED behavior — re-evaluates its `WHERE`
+clause against the just-committed row, finds `status` is no longer
+`PENDING`, and matches zero rows instead of overwriting the winner's
+decision. The loser sees `result.count === 0`, re-reads the row, and
+either returns it unchanged (idempotent no-op, if it happens to match
+what the loser itself asked for) or throws
+`InvalidActionProposalTransitionError` — it never silently "succeeds"
+with a decision that wasn't actually applied. Verified in
+`src/server/operator/approval.test.ts` with a real concurrent
+approve-vs-dismiss test (including 8 repeated rounds against fresh
+proposals) that asserts exactly one decision is ever recorded — and was
+confirmed to fail against the pre-fix implementation before being
+merged, not just pass against the fixed one.
+
 ## Action Center UI
 
 `/app/[orgSlug]/actions` (`src/app/app/[orgSlug]/actions/page.tsx`) shows:
