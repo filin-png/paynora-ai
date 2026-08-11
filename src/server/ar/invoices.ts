@@ -164,10 +164,19 @@ export async function getInvoice(organizationId: string, invoiceId: string) {
   return invoice;
 }
 
-export async function getInvoiceWithFinancials(organizationId: string, invoiceId: string) {
+/**
+ * `today`, added in Phase 5, lets a caller override "today" for the
+ * overdue determination instead of the real server clock — used by the
+ * collections automation engine (src/server/collections/engine.ts) so
+ * runAutomationTick's date logic is genuinely deterministic relative to
+ * its injected `now` parameter, not `new Date()`. Every other caller omits
+ * it and gets the exact previous behavior (getBusinessToday(), via
+ * isPastDue's own default parameter).
+ */
+export async function getInvoiceWithFinancials(organizationId: string, invoiceId: string, today?: string) {
   const invoice = await getInvoice(organizationId, invoiceId);
   const paidMinor = await getPaidMinorForInvoice(invoice.id);
-  return { invoice, financials: computeInvoiceFinancials(invoice, paidMinor) };
+  return { invoice, financials: computeInvoiceFinancials(invoice, paidMinor, today) };
 }
 
 export type InvoiceListFilter = "all" | "open" | "overdue" | "paid";
@@ -175,7 +184,7 @@ export type InvoiceListFilter = "all" | "open" | "overdue" | "paid";
 export async function listInvoicesWithFinancials(
   organizationId: string,
   filter: InvoiceListFilter = "all",
-  options: { customerId?: string } = {},
+  options: { customerId?: string; today?: string } = {},
 ) {
   const invoices = await prisma.invoice.findMany({
     where: { organizationId, ...(options.customerId ? { customerId: options.customerId } : {}) },
@@ -192,7 +201,7 @@ export async function listInvoicesWithFinancials(
 
   const withFinancials = invoices.map((invoice) => ({
     invoice,
-    financials: computeInvoiceFinancials(invoice, paidByInvoiceId.get(invoice.id) ?? 0n),
+    financials: computeInvoiceFinancials(invoice, paidByInvoiceId.get(invoice.id) ?? 0n, options.today),
   }));
 
   switch (filter) {

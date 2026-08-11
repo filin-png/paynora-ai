@@ -105,4 +105,32 @@ describe("parseEnv", () => {
     const env = parseEnv(validBase);
     expect(env.SMTP_SECURE).toBe(false);
   });
+
+  it("defaults AUTOMATION_ENABLED to false with no cron secret required", () => {
+    const env = parseEnv(validBase);
+    expect(env.AUTOMATION_ENABLED).toBe(false);
+    expect(env.AUTOMATION_CRON_SECRET).toBeUndefined();
+  });
+
+  it("rejects AUTOMATION_ENABLED=true with no AUTOMATION_CRON_SECRET", () => {
+    expect(() => parseEnv({ ...validBase, AUTOMATION_ENABLED: "true" })).toThrow(
+      /AUTOMATION_CRON_SECRET is required/,
+    );
+  });
+
+  it("rejects an AUTOMATION_CRON_SECRET shorter than 20 characters", () => {
+    expect(() =>
+      parseEnv({ ...validBase, AUTOMATION_ENABLED: "true", AUTOMATION_CRON_SECRET: "too-short" }),
+    ).toThrow(/AUTOMATION_CRON_SECRET must be at least 20 characters/);
+  });
+
+  it("accepts AUTOMATION_ENABLED=true with a valid AUTOMATION_CRON_SECRET", () => {
+    const env = parseEnv({
+      ...validBase,
+      AUTOMATION_ENABLED: "true",
+      AUTOMATION_CRON_SECRET: "c".repeat(24),
+    });
+    expect(env.AUTOMATION_ENABLED).toBe(true);
+    expect(env.AUTOMATION_CRON_SECRET).toBe("c".repeat(24));
+  });
 });

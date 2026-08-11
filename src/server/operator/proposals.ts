@@ -49,10 +49,19 @@ export type EnsuredProposal = { proposal: ActionProposal; created: boolean };
  * exactly one proposal type (SEND_PAYMENT_REMINDER) — later phases that
  * add more insight sources or action types extend this mapping, they
  * don't change how idempotency works.
+ *
+ * `options.tone`, added in Phase 5, lets a caller supply an explicit tone
+ * (SOFT/STANDARD/FIRM, lowercased for display) instead of deriving one from
+ * insight priority — used by the collections automation engine
+ * (src/server/collections/engine.ts) so a policy step's configured tone
+ * drives the reminder, not the insight's priority, which is Phase 3's own
+ * unrelated signal. Omitting it preserves the original Phase 3 manual
+ * "Run Operator" behavior unchanged.
  */
 export async function ensureReminderProposalForInsight(
   organizationId: string,
   insight: OperatorInsight,
+  options: { tone?: string } = {},
 ): Promise<EnsuredProposal> {
   const type: ActionType = "SEND_PAYMENT_REMINDER";
   assertAllowedActionType(type);
@@ -66,7 +75,7 @@ export async function ensureReminderProposalForInsight(
         invoiceId: insight.invoiceId,
         type,
         reasoning: insight.summary,
-        suggestedTone: suggestedToneForPriority(insight.priority),
+        suggestedTone: options.tone ?? suggestedToneForPriority(insight.priority),
       },
     });
     return { proposal, created: true };

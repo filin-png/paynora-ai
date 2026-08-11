@@ -44,6 +44,23 @@ const baseEnvSchema = z.object({
     .string()
     .optional()
     .transform((value) => value === "true"),
+  // Phase 5 deployment-level kill switch (see docs/collections-automation.md
+  // #kill-switch). Defaults OFF: runAutomationTick refuses to do anything
+  // external unless this is explicitly "true", regardless of any
+  // per-organization automationEnabled setting — a genuine external side
+  // effect (sending email) must never happen just because a database row
+  // says so, without an explicit deployment-level opt-in too.
+  AUTOMATION_ENABLED: z
+    .string()
+    .optional()
+    .transform((value) => value === "true"),
+  // Bearer secret the internal scheduler endpoint
+  // (POST /internal/automation/tick) requires — never accepted from a
+  // normal user session. Only required once AUTOMATION_ENABLED="true".
+  AUTOMATION_CRON_SECRET: z
+    .string()
+    .min(20, "AUTOMATION_CRON_SECRET must be at least 20 characters")
+    .optional(),
 });
 
 export const envSchema = baseEnvSchema.superRefine((data, ctx) => {
@@ -61,6 +78,13 @@ export const envSchema = baseEnvSchema.superRefine((data, ctx) => {
         ctx.addIssue({ code: "custom", path: [key], message: `${key} is required when EMAIL_PROVIDER="smtp"` });
       }
     }
+  }
+  if (data.AUTOMATION_ENABLED && !data.AUTOMATION_CRON_SECRET) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["AUTOMATION_CRON_SECRET"],
+      message: 'AUTOMATION_CRON_SECRET is required when AUTOMATION_ENABLED="true"',
+    });
   }
 });
 

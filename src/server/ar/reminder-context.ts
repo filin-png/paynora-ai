@@ -29,11 +29,18 @@ export type DeterministicInvoiceContext = {
   customerNotes?: string;
 };
 
+/**
+ * `today`, added in Phase 5, overrides "today" for the daysOverdue
+ * calculation instead of the real server clock — see
+ * getInvoiceWithFinancials's matching parameter in invoices.ts. Every
+ * existing caller omits it and gets the previous behavior unchanged.
+ */
 export async function buildDeterministicInvoiceContext(
   organizationId: string,
   invoiceId: string,
+  today: string = getBusinessToday(),
 ): Promise<DeterministicInvoiceContext> {
-  const { invoice, financials } = await getInvoiceWithFinancials(organizationId, invoiceId);
+  const { invoice, financials } = await getInvoiceWithFinancials(organizationId, invoiceId, today);
   const currency = invoice.currency as Currency;
   const dueDateStr = toDateOnlyString(invoice.dueDate);
 
@@ -42,7 +49,7 @@ export async function buildDeterministicInvoiceContext(
     currency,
     outstandingAmount: formatMoney(financials.outstandingMinor, currency),
     dueDate: dueDateStr,
-    daysOverdue: daysBetween(dueDateStr, getBusinessToday()),
+    daysOverdue: daysBetween(dueDateStr, today),
     customerName: invoice.customer.name,
     customerNotes: invoice.customer.notes
       ? invoice.customer.notes.slice(0, MAX_CUSTOMER_NOTES_CHARS)
