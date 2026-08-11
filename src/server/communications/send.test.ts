@@ -211,6 +211,60 @@ describe("sendCommunication — unknown/uncertain outcome", () => {
   });
 });
 
+describe("sendCommunication — terminal/stuck state protection", () => {
+  it("never re-sends an already-SENT communication, with or without acknowledgement", async () => {
+    const { organization, user, communication } = await setup();
+    await sendCommunication(organization.id, communication.id, user.id, {
+      provider: createFakeEmailProvider({ kind: "success" }),
+    });
+
+    await expect(
+      sendCommunication(organization.id, communication.id, user.id, {
+        provider: createFakeEmailProvider({ kind: "success" }),
+      }),
+    ).rejects.toThrow(InvalidCommunicationTransitionError);
+    await expect(
+      sendCommunication(organization.id, communication.id, user.id, {
+        provider: createFakeEmailProvider({ kind: "success" }),
+        acknowledgeUncertainRisk: true,
+      }),
+    ).rejects.toThrow(InvalidCommunicationTransitionError);
+
+    const attempts = await prisma.deliveryAttempt.count({ where: { communicationId: communication.id } });
+    expect(attempts).toBe(1); // only the original successful attempt — no phantom second dispatch
+  });
+
+  it("a communication stuck in SENDING (e.g. the process crashed before recording an outcome) cannot be resent by any button, even with acknowledgement", async () => {
+    // Simulates exactly the crash scenario docs/communications.md#unknown-outcomes
+    // describes: the provider may or may not have accepted the email, but
+    // the process died before finalizeSuccess/finalizeTerminal ever ran,
+    // so the row is stuck at SENDING with no terminal DeliveryAttempt.
+    const { organization, user, communication } = await setup();
+    await prisma.communication.update({ where: { id: communication.id }, data: { status: "SENDING" } });
+
+    await expect(
+      sendCommunication(organization.id, communication.id, user.id, {
+        provider: createFakeEmailProvider({ kind: "success" }),
+      }),
+    ).rejects.toThrow(InvalidCommunicationTransitionError);
+    // The "Resend anyway" acknowledgement only ever unlocks UNCERTAIN, not
+    // a bare SENDING — a stuck send is not safely distinguishable from one
+    // that's genuinely still in flight, so it must never be treated as
+    // equivalent to a confirmed-ambiguous UNCERTAIN outcome.
+    await expect(
+      sendCommunication(organization.id, communication.id, user.id, {
+        provider: createFakeEmailProvider({ kind: "success" }),
+        acknowledgeUncertainRisk: true,
+      }),
+    ).rejects.toThrow(InvalidCommunicationTransitionError);
+
+    const reloaded = await prisma.communication.findUniqueOrThrow({ where: { id: communication.id } });
+    expect(reloaded.status).toBe("SENDING");
+    const attempts = await prisma.deliveryAttempt.count({ where: { communicationId: communication.id } });
+    expect(attempts).toBe(0); // no DeliveryAttempt was ever created for the simulated crash, and none is created by the blocked resend attempts
+  });
+});
+
 describe("sendCommunication — tenant isolation", () => {
   it("rejects sending another organization's communication", async () => {
     const { organization: orgA } = await createTestOrganization("Org A");
