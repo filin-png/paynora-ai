@@ -10,9 +10,13 @@ export async function resetDatabase(): Promise<void> {
   await prisma.$transaction([
     prisma.deliveryAttempt.deleteMany(),
     prisma.communication.deleteMany(),
+    prisma.collectionStepExecution.deleteMany(),
     prisma.actionProposal.deleteMany(),
     prisma.operatorInsight.deleteMany(),
     prisma.businessEvent.deleteMany(),
+    prisma.collectionSequence.deleteMany(),
+    prisma.collectionPolicyStep.deleteMany(),
+    prisma.collectionPolicy.deleteMany(),
     prisma.activityEvent.deleteMany(),
     prisma.payment.deleteMany(),
     prisma.invoice.deleteMany(),

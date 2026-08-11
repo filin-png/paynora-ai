@@ -24,6 +24,15 @@
 // lifecycle, delivery semantics, and idempotency strategy. A Communication
 // is always tied 1:1 to the ActionProposal it was drafted for; sending one
 // is a distinct, explicit step from approving the proposal it came from.
+//
+// Phase 5 introduces Collections Automation: CollectionPolicy,
+// CollectionPolicyStep, CollectionSequence, CollectionStepExecution. See
+// docs/collections-automation.md for the full design (scheduling, catch-up,
+// concurrency, and the payment/cancellation/UNCERTAIN races). This layer
+// never sends anything itself and never invents a second Operator or email
+// pipeline — it only ever drives the existing BusinessEvent -> OperatorInsight
+// -> ActionProposal -> Communication chain from Phases 3-4, on a schedule
+// instead of only on manual detection.
 
 generator client {
   provider = "prisma-client-js"
@@ -48,27 +57,37 @@ model User {
 
   memberships             OrganizationMember[]
   decidedActionProposals  ActionProposal[]
+  autoSendEnabledPolicies CollectionPolicy[]
 
   @@map("users")
 }
 
 model Organization {
-  id        String   @id @default(cuid())
-  name      String
-  slug      String   @unique
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                String   @id @default(cuid())
+  name              String
+  slug              String   @unique
+  // Phase 5 global kill switch. Automation is OFF by default for every
+  // organization, including newly created ones — see
+  // docs/collections-automation.md#kill-switch. Flipping this to true does
+  // not by itself send anything: it only allows runAutomationTick to look
+  // at this org's enabled CollectionPolicy/CollectionSequence rows at all.
+  automationEnabled Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
-  members         OrganizationMember[]
-  customers       Customer[]
-  invoices        Invoice[]
-  payments        Payment[]
-  activityEvents  ActivityEvent[]
-  businessEvents  BusinessEvent[]
-  operatorInsights OperatorInsight[]
-  actionProposals ActionProposal[]
-  communications  Communication[]
-  deliveryAttempts DeliveryAttempt[]
+  members                  OrganizationMember[]
+  customers                Customer[]
+  invoices                 Invoice[]
+  payments                 Payment[]
+  activityEvents           ActivityEvent[]
+  businessEvents           BusinessEvent[]
+  operatorInsights         OperatorInsight[]
+  actionProposals          ActionProposal[]
+  communications           Communication[]
+  deliveryAttempts         DeliveryAttempt[]
+  collectionPolicies       CollectionPolicy[]
+  collectionSequences      CollectionSequence[]
+  collectionStepExecutions CollectionStepExecution[]
 
   @@map("organizations")
 }
@@ -101,13 +120,14 @@ model Customer {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  organization    Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  invoices        Invoice[]
-  activityEvents  ActivityEvent[]
-  businessEvents  BusinessEvent[]
-  operatorInsights OperatorInsight[]
-  actionProposals ActionProposal[]
-  communications  Communication[]
+  organization        Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoices            Invoice[]
+  activityEvents      ActivityEvent[]
+  businessEvents      BusinessEvent[]
+  operatorInsights    OperatorInsight[]
+  actionProposals     ActionProposal[]
+  communications      Communication[]
+  collectionSequences CollectionSequence[]
 
   @@index([organizationId])
   @@index([organizationId, archivedAt])
@@ -133,14 +153,15 @@ model Invoice {
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
-  organization    Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  customer        Customer          @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  payments        Payment[]
-  activityEvents  ActivityEvent[]
-  businessEvents  BusinessEvent[]
-  operatorInsights OperatorInsight[]
-  actionProposals ActionProposal[]
-  communications  Communication[]
+  organization        Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer            Customer             @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  payments            Payment[]
+  activityEvents      ActivityEvent[]
+  businessEvents      BusinessEvent[]
+  operatorInsights    OperatorInsight[]
+  actionProposals     ActionProposal[]
+  communications      Communication[]
+  collectionSequences CollectionSequence[]
 
   // Invoice numbers are unique per organization, not globally — see
   // docs/accounts-receivable.md#invoice-numbering.
@@ -191,6 +212,21 @@ enum ActivityEventType {
   COMMUNICATION_SENT
   COMMUNICATION_SEND_FAILED
   ACTION_PROPOSAL_EXECUTED
+  // Phase 5: Collections Automation — see docs/collections-automation.md.
+  // Deliberately no per-tick "ran automation tick" event: a tick that finds
+  // nothing due is not a business fact worth an audit row, and would be
+  // pure cron-noise. Only state changes a human would care about are
+  // recorded here.
+  COLLECTION_POLICY_CREATED
+  COLLECTION_POLICY_UPDATED
+  AUTOMATION_ENABLED
+  AUTOMATION_DISABLED
+  COLLECTION_SEQUENCE_STARTED
+  COLLECTION_SEQUENCE_PAUSED
+  COLLECTION_SEQUENCE_RESUMED
+  COLLECTION_SEQUENCE_STOPPED
+  COLLECTION_STEP_EXECUTED
+  COLLECTION_STEP_SKIPPED
 }
 
 model ActivityEvent {
@@ -222,6 +258,11 @@ enum BusinessEventType {
   // The only detector Phase 3 implements. More event types (payment
   // received, promise broken, ...) are additive in later phases.
   INVOICE_OVERDUE
+  // Phase 5: fired by the automation engine when a CollectionSequence's
+  // claimed step is ready to become an insight/proposal. Unlike
+  // INVOICE_OVERDUE (deduped once per invoice, forever), this is deduped
+  // per sequence+step — see docs/collections-automation.md#why-a-new-event-type.
+  COLLECTION_STEP_DUE
 }
 
 /// A deterministically detected fact about the business — never an AI
@@ -242,10 +283,11 @@ model BusinessEvent {
   data           Json
   detectedAt     DateTime          @default(now())
 
-  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  customer     Customer?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  invoice      Invoice?          @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
-  insights     OperatorInsight[]
+  organization            Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer                Customer?                @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  invoice                 Invoice?                 @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  insights                OperatorInsight[]
+  collectionStepExecution CollectionStepExecution?
 
   @@unique([organizationId, type, dedupeKey])
   @@index([organizationId, type])
@@ -336,12 +378,13 @@ model ActionProposal {
   decidedByUserId String?
   createdAt       DateTime             @default(now())
 
-  organization  Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  insight       OperatorInsight @relation(fields: [insightId], references: [id], onDelete: Cascade)
-  customer      Customer?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  invoice       Invoice?        @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
-  decidedByUser User?           @relation(fields: [decidedByUserId], references: [id], onDelete: SetNull)
-  communication Communication?
+  organization            Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  insight                 OperatorInsight          @relation(fields: [insightId], references: [id], onDelete: Cascade)
+  customer                Customer?                @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  invoice                 Invoice?                 @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  decidedByUser           User?                    @relation(fields: [decidedByUserId], references: [id], onDelete: SetNull)
+  communication           Communication?
+  collectionStepExecution CollectionStepExecution?
 
   @@unique([organizationId, insightId, type])
   @@index([organizationId, status])
@@ -469,4 +512,194 @@ model DeliveryAttempt {
   @@index([organizationId])
   @@index([communicationId])
   @@map("delivery_attempts")
+}
+
+// --- Phase 5: Collections Automation -------------------------------------
+// A CollectionPolicy is a tenant-scoped, OWNER-configured set of ordered
+// steps ("N days after due, send a reminder with tone X"). It is not a
+// visual workflow builder — steps are a flat, deterministic list. See
+// docs/collections-automation.md for the full design.
+
+enum CollectionAutomationMode {
+  // Detect -> schedule -> prepare an ActionProposal/Communication draft; a
+  // human must still approve and send via the existing Phase 3/4 flow.
+  APPROVAL_REQUIRED
+  // The engine itself approves the proposal and calls sendCommunication()
+  // for allowlisted, transactional actions only. OFF by default; OWNER-only
+  // opt-in per policy — see CollectionPolicy.autoSendEnabledByUserId.
+  AUTO_SEND
+}
+
+enum CollectionStepAction {
+  SEND_PAYMENT_REMINDER
+  NOTIFY_OWNER
+}
+
+enum ReminderTone {
+  SOFT
+  STANDARD
+  FIRM
+}
+
+/// Editing a policy's steps never retroactively changes an in-flight
+/// CollectionSequence: steps are versioned (`currentVersion` +
+/// CollectionPolicyStep.version), and a sequence locks in the version it
+/// was enrolled under (CollectionSequence.policyVersion). Updating steps
+/// bumps `currentVersion` and writes a new set of CollectionPolicyStep rows
+/// at that version rather than mutating existing ones — old versions are
+/// kept (never deleted) so already-running sequences keep working.
+model CollectionPolicy {
+  id                      String                   @id @default(cuid())
+  organizationId          String
+  name                    String
+  isDefault               Boolean                  @default(false)
+  // Master per-policy switch. A policy can exist, be fully configured, and
+  // still never fire anything until this is true AND
+  // Organization.automationEnabled is true — two independent switches, both
+  // required, matching the org-level-vs-policy-level kill switch design.
+  enabled                 Boolean                  @default(false)
+  automationMode          CollectionAutomationMode @default(APPROVAL_REQUIRED)
+  currentVersion          Int                      @default(1)
+  // Set (OWNER-only) at the moment automationMode is switched to AUTO_SEND,
+  // and used as the acting userId for the automatic approveActionProposal/
+  // sendCommunication calls the engine performs on that path — an
+  // auditable answer to "who authorized this send", never a null/system
+  // sentinel. Cleared if the policy is switched back to APPROVAL_REQUIRED.
+  autoSendEnabledByUserId String?
+  autoSendEnabledAt       DateTime?
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
+
+  organization          Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  autoSendEnabledByUser User?                  @relation(fields: [autoSendEnabledByUserId], references: [id], onDelete: SetNull)
+  steps                 CollectionPolicyStep[]
+  sequences             CollectionSequence[]
+
+  @@index([organizationId])
+  @@index([organizationId, isDefault])
+  @@map("collection_policies")
+}
+
+/// One row per (policyId, version, stepOrder). `daysAfterDue` is the only
+/// scheduling input — no raw cron expressions are ever accepted from a
+/// client. Both uniques below reject a step configuration that couldn't be
+/// executed deterministically (two steps firing on the same day, or two
+/// steps claiming the same position).
+model CollectionPolicyStep {
+  id           String               @id @default(cuid())
+  policyId     String
+  version      Int
+  stepOrder    Int
+  daysAfterDue Int
+  action       CollectionStepAction
+  tone         ReminderTone         @default(STANDARD)
+  createdAt    DateTime             @default(now())
+
+  policy         CollectionPolicy          @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  stepExecutions CollectionStepExecution[]
+
+  @@unique([policyId, version, stepOrder])
+  @@unique([policyId, version, daysAfterDue])
+  @@index([policyId, version])
+  @@map("collection_policy_steps")
+}
+
+/// ACTIVE -> PAUSED -> ACTIVE (resume), ACTIVE -> COMPLETED (paid in full),
+/// ACTIVE -> STOPPED (cancelled/manual/policy or automation disabled/customer
+/// archived). See docs/collections-automation.md#sequence-lifecycle for the
+/// full transition table.
+enum CollectionSequenceStatus {
+  ACTIVE
+  PAUSED
+  COMPLETED
+  STOPPED
+}
+
+enum CollectionStopReason {
+  PAID
+  CANCELLED
+  MANUAL
+  POLICY_DISABLED
+  AUTOMATION_DISABLED
+  CUSTOMER_ARCHIVED
+}
+
+/// The runtime instance of a policy applied to one invoice — decoupled from
+/// the (mutable) CollectionPolicy via the `policyVersion` snapshot taken at
+/// enrollment. `@@unique([organizationId, invoiceId])` makes enrollment
+/// naturally idempotent: re-enrolling an already-enrolled invoice finds the
+/// existing row instead of creating a duplicate (the same create-then-
+/// catch-P2002 pattern used throughout Phases 3-4).
+model CollectionSequence {
+  id             String                   @id @default(cuid())
+  organizationId String
+  invoiceId      String
+  customerId     String
+  policyId       String
+  policyVersion  Int
+  status         CollectionSequenceStatus @default(ACTIVE)
+  stopReason     CollectionStopReason?
+  pausedAt       DateTime?
+  completedAt    DateTime?
+  stoppedAt      DateTime?
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+
+  organization   Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoice        Invoice                   @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  customer       Customer                  @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  policy         CollectionPolicy          @relation(fields: [policyId], references: [id], onDelete: Restrict)
+  stepExecutions CollectionStepExecution[]
+
+  @@unique([organizationId, invoiceId])
+  @@index([organizationId, status])
+  @@map("collection_sequences")
+}
+
+enum CollectionStepExecutionStatus {
+  // Claimed by a worker via the unique constraint below, before the
+  // eligibility re-check and any BusinessEvent/proposal creation. A row
+  // stuck here (process died between claim and EXECUTED/SKIPPED) blocks
+  // that exact step from ever being reclaimed — the same accepted,
+  // human-resolvable tradeoff as a stuck Communication.SENDING row. See
+  // docs/collections-automation.md#crash-recovery.
+  CLAIMED
+  // The step's BusinessEvent/OperatorInsight/ActionProposal (and, on
+  // AUTO_SEND, Communication) were created. Distinct from
+  // ActionProposal.EXECUTED, which specifically means "delivery confirmed
+  // sent" — this means "the deterministic step logic ran".
+  EXECUTED
+  // Superseded by a later, more-advanced due step in the same catch-up
+  // pass, or bypassed because the sequence's eligibility re-check failed
+  // (invoice paid/cancelled, customer archived, automation disabled, ...).
+  SKIPPED
+}
+
+/// The DB-backed invariant that makes one logical collection step of one
+/// invoice impossible to execute twice, even under two concurrent workers:
+/// `@@unique([sequenceId, stepId])` turns the claim into a plain INSERT
+/// race (create, catch P2002, treat as already-claimed) rather than a
+/// row-lock or in-memory mutex — see docs/collections-automation.md#concurrency.
+model CollectionStepExecution {
+  id               String                        @id @default(cuid())
+  organizationId   String
+  sequenceId       String
+  stepId           String
+  status           CollectionStepExecutionStatus @default(CLAIMED)
+  businessEventId  String?                       @unique
+  actionProposalId String?                       @unique
+  note             String?
+  claimedAt        DateTime                      @default(now())
+  completedAt      DateTime?
+
+  organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sequence       CollectionSequence   @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  step           CollectionPolicyStep @relation(fields: [stepId], references: [id], onDelete: Restrict)
+  businessEvent  BusinessEvent?       @relation(fields: [businessEventId], references: [id], onDelete: SetNull)
+  actionProposal ActionProposal?      @relation(fields: [actionProposalId], references: [id], onDelete: SetNull)
+
+  @@unique([sequenceId, stepId])
+  @@index([organizationId])
+  @@index([sequenceId])
+  @@map("collection_step_executions")
 }
