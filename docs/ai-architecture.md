@@ -4,9 +4,11 @@
 vendor adapter is wired up yet** — `AI_PROVIDER=none` is the default and
 the only fully-implemented value; selecting `gigachat` resolves to a clear
 `AIProviderError` rather than a real integration. See
-[docs/operator-foundation.md](./operator-foundation.md) for how this is
-actually used by the Operator pipeline, the only feature that calls it so
-far.
+[docs/operator-foundation.md](./operator-foundation.md) and
+[docs/communications.md](./communications.md#ai-and-email-wording) for the
+two features that use it: Operator insight summaries (Phase 3) and
+reminder email wording (Phase 4) — each with its own prompt/schema, both
+built on the same unchanged Gateway below.
 
 ## Why an abstraction
 
@@ -42,11 +44,17 @@ One generic method, not one per feature (`generateReminder`,
 input/output shape with a Zod schema and passes it to
 `generateStructured`, so adding a new AI-assisted feature never requires
 touching a provider adapter — only a new schema and prompt at the call
-site (see `src/server/operator/ai-context.ts` for the one example that
-exists so far). This ended up simpler than the per-feature interface
-sketched in earlier drafts of this document, and covers the same ground.
+site. Phase 4 proved this out: `src/server/communications/ai-context.ts`
+(email subject/body) was added alongside
+`src/server/operator/ai-context.ts` (insight tone/summary) without either
+one, or the Gateway, changing at all. This ended up simpler than the
+per-feature interface sketched in earlier drafts of this document, and
+covers the same ground.
 
-## The chain: Operator → AI Service → AI Gateway → AIProvider
+## The chain: caller → AI Service → AI Gateway → AIProvider
+
+(Operator or Communications — both callers go through the identical
+chain below; only the schema/prompt at the call site differs.)
 
 | Layer | File | Responsibility |
 | --- | --- | --- |
@@ -73,14 +81,16 @@ rule against building a provider before its phase.
 
 ## Failure handling
 
-1. **AI failures must never corrupt financial/business data.** Nothing in
-   `src/server/operator/*` writes to `Invoice`, `Payment`, or `Customer` —
-   the Operator pipeline only reads AR data and writes its own
-   `BusinessEvent`/`OperatorInsight`/`ActionProposal` tables, so an AI
-   failure has no path to reach financial state at all. When AI is
-   disabled or fails, insight creation falls back to a deterministic
-   summary template (`buildDeterministicSummary` in
-   `src/server/operator/insights.ts`) rather than blocking.
+1. **AI failures must never corrupt financial/business data.** Neither
+   `src/server/operator/*` nor `src/server/communications/*` ever writes
+   to `Invoice`, `Payment`, or `Customer` — they only read AR data and
+   write their own tables, so an AI failure has no path to reach
+   financial state at all. When AI is disabled or fails, insight creation
+   falls back to a deterministic summary template
+   (`buildDeterministicSummary` in `src/server/operator/insights.ts`) and
+   email drafting falls back to a deterministic template
+   (`buildDeterministicReminderEmail` in
+   `src/server/communications/templates.ts`) rather than blocking either.
 2. **AI output is untrusted external output.** Every response is validated
    against the request's Zod schema (`runAIGeneration` in
    `src/server/ai/gateway.ts`) before any caller sees it; a response that
@@ -88,8 +98,10 @@ rule against building a provider before its phase.
 3. **Customer-supplied text is data, never instructions.** `AIRequest`
    structurally separates `system` from `input` — see
    [docs/operator-foundation.md#prompt-injection-defense](./operator-foundation.md#prompt-injection-defense)
-   for the concrete test proving this holds even against an adversarial
-   customer note.
+   and `src/server/communications/ai-context.test.ts` for concrete tests
+   (one per caller) proving this holds even against an adversarial
+   customer note, and that an AI response for an email draft has no field
+   that could change who it's sent to or what amount it states.
 
 ## Testing without a real AI account
 

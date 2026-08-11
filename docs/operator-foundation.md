@@ -171,19 +171,23 @@ DISMISSED --dismiss--> DISMISSED (idempotent no-op)
 anything else -> InvalidActionProposalTransitionError
 ```
 
-There is no path from `DISMISSED` to `APPROVED` or back, and `EXECUTED`/
-`FAILED` are not reachable at all in Phase 3 (see
-[Explicitly out of scope](#explicitly-out-of-scope-in-phase-3)). Every
-transition is tenant-scoped (`OperatorResourceNotFoundError` for a
+There is no path from `DISMISSED` to `APPROVED` or back. This module never
+sets `EXECUTED`/`FAILED` itself, and never will — starting Phase 4,
+`APPROVED -> EXECUTED` is a *separate* transition owned entirely by
+`src/server/communications/send.ts`, set only after a confirmed
+successful email send (see `docs/communications.md#action-proposal-
+integration`); this file's own state machine is unchanged by that. Every
+transition here is tenant-scoped (`OperatorResourceNotFoundError` for a
 cross-tenant or nonexistent proposal id, the same enumeration-safe pattern
 as `ArResourceNotFoundError`), records who decided and when
 (`decidedByUserId`, `decidedAt`), and is audited through the existing
 `ActivityEvent` trail (`ACTION_PROPOSAL_APPROVED` /
 `ACTION_PROPOSAL_DISMISSED`) rather than a new, parallel audit mechanism.
 
-**Approving a proposal only changes its status.** There is no execution
-path in Phase 3 — nothing is sent, no external call is made. See
-[Action Center UI](#action-center-ui).
+**Approving a proposal only changes its status.** Approving alone never
+sends anything — sending is a distinct, explicit, later action a human
+takes on the resulting draft. See [Action Center UI](#action-center-ui)
+and `docs/communications.md`.
 
 **Concurrent decisions on the same proposal don't race.** Both
 transitions go through one internal `transitionActionProposal` helper
@@ -246,19 +250,23 @@ and error metadata.
 
 ## Explicitly out of scope in Phase 3
 
-Not built, on purpose — see the project roadmap for when (if ever) they
-belong:
+Not built, on purpose, at the time Phase 3 shipped — several of these
+were picked up in Phase 4; this section is kept as a record, with each
+item noted:
 
-- Actually sending a reminder (email/Telegram/SMS/WhatsApp) — `EXECUTED`/
-  `FAILED` exist as enum values so a future phase doesn't need a schema
-  migration to add them retroactively onto existing rows, but no code
-  path reaches them.
-- Any scheduler, cron job, or background queue.
-- A second AI-assisted action type beyond `SEND_PAYMENT_REMINDER`.
-- A real, paid AI provider integration (GigaChat or otherwise) — the
-  Gateway is provider-agnostic and ready for one, but wiring an actual
-  vendor is deferred, consistent with `docs/provider-strategy.md`'s rule
-  against implementing a provider before the phase that needs it.
+- ~~Actually sending a reminder~~ — **built in Phase 4**, email only, see
+  `docs/communications.md`. `EXECUTED` is reachable starting Phase 4;
+  `FAILED` remains unreachable by design (see
+  [Approval workflow](#approval-workflow) above). Telegram/SMS/WhatsApp
+  are still not built.
+- Any scheduler, cron job, or background queue — still true in Phase 4.
+- A second AI-assisted action type beyond `SEND_PAYMENT_REMINDER` — still
+  true.
+- A real, paid AI provider integration (GigaChat or otherwise) — still
+  not implemented; the Gateway remains provider-agnostic and ready for
+  one, consistent with `docs/provider-strategy.md`'s rule against
+  implementing a provider before the phase that needs it.
 - Any AI-initiated write to Invoice, Payment, Customer, or any other
   Phase 1/2 financial data. The Operator pipeline only ever *reads* AR
-  data and *writes* its own three new tables.
+  data and *writes* its own tables — still true; Phase 4's Communications
+  domain follows the same rule (see `docs/communications.md`).

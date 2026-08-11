@@ -25,6 +25,13 @@ export default defineConfig({
         process.env.TEST_DATABASE_URL ??
         "postgresql://paynora:paynora@localhost:5432/paynora_test?schema=public",
       AUTH_SECRET: "test-only-secret-do-not-use-in-production-00000",
+      // EMAIL_PROVIDER is deliberately left unset (defaults to "none") so
+      // the suite never makes a real email network call. PAYNORA_EMAIL_FROM
+      // is set so src/server/communications/send.test.ts can exercise
+      // sendCommunication's real sender-resolution path while injecting a
+      // deterministic fake EmailProvider for the "send" step itself — see
+      // send.ts's `provider` test-only option.
+      PAYNORA_EMAIL_FROM: "billing@paynora-test.example",
     },
   },
 });

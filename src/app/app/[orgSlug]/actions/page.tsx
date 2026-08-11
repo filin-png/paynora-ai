@@ -39,7 +39,7 @@ export default async function ActionCenterPage({
           <p className="mt-1 text-sm text-muted">
             Proposed actions from deterministic checks (and, where available, AI-assisted wording) —
             nothing here is sent automatically. Every action needs your approval, and approving does not
-            send anything yet either.
+            send anything by itself either — review and send is a separate, explicit step.
           </p>
         </div>
         <form action={boundRunOperator}>
@@ -119,10 +119,16 @@ export default async function ActionCenterPage({
                     </span>
                   ) : null}
                 </div>
-                {proposal.status === "APPROVED" ? (
-                  <Badge tone="success">Approved — execution is not enabled yet</Badge>
-                ) : (
+                {proposal.status === "DISMISSED" ? (
                   <Badge tone="neutral">Dismissed</Badge>
+                ) : proposal.status === "EXECUTED" ? (
+                  <Link href={`/app/${orgSlug}/actions/${proposal.id}`}>
+                    <Badge tone="success">Sent</Badge>
+                  </Link>
+                ) : (
+                  <Link href={`/app/${orgSlug}/actions/${proposal.id}`} className="hover:underline">
+                    <Badge tone="warning">Approved — review &amp; send</Badge>
+                  </Link>
                 )}
               </li>
             ))}

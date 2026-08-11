@@ -59,16 +59,36 @@ representation, currency model, and concurrency strategy.
 See `docs/operator-foundation.md` for the full design, including exactly
 what was deliberately left out and why.
 
-## Phase 4 — Collection Automation
+## Phase 4 — Communications Foundation + Email Execution — ✅ complete (2026-08-11)
 
-- [ ] Actually sending a reminder (`EmailProvider`, wired to an approved `ActionProposal`)
+- [x] `Communication`/`DeliveryAttempt` domain, additive migration, tenant-scoped like every other resource
+- [x] `EmailProvider` interface + provider-agnostic Email Gateway (timeout, normalized errors, no `if (providerName)` branching in the domain)
+- [x] `EMAIL_PROVIDER=none` default — app boots, and drafting/preview/editing all work with zero email credentials
+- [x] SMTP adapter (`src/server/email/providers/smtp.ts`, via `nodemailer`) — works with any relay, not one vendor's API; no account created, no key invented
+- [x] Approval still only changes status — draft preparation, review/edit, and an explicit Send are three separate, later steps
+- [x] Deterministic reminder draft (recipient/subject/body from Phase 2 AR facts); AI (when enabled) may only affect subject/body wording, schema-validated, with a deterministic fallback
+- [x] Prompt-injection defense for email wording, mirroring Phase 3's pattern
+- [x] Two-phase send (atomic DB claim, then an out-of-transaction provider call, then a second transaction recording the outcome) — no naive `BEGIN; provider.send(); COMMIT`
+- [x] Honest three-way outcome: `SENT` (confirmed), `FAILED` (definite rejection), `UNCERTAIN` (timeout/unrecognized error — never treated as a confirmed failure, never auto-retried)
+- [x] `ActionProposal.EXECUTED` reachable, set only on a confirmed successful send; `FAILED` remains unreachable by design (failure belongs to the Communication/DeliveryAttempt history)
+- [x] Concurrency closed and tested: Send vs. Send, Send vs. Edit, Retry vs. Retry — same atomic-conditional-update technique as Phase 3's approval fix
+- [x] Header-injection defense (CR/LF rejected in subject), length limits, plain-text-only, no arbitrary-recipient relay
+- [x] Action Center extended (`/app/[orgSlug]/actions/[proposalId]`) — review, edit, send, honest delivery-state display, retry/resend-with-acknowledgement
+- [x] Full end-to-end test (overdue → Operator → approve → draft → send → SENT → proposal EXECUTED) with a deterministic fake provider — zero real email network calls anywhere in CI
+- [x] Collection sequences, background job scheduling, automation controls — **not implemented**, Phase 5
+
+See `docs/communications.md` for the full design, including exactly what
+was deliberately left out and why.
+
+## Phase 5 — Collection Automation
+
 - [ ] Collection sequences (e.g. due date → +3d → +7d → +14d)
 - [ ] Background job scheduling (`JobProvider`)
-- [ ] Idempotent reminder jobs (no duplicate sends on retry)
+- [ ] Idempotent scheduled reminder jobs (no duplicate sends on retry — builds on Phase 4's DeliveryAttempt idempotency)
 - [ ] Automation controls: global / per-customer / per-invoice disable
-- [ ] Retries and observable permanent-failure states (`ActionProposal.EXECUTED`/`FAILED`, modeled in Phase 3, reachable starting here)
+- [ ] An outbox/reconciliation strategy for the crash-after-provider-success gap documented in `docs/communications.md#delivery-semantics`
 
-## Phase 5 — Intelligence
+## Phase 6 — Intelligence
 
 - [ ] Payment behavior analytics
 - [ ] Promise-to-pay tracking, manual first, automatic extraction later
@@ -76,20 +96,20 @@ what was deliberately left out and why.
 - [ ] Risk scoring improvements
 - [ ] Collection performance analytics
 
-## Phase 6 — Monetization
+## Phase 7 — Monetization
 
 - [ ] Subscription domain model
 - [ ] `BillingProvider` abstraction (no hard-coded Stripe)
 - [ ] Plans, usage limits, entitlements
 - [ ] Subscription lifecycle (trial, active, past-due, cancelled)
 
-## Phase 7 — Integrations (only per validated customer demand)
+## Phase 8 — Integrations (only per validated customer demand)
 
 - [ ] Accounting system integrations (candidates: local/regional + QuickBooks, Xero)
 - [ ] Payment processor integrations (candidates: Stripe once relevant, regional providers)
 - [ ] Invoice import
 
-## Phase 8 — Commercialization
+## Phase 9 — Commercialization
 
 - [ ] Landing page + pricing
 - [ ] Onboarding flow
@@ -98,7 +118,7 @@ what was deliberately left out and why.
 - [ ] Legal pages
 - [ ] Support workflow
 
-## Phase 9 — Exit Readiness
+## Phase 10 — Exit Readiness
 
 - [ ] Remove founder dependencies
 - [ ] Complete operational documentation

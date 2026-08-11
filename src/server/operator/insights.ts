@@ -2,8 +2,8 @@ import { Prisma, type BusinessEvent, type InsightPriority, type OperatorInsight 
 
 import { prisma } from "@/server/db/client";
 import { tryGenerateStructured } from "@/server/ai/service";
+import { buildDeterministicInvoiceContext, type DeterministicInvoiceContext } from "@/server/ar/reminder-context";
 import { buildReminderInsightRequest } from "./ai-context";
-import { buildInvoiceOverdueContext, type DeterministicInvoiceContext } from "./context";
 
 const UNIQUE_CONSTRAINT_VIOLATION = "P2002";
 
@@ -56,7 +56,10 @@ export async function ensureInsightForInvoiceOverdueEvent(
   organizationId: string,
   event: BusinessEvent,
 ): Promise<EnsuredInsight> {
-  const context = await buildInvoiceOverdueContext(organizationId, event);
+  if (!event.invoiceId) {
+    throw new Error("INVOICE_OVERDUE event is missing an invoiceId");
+  }
+  const context = await buildDeterministicInvoiceContext(organizationId, event.invoiceId);
   const priority = computeOverduePriority(context.daysOverdue);
   const { summary, aiGenerated, aiProvider } = await generateInsightSummary(context);
 

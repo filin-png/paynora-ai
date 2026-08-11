@@ -53,4 +53,56 @@ describe("parseEnv", () => {
       /Invalid environment configuration/,
     );
   });
+
+  it("defaults EMAIL_PROVIDER to none with no other email config required", () => {
+    const env = parseEnv(validBase);
+    expect(env.EMAIL_PROVIDER).toBe("none");
+    expect(env.PAYNORA_EMAIL_FROM).toBeUndefined();
+  });
+
+  it("rejects EMAIL_PROVIDER=smtp with no PAYNORA_EMAIL_FROM or SMTP config", () => {
+    expect(() => parseEnv({ ...validBase, EMAIL_PROVIDER: "smtp" })).toThrow(
+      /PAYNORA_EMAIL_FROM is required/,
+    );
+  });
+
+  it("rejects EMAIL_PROVIDER=smtp missing individual SMTP fields", () => {
+    expect(() =>
+      parseEnv({
+        ...validBase,
+        EMAIL_PROVIDER: "smtp",
+        PAYNORA_EMAIL_FROM: "billing@example.com",
+        SMTP_HOST: "smtp.example.com",
+        SMTP_PORT: "587",
+        // SMTP_USER / SMTP_PASSWORD missing
+      }),
+    ).toThrow(/SMTP_USER is required/);
+  });
+
+  it("rejects an invalid PAYNORA_EMAIL_FROM", () => {
+    expect(() =>
+      parseEnv({ ...validBase, EMAIL_PROVIDER: "smtp", PAYNORA_EMAIL_FROM: "not-an-email" }),
+    ).toThrow(/PAYNORA_EMAIL_FROM must be a valid email address/);
+  });
+
+  it("accepts a fully valid smtp configuration", () => {
+    const env = parseEnv({
+      ...validBase,
+      EMAIL_PROVIDER: "smtp",
+      PAYNORA_EMAIL_FROM: "billing@example.com",
+      SMTP_HOST: "smtp.example.com",
+      SMTP_PORT: "587",
+      SMTP_USER: "billing",
+      SMTP_PASSWORD: "secret",
+      SMTP_SECURE: "true",
+    });
+    expect(env.EMAIL_PROVIDER).toBe("smtp");
+    expect(env.SMTP_PORT).toBe(587);
+    expect(env.SMTP_SECURE).toBe(true);
+  });
+
+  it("SMTP_SECURE defaults to false when unset", () => {
+    const env = parseEnv(validBase);
+    expect(env.SMTP_SECURE).toBe(false);
+  });
 });

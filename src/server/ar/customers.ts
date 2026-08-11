@@ -1,18 +1,24 @@
 import { z } from "zod";
 
 import { prisma } from "@/server/db/client";
+import { normalizeEmail } from "@/server/auth/email";
 import { recordActivityEvent } from "./activity";
 import { ArResourceNotFoundError } from "./errors";
 
 export const customerInputSchema = z.object({
   name: z.string().trim().min(1, "Name is required").max(200),
+  // Normalized (trimmed + lowercased) the same way User.email is
+  // (src/server/auth/email.ts) — a customer's reminder emails go to this
+  // address (see docs/communications.md), so it goes through the same
+  // validation/normalization discipline as a login email, not just a
+  // free-text contact field.
   email: z
     .string()
     .trim()
     .email("Enter a valid email address")
     .optional()
     .or(z.literal(""))
-    .transform((value) => (value ? value : undefined)),
+    .transform((value) => (value ? normalizeEmail(value) : undefined)),
   phone: z
     .string()
     .trim()

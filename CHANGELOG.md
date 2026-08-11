@@ -5,6 +5,94 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Phase 4: Communications Foundation + Email Execution
+
+- `Communication`/`DeliveryAttempt` Prisma models and their migration,
+  tenant-scoped like every other resource, plus six new
+  `ActivityEventType` values reusing the existing audit trail. A
+  `Communication` is always tied 1:1 to the `ActionProposal` it was
+  drafted for (`@unique` on `actionProposalId`).
+- A provider-agnostic Email Gateway (`src/server/email/`), architecturally
+  identical to Phase 3's AI Gateway: `EmailProvider.send()`, a timeout, four
+  normalized error types, and a service layer that resolves the
+  configured provider. `EMAIL_PROVIDER` defaults to `"none"`; the app
+  boots and drafting/preview/editing all work with zero email
+  credentials.
+- An SMTP adapter (`src/server/email/providers/smtp.ts`, via
+  `nodemailer`) as the one real transport — chosen specifically because
+  SMTP itself is the swappable boundary (any relay, self-hosted or not),
+  not a single foreign vendor's REST API. No account was created and no
+  API key was invented; a deterministic fake provider
+  (`src/server/email/providers/fake.ts`) is used only in tests, via a
+  test-only dependency-injection point on `sendCommunication` — zero real
+  email network calls anywhere in the suite or CI.
+- `src/server/communications/`: `prepareReminderCommunication` (draft,
+  idempotent, deterministic financial facts from Phase 2's AR domain via
+  a new shared `src/server/ar/reminder-context.ts` — extracted from
+  Phase 3's Operator context builder so both callers use one
+  implementation), `updateCommunicationDraft` (subject/body editing,
+  DRAFT-only, header-injection and length validation), and
+  `sendCommunication` (the explicit, two-phase send).
+- **Approval still only changes status.** Sending is a distinct, later,
+  explicit action — reviewing a real editable draft and clicking Send.
+- **No naive transaction around the provider call.** `sendCommunication`
+  atomically claims the communication (`DRAFT`/`FAILED`/`UNCERTAIN`-with-
+  acknowledgement → `SENDING`, plus a `PENDING` `DeliveryAttempt`) in one
+  transaction that commits *before* calling the provider, then records
+  the outcome in a second transaction — documented and reasoned through
+  in `docs/communications.md#delivery-semantics`, including the accepted
+  gap if the process crashes between a confirmed provider success and
+  recording it.
+- **Three honest outcomes, not two.** A definite provider rejection →
+  `FAILED`. Anything else — timeout, network error, an unrecognized
+  exception — → `UNCERTAIN`, never treated as a confirmed failure and
+  never auto-retried; resending from `UNCERTAIN` requires an explicit
+  `acknowledgeUncertainRisk` acknowledgement, surfaced in the UI as a
+  separately-labeled, confirmation-gated "Resend anyway" action.
+- `ActionProposal.EXECUTED` (reserved but unreachable since Phase 3) is
+  now set — only by a confirmed successful send, never by approval and
+  never by an ambiguous outcome. `FAILED` remains unreachable by design:
+  failure/uncertainty belongs to the Communication/DeliveryAttempt
+  history, which stays retryable, not to the proposal.
+- Every race closed with the same atomic-conditional-update technique as
+  Phase 3's approval fix, and proven with real concurrent-request tests:
+  Send vs. Send (a double-click never causes two provider calls — proven
+  by counting actual provider invocations), Send vs. Edit (whatever was
+  actually dispatched always matches what's persisted, regardless of
+  which one won), Retry vs. Retry.
+- Email security: header-injection rejection (CR/LF in subject), length
+  limits (200/10,000 chars), plain-text only, recipient always
+  server-derived from `Customer.email` — never a form field, so this
+  can't become an arbitrary-recipient relay.
+- `Customer.email` (already existed, Phase 2) now normalizes the same way
+  `User.email` does (trim + lowercase, reusing
+  `src/server/auth/email.ts#normalizeEmail` rather than duplicating it).
+- Action Center extended: `/app/[orgSlug]/actions/[proposalId]` — prepare
+  a draft, review/edit, explicit Send, honest delivery-state display
+  (`Sent [date]` / `Failed: <reason>` / `Delivery status uncertain — do
+  not resend automatically`), delivery-attempt history. The main Action
+  Center list now shows `EXECUTED` proposals as "Sent" and links
+  `APPROVED` ones to the review/send page instead of a dead-end badge.
+- 47 new automated tests (real Postgres, zero real email network calls)
+  covering draft creation/idempotency, editing/validation, every send
+  outcome (success/rejection/timeout/missing-config), tenant isolation,
+  prompt-injection defense for email wording, all three concurrency
+  races, and a full end-to-end pipeline test — 213 total across the
+  project.
+- New `docs/communications.md`; README, ARCHITECTURE, ROADMAP (Phase 4
+  renamed to match what shipped; former Phase 4 leftovers — sequences,
+  scheduling — moved to a new Phase 5), SECURITY, `docs/domain-model.md`,
+  `docs/operator-foundation.md`, `docs/ai-architecture.md`, and
+  `docs/provider-strategy.md` updated to match.
+- `package.json` `overrides` added for `nodemailer` (pinned to a version
+  with several fixed CVEs — CRLF/header-injection and SMTP-command-
+  injection advisories, directly relevant to this phase's own
+  header-injection defense) to resolve a peer-dependency conflict with
+  `next-auth`'s optional (and unused — this project only uses the
+  Credentials provider) `nodemailer` peer range; verified with a clean
+  `npm ci` that the conflict is actually resolved, not just locally
+  patched over.
+
 ### Fixed — Phase 3: Operator Foundation
 
 - `approveActionProposal`/`dismissActionProposal` (`src/server/operator/approval.ts`)

@@ -28,6 +28,8 @@ src/
         actions/                 Action Center: pending/decided proposals,
                                    manual "Run Operator" — see
                                    docs/operator-foundation.md
+          [proposalId]/           Review/edit/send an email draft for one
+                                   approved proposal — see docs/communications.md
     api/auth/[...nextauth]/ Auth.js route handler
   components/ui/          Reusable, shadcn/ui-style UI primitives (cva + cn)
   lib/                     Cross-cutting utilities (env validation, cn helper)
@@ -38,23 +40,39 @@ src/
     ar/                    Accounts-receivable domain/service layer — see
                              docs/accounts-receivable.md. Customer/Invoice/
                              Payment/ActivityEvent logic, money/currency/date
-                             helpers. Pages and Server Actions call this
-                             layer; it is the only place financial
+                             helpers, plus reminder-context.ts (deterministic
+                             invoice/customer facts shared by Operator and
+                             Communications). Pages and Server Actions call
+                             this layer; it is the only place financial
                              calculations happen (never duplicated in a
                              component or trusted from the client).
     ai/                    Provider-agnostic AI Gateway — see
                              docs/ai-architecture.md. Nothing outside this
-                             directory (and src/server/operator, which is
-                             its only caller) knows a specific AI vendor
-                             exists.
+                             directory (and its two callers,
+                             src/server/operator and
+                             src/server/communications) knows a specific AI
+                             vendor exists.
     operator/               Operator pipeline — see docs/operator-foundation.md.
                              Event detection, deterministic context, insight/
                              proposal creation, approval workflow. Reads AR
                              data through src/server/ar/*; never writes to it.
+    email/                 Provider-agnostic Email Gateway — see
+                             docs/communications.md#provider-abstraction.
+                             SMTP adapter + test-only fake; nothing outside
+                             this directory (and its only caller,
+                             src/server/communications) knows a specific
+                             transport exists.
+    communications/         Draft/edit/send pipeline for email reminders —
+                             see docs/communications.md. Reads AR + Operator
+                             data (an approved ActionProposal, invoice/
+                             customer facts); never writes to Invoice/
+                             Payment/Customer; the only code path that calls
+                             an EmailProvider.
 prisma/
   schema.prisma            User, Organization, OrganizationMember,
                              Customer, Invoice, Payment, ActivityEvent,
-                             BusinessEvent, OperatorInsight, ActionProposal
+                             BusinessEvent, OperatorInsight, ActionProposal,
+                             Communication, DeliveryAttempt
   migrations/               Applied migration history (includes hand-added
                              CHECK constraints — see docs/accounts-receivable.md)
 prisma.config.ts            Prisma 7 config (schema path, datasource URL source)
@@ -92,12 +110,13 @@ from any one vendor, region, or founder's personal accounts — a direct
 requirement for a sellable asset.
 
 ```
-AIProvider (implemented, Phase 3)   generateStructured<T> — see src/server/ai/
-EmailProvider                        send transactional/collection email (Phase 4)
+AIProvider (implemented, Phase 3)    generateStructured<T> — see src/server/ai/
+EmailProvider (implemented, Phase 4)  send(message) over SMTP — see src/server/email/
 PaymentProvider                       (billing, introduced Phase 6 — not accounting sync)
 AnalyticsProvider                     product analytics
 StorageProvider                       file/document storage
-JobProvider                           background job scheduling (Phase 4)
+JobProvider                           background job scheduling — not needed yet; Phase 4's
+                                       "Send" is a synchronous, human-triggered action
 ```
 
 See `docs/ai-architecture.md` for the AI provider design and
@@ -106,18 +125,21 @@ Russia-accessibility constraint driving initial adapter choices.
 
 ## Multi-tenancy
 
-All business data belongs to an `Organization` — as of Phase 3 that's
-`Customer`, `Invoice`, `Payment`, `ActivityEvent` (Phase 2), and
-`BusinessEvent`, `OperatorInsight`, `ActionProposal` (Phase 3), alongside
-Phase 1's `OrganizationMember`. Authorization is enforced server-side on
-every query and mutation via the primitives in
-`src/server/tenancy/context.ts` — the UI hiding a control is never
-sufficient. Tenant isolation has automated tests for the identity layer
+All business data belongs to an `Organization` — as of Phase 4 that's
+`Customer`, `Invoice`, `Payment`, `ActivityEvent` (Phase 2);
+`BusinessEvent`, `OperatorInsight`, `ActionProposal` (Phase 3); and
+`Communication`, `DeliveryAttempt` (Phase 4) — alongside Phase 1's
+`OrganizationMember`. Authorization is enforced server-side on every
+query and mutation via the primitives in `src/server/tenancy/context.ts`
+— the UI hiding a control is never sufficient. Tenant isolation has
+automated tests for the identity layer
 (`src/server/tenancy/context.test.ts`), every Phase 2 resource
-(`src/server/ar/*.test.ts`), and every Phase 3 resource
-(`src/server/operator/*.test.ts`), all running against a real database.
-Full design rationale: `docs/identity-and-tenancy.md`,
-`docs/accounts-receivable.md`, and `docs/operator-foundation.md`.
+(`src/server/ar/*.test.ts`), every Phase 3 resource
+(`src/server/operator/*.test.ts`), and every Phase 4 resource
+(`src/server/communications/*.test.ts`), all running against a real
+database. Full design rationale: `docs/identity-and-tenancy.md`,
+`docs/accounts-receivable.md`, `docs/operator-foundation.md`, and
+`docs/communications.md`.
 
 ## Validation strategy
 
