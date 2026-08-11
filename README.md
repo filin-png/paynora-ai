@@ -5,21 +5,30 @@ employees) that helps them track accounts receivable, spot payment risk
 early, and automate collection follow-up — without replacing the accounting
 software they already use.
 
-**Project status: Phase 2 — Accounts Receivable Core.** Authentication,
+**Project status: Phase 3 — Operator Foundation.** Authentication,
 organizations, tenant isolation, customers, invoices, payments, and a
-real AR dashboard are implemented. AI-generated reminders, collection
-automation, and billing are not — see [ROADMAP.md](./ROADMAP.md) for
-what's next.
+real AR dashboard are implemented (Phase 1–2). Phase 3 adds an
+event → insight → proposal → human-approval pipeline (an Action Center
+that proposes payment reminders for overdue invoices) and a
+provider-agnostic AI Gateway — but **nothing is ever sent
+automatically**: every proposal requires human approval, and approving
+one still doesn't send anything yet. See
+[docs/operator-foundation.md](./docs/operator-foundation.md) and
+[ROADMAP.md](./ROADMAP.md) for what's next.
 
 ## Tech stack
 
 - **Frontend/Backend**: Next.js (App Router), React, TypeScript (strict mode)
 - **UI**: Tailwind CSS, shadcn/ui-compatible component architecture
 - **Database**: PostgreSQL via Prisma — User, Organization, OrganizationMember,
-  Customer, Invoice, Payment, ActivityEvent
+  Customer, Invoice, Payment, ActivityEvent, BusinessEvent, OperatorInsight,
+  ActionProposal
 - **Auth**: Auth.js v5 (Credentials + JWT sessions), bcrypt password hashing
 - **Money**: integer minor units as `BigInt` — never floating point; see
   [docs/accounts-receivable.md](./docs/accounts-receivable.md)
+- **AI**: provider-agnostic Gateway (`AI_PROVIDER=none` by default, no
+  credentials required to run the app); see
+  [docs/ai-architecture.md](./docs/ai-architecture.md)
 - **Validation**: Zod
 - **Testing**: Vitest, including real-database tenant-isolation and
   concurrency tests
@@ -82,6 +91,7 @@ locally, including the separate test database integration tests use.
 - [DEPLOYMENT.md](./DEPLOYMENT.md) — local and future deployment setup
 - [docs/identity-and-tenancy.md](./docs/identity-and-tenancy.md) — auth, tenancy, authorization design
 - [docs/accounts-receivable.md](./docs/accounts-receivable.md) — money representation, invoice lifecycle, concurrency
+- [docs/operator-foundation.md](./docs/operator-foundation.md) — event → insight → proposal → approval pipeline
 - [docs/domain-model.md](./docs/domain-model.md) — core domain entities
 - [docs/ai-architecture.md](./docs/ai-architecture.md) — AI provider abstraction
 - [docs/provider-strategy.md](./docs/provider-strategy.md) — external provider boundaries

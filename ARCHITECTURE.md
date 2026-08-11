@@ -25,6 +25,9 @@ src/
         settings/              Members list, OWNER-only rename
         customers/              List/create/detail/edit/archive
         invoices/                List/create/detail, record payment, cancel
+        actions/                 Action Center: pending/decided proposals,
+                                   manual "Run Operator" — see
+                                   docs/operator-foundation.md
     api/auth/[...nextauth]/ Auth.js route handler
   components/ui/          Reusable, shadcn/ui-style UI primitives (cva + cn)
   lib/                     Cross-cutting utilities (env validation, cn helper)
@@ -39,9 +42,19 @@ src/
                              layer; it is the only place financial
                              calculations happen (never duplicated in a
                              component or trusted from the client).
+    ai/                    Provider-agnostic AI Gateway — see
+                             docs/ai-architecture.md. Nothing outside this
+                             directory (and src/server/operator, which is
+                             its only caller) knows a specific AI vendor
+                             exists.
+    operator/               Operator pipeline — see docs/operator-foundation.md.
+                             Event detection, deterministic context, insight/
+                             proposal creation, approval workflow. Reads AR
+                             data through src/server/ar/*; never writes to it.
 prisma/
   schema.prisma            User, Organization, OrganizationMember,
-                             Customer, Invoice, Payment, ActivityEvent
+                             Customer, Invoice, Payment, ActivityEvent,
+                             BusinessEvent, OperatorInsight, ActionProposal
   migrations/               Applied migration history (includes hand-added
                              CHECK constraints — see docs/accounts-receivable.md)
 prisma.config.ts            Prisma 7 config (schema path, datasource URL source)
@@ -60,15 +73,16 @@ enumeration-safe pattern as `OrganizationAccessDeniedError`.
 
 ## Planned layout (introduced as each phase needs it)
 
-Phase 3+ introduces the provider boundaries described below under
-`src/server/providers/`, layered on top of the Phase 2 AR domain (e.g. an
-AI-generated reminder references an invoice's real computed state, it does
-not duplicate or reinvent that state). Nothing under `src/core` or
-`src/server/providers` exists yet — creating those directories before
-there is real code to put in them would be dead scaffolding, which this
-project avoids on principle (see Engineering Rules in the project brief).
+`AIProvider` (below) is the first provider boundary actually implemented —
+`src/server/ai/`, Phase 3. It sits behind `src/server/operator/`, layered
+on top of the Phase 2 AR domain: an AI-generated insight summary
+references an invoice's real computed state via a deterministically
+built context object, it never duplicates or reinvents that state. Every
+other provider boundary below remains unimplemented until the phase that
+needs it — creating a directory before there is real code to put in it
+would be dead scaffolding, which this project avoids on principle.
 
-## Provider boundaries (design, not yet implemented)
+## Provider boundaries
 
 Business/domain logic must never import a third-party SDK directly.
 External capabilities are represented as interfaces owned by the
@@ -78,13 +92,12 @@ from any one vendor, region, or founder's personal accounts — a direct
 requirement for a sellable asset.
 
 ```
-AIProvider          generateReminder / classifyReply /
-                     extractPaymentPromise / summarizeCustomerHistory
-EmailProvider        send transactional/collection email
-PaymentProvider       (billing, introduced Phase 6 — not accounting sync)
-AnalyticsProvider      product analytics
-StorageProvider        file/document storage
-JobProvider            background job scheduling
+AIProvider (implemented, Phase 3)   generateStructured<T> — see src/server/ai/
+EmailProvider                        send transactional/collection email (Phase 4)
+PaymentProvider                       (billing, introduced Phase 6 — not accounting sync)
+AnalyticsProvider                     product analytics
+StorageProvider                       file/document storage
+JobProvider                           background job scheduling (Phase 4)
 ```
 
 See `docs/ai-architecture.md` for the AI provider design and
@@ -93,25 +106,29 @@ Russia-accessibility constraint driving initial adapter choices.
 
 ## Multi-tenancy
 
-All business data belongs to an `Organization` — as of Phase 2 that's
-`Customer`, `Invoice`, `Payment`, and `ActivityEvent`, alongside Phase 1's
-`OrganizationMember`. Authorization is enforced server-side on every query
-and mutation via the primitives in `src/server/tenancy/context.ts` — the
-UI hiding a control is never sufficient. Tenant isolation has automated
-tests for both the identity layer (`src/server/tenancy/context.test.ts`)
-and every Phase 2 resource (`src/server/ar/*.test.ts`), all running
-against a real database. Full design rationale: `docs/identity-and-tenancy.md`
-and `docs/accounts-receivable.md`.
+All business data belongs to an `Organization` — as of Phase 3 that's
+`Customer`, `Invoice`, `Payment`, `ActivityEvent` (Phase 2), and
+`BusinessEvent`, `OperatorInsight`, `ActionProposal` (Phase 3), alongside
+Phase 1's `OrganizationMember`. Authorization is enforced server-side on
+every query and mutation via the primitives in
+`src/server/tenancy/context.ts` — the UI hiding a control is never
+sufficient. Tenant isolation has automated tests for the identity layer
+(`src/server/tenancy/context.test.ts`), every Phase 2 resource
+(`src/server/ar/*.test.ts`), and every Phase 3 resource
+(`src/server/operator/*.test.ts`), all running against a real database.
+Full design rationale: `docs/identity-and-tenancy.md`,
+`docs/accounts-receivable.md`, and `docs/operator-foundation.md`.
 
 ## Validation strategy
 
 External input is validated at the boundary with Zod before it reaches
-business logic — this includes environment variables today
-(`src/lib/env.ts`) and will include API request bodies and AI provider
-output once those exist. AI output in particular is treated as untrusted:
-it is validated against a schema before being used, and a failure to
-produce valid output degrades gracefully rather than corrupting financial
-data.
+business logic — environment variables (`src/lib/env.ts`), all Server
+Action form input, and, since Phase 3, AI provider output
+(`src/server/ai/gateway.ts`). AI output is treated as untrusted: it is
+validated against a schema before being used, and a failure to produce
+valid output degrades gracefully (falls back to a deterministic result)
+rather than corrupting financial data or blocking the caller — see
+`docs/ai-architecture.md`.
 
 ## TypeScript
 

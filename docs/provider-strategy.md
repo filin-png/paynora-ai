@@ -1,9 +1,11 @@
 # Provider Strategy
 
-**Status: none of the providers below are implemented yet.** This document
-records the intended boundary and the constraint driving it, so each phase
-that adds a provider has a consistent pattern to follow instead of
-inventing one per integration.
+**Status: `AIProvider`'s interface and Gateway are implemented (Phase 3);
+every other provider below is not implemented yet, and `AIProvider` has no
+real vendor adapter behind it either** — see `docs/ai-architecture.md`.
+This document records the intended boundary and the constraint driving it,
+so each phase that adds a provider has a consistent pattern to follow
+instead of inventing one per integration.
 
 ## Why this matters for a sellable asset
 
@@ -33,7 +35,7 @@ interface — this is an ordering decision, not a permanent exclusion.
 
 | Boundary            | Purpose                                   | Initial candidate       | Status        |
 | -------------------- | ------------------------------------------ | ------------------------ | -------------- |
-| `AIProvider`          | Reminder generation, reply classification | GigaChat                 | Not implemented (Phase 3) |
+| `AIProvider`          | Structured AI generation (Operator insight wording) | GigaChat        | Interface + Gateway implemented (Phase 3); no vendor adapter yet |
 | `EmailProvider`       | Transactional & collection email          | TBD at Phase 4           | Not implemented (Phase 4) |
 | `PaymentProvider`     | PAYNORA's own subscription billing        | TBD at Phase 6           | Not implemented (Phase 6) |
 | `AnalyticsProvider`   | Product analytics                         | TBD at Phase 7/8          | Not implemented |

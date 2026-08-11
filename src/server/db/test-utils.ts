@@ -8,6 +8,9 @@ import { prisma } from "./client";
  */
 export async function resetDatabase(): Promise<void> {
   await prisma.$transaction([
+    prisma.actionProposal.deleteMany(),
+    prisma.operatorInsight.deleteMany(),
+    prisma.businessEvent.deleteMany(),
     prisma.activityEvent.deleteMany(),
     prisma.payment.deleteMany(),
     prisma.invoice.deleteMany(),

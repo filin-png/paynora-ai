@@ -41,23 +41,32 @@ See `docs/identity-and-tenancy.md` for the full design.
 See `docs/accounts-receivable.md` for the full design, including the money
 representation, currency model, and concurrency strategy.
 
-## Phase 3 — AI Collections
+## Phase 3 — Operator Foundation — ✅ complete (2026-08-11)
 
-- [ ] `AIProvider` interface
-- [ ] GigaChat adapter (first implementation)
-- [ ] Structured, schema-validated AI output
-- [ ] Reminder generation (Friendly / Professional / Firm / Custom tones)
-- [ ] Deterministic payment-risk scoring (no ML infra yet)
-- [ ] Graceful degradation when AI is unavailable
+- [x] `AIProvider` interface + provider-agnostic AI Gateway (`generateStructured<T>`, timeout, Zod-validated output, normalized errors)
+- [x] `AI_PROVIDER=none` default — app boots and Operator runs with zero AI credentials
+- [x] Deterministic `INVOICE_OVERDUE` event detector, idempotent, reusing Phase 2's overdue logic (no duplication)
+- [x] `BusinessEvent` → `OperatorInsight` → `ActionProposal` pipeline, every step idempotent at the DB level
+- [x] Deterministic LOW/MEDIUM/HIGH priority; AI (when enabled) may only affect display wording, never priority or any financial field
+- [x] Prompt-injection defense: system instructions structurally separated from business data, tested against an adversarial customer note
+- [x] Server-side action-type allowlist (`SEND_PAYMENT_REMINDER` only) — AI can never introduce a new action type
+- [x] Approval/dismissal workflow (`PENDING` → `APPROVED`/`DISMISSED` only), tenant-scoped, idempotent, audited via `ActivityEvent`
+- [x] Action Center UI (`/app/[orgSlug]/actions`) — honest about state, never claims something was sent
+- [x] Manual "Run Operator" entry point — no cron/queue infrastructure
+- [x] GigaChat adapter — **not implemented**; deferred until a phase actually needs a real provider (see `docs/provider-strategy.md`)
+- [x] Reminder generation/sending, collection sequences, actual message delivery — **not implemented**, Phase 4
+
+See `docs/operator-foundation.md` for the full design, including exactly
+what was deliberately left out and why.
 
 ## Phase 4 — Collection Automation
 
+- [ ] Actually sending a reminder (`EmailProvider`, wired to an approved `ActionProposal`)
 - [ ] Collection sequences (e.g. due date → +3d → +7d → +14d)
 - [ ] Background job scheduling (`JobProvider`)
 - [ ] Idempotent reminder jobs (no duplicate sends on retry)
-- [ ] `EmailProvider` + delivery
 - [ ] Automation controls: global / per-customer / per-invoice disable
-- [ ] Retries and observable permanent-failure states
+- [ ] Retries and observable permanent-failure states (`ActionProposal.EXECUTED`/`FAILED`, modeled in Phase 3, reachable starting here)
 
 ## Phase 5 — Intelligence
 

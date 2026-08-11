@@ -40,3 +40,16 @@ export function getBusinessToday(): string {
 export function isPastDue(dueDate: Date, today: string = getBusinessToday()): boolean {
   return toDateOnlyString(dueDate) < today;
 }
+
+/**
+ * Whole calendar days between two "YYYY-MM-DD" dates (`to` minus `from`).
+ * Both are parsed as UTC midnight so this is immune to DST — a calendar
+ * day is always exactly 86,400,000ms apart at UTC midnight. Used by the
+ * Operator's overdue detector (src/server/operator/events.ts) to compute
+ * "days overdue" from a due date, never the reverse.
+ */
+export function daysBetween(from: string, to: string): number {
+  const fromMs = Date.parse(`${from}T00:00:00.000Z`);
+  const toMs = Date.parse(`${to}T00:00:00.000Z`);
+  return Math.round((toMs - fromMs) / 86_400_000);
+}
