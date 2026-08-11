@@ -1,0 +1,86 @@
+import { detectInvoiceOverdueEvents } from "./events";
+import { ensureInsightForInvoiceOverdueEvent } from "./insights";
+import { ensureReminderProposalForInsight } from "./proposals";
+
+export type OperatorRunSummary = {
+  eventsDetected: number;
+  eventsNew: number;
+  insightsCreated: number;
+  proposalsCreated: number;
+  aiGeneratedInsights: number;
+  failures: number;
+};
+
+/**
+ * The full Operator pipeline: detect -> deterministic context -> analyze
+ * (deterministic + optional AI) -> insight -> proposal. No cron or queue
+ * infrastructure — this is the one function a manual "Run Operator" click
+ * (or, in a later phase, a scheduler) calls; it does the whole thing
+ * synchronously and returns a summary.
+ *
+ * Safe to call repeatedly for the same organization at any time: every
+ * step it delegates to (detectInvoiceOverdueEvents,
+ * ensureInsightForInvoiceOverdueEvent, ensureReminderProposalForInsight)
+ * is independently idempotent via a DB unique constraint, not just an
+ * in-memory check — so a run that partially failed and gets retried picks
+ * up exactly where it left off instead of duplicating anything already
+ * created. A failure processing one event (including an AI failure that
+ * somehow escaped src/server/ai/service.ts's own handling) is caught and
+ * counted, not allowed to abort the run for every other event.
+ */
+export async function runOperator(organizationId: string): Promise<OperatorRunSummary> {
+  const startedAt = Date.now();
+  const summary: OperatorRunSummary = {
+    eventsDetected: 0,
+    eventsNew: 0,
+    insightsCreated: 0,
+    proposalsCreated: 0,
+    aiGeneratedInsights: 0,
+    failures: 0,
+  };
+
+  const detected = await detectInvoiceOverdueEvents(organizationId);
+  summary.eventsDetected = detected.length;
+  summary.eventsNew = detected.filter((entry) => entry.created).length;
+
+  for (const { event } of detected) {
+    try {
+      const { insight, created: insightCreated } = await ensureInsightForInvoiceOverdueEvent(
+        organizationId,
+        event,
+      );
+      if (insightCreated) {
+        summary.insightsCreated += 1;
+        if (insight.aiGenerated) summary.aiGeneratedInsights += 1;
+      }
+
+      const { created: proposalCreated } = await ensureReminderProposalForInsight(organizationId, insight);
+      if (proposalCreated) summary.proposalsCreated += 1;
+    } catch (error) {
+      summary.failures += 1;
+      logOperatorEventFailure(organizationId, event.id, error);
+    }
+  }
+
+  logOperatorRun(organizationId, summary, Date.now() - startedAt);
+  return summary;
+}
+
+/**
+ * Structured, secret-free observability logging. Never logs invoice
+ * amounts, customer contact details, or AI provider credentials — only
+ * ids and counts. See docs/operator-foundation.md#observability.
+ */
+function logOperatorRun(organizationId: string, summary: OperatorRunSummary, durationMs: number): void {
+  console.info(
+    `[operator] run complete organizationId=${organizationId} durationMs=${durationMs} ${JSON.stringify(summary)}`,
+  );
+}
+
+function logOperatorEventFailure(organizationId: string, eventId: string, error: unknown): void {
+  const name = error instanceof Error ? error.name : "UnknownError";
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(
+    `[operator] failed to process event organizationId=${organizationId} eventId=${eventId}: ${name}: ${message}`,
+  );
+}

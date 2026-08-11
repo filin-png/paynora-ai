@@ -5,6 +5,63 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Phase 3: Operator Foundation
+
+- `BusinessEvent`, `OperatorInsight`, `ActionProposal` Prisma models and
+  their migrations, plus two new `ActivityEventType` values
+  (`ACTION_PROPOSAL_APPROVED`/`ACTION_PROPOSAL_DISMISSED`) reusing the
+  existing audit trail instead of a new one. Every write is idempotent at
+  the database level via unique constraints, not just an
+  application-level check.
+- A deterministic, tenant-scoped, idempotent `INVOICE_OVERDUE` event
+  detector that reuses Phase 2's `computeInvoiceFinancials`/
+  `listInvoicesWithFinancials` — it does not recompute overdue logic.
+- The Operator pipeline (`src/server/operator/`): detect → deterministic
+  context → analyze (deterministic + optional AI) → insight → proposal,
+  driven by one function (`runOperator`) safe to call any number of times
+  without duplicating anything.
+- A provider-agnostic AI Gateway (`src/server/ai/`):
+  `AIProvider.generateStructured<T>()`, Zod-validated structured
+  request/response, a 10s timeout, four normalized error types, and a
+  service layer that never throws — any AI failure degrades to a
+  deterministic fallback. `AI_PROVIDER` defaults to `"none"`; the app
+  boots and the Operator pipeline runs end to end with zero AI
+  credentials. No real vendor adapter is implemented yet (see
+  `docs/ai-architecture.md`); a deterministic fake provider
+  (`src/server/ai/providers/fake.ts`) is used only in tests — zero real
+  AI network calls anywhere in the suite or CI.
+- Deterministic LOW/MEDIUM/HIGH priority (a pure function of days
+  overdue) and a deterministic suggested reminder tone (a pure function of
+  priority) — neither is ever asked of or overridable by AI, which may
+  only affect an insight's summary wording.
+- Prompt-injection defense: every AI request structurally separates
+  fixed, operator-authored instructions from business data (which may
+  include customer-authored free text) — tested against a concrete
+  adversarial customer note (`src/server/operator/ai-context.test.ts`).
+- A server-side action-type allowlist (`SEND_PAYMENT_REMINDER` is the
+  only member in Phase 3) checked before every proposal is created — AI
+  is never asked for and never validated to produce an action type.
+- An approval/dismissal workflow (`PENDING` → `APPROVED`/`DISMISSED`
+  only, same-state calls idempotent, everything else rejected), tenant-
+  scoped and audited. Approving a proposal only changes its status —
+  there is no execution path in Phase 3.
+- Action Center UI (`/app/[orgSlug]/actions`): pending proposals with
+  full context and Approve/Dismiss controls, a "Recently decided" list so
+  a decision's outcome stays visible, and a manual "Run Operator" button
+  — no cron or queue infrastructure. Honest about state throughout
+  (an approved proposal reads "Approved — execution is not enabled yet",
+  never "Sent").
+- 49 new automated tests (real Postgres, zero real AI network calls)
+  covering event detection and its idempotency, tenant isolation for all
+  three new resources, the AI Gateway (valid/invalid/timeout/disabled/
+  provider-failure), the approval state machine, prompt-injection
+  defense, and full end-to-end pipeline idempotency — 164 total across
+  the project.
+- New `docs/operator-foundation.md`; `docs/ai-architecture.md` updated in
+  place to describe what was actually built (not just the planned
+  direction); README, ARCHITECTURE, ROADMAP, SECURITY (explicit trust-
+  boundary chain), and `docs/domain-model.md` updated to match.
+
 ### Fixed — Phase 2: Accounts Receivable Core
 
 - `cancelInvoice` now locks the invoice row (`SELECT ... FOR UPDATE`, the

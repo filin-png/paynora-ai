@@ -10,6 +10,14 @@
 // strategy — those decisions shape several choices below that aren't
 // self-explanatory from the schema alone (e.g. why outstanding/paid amounts
 // are not columns here).
+//
+// Phase 3 introduces the Operator foundation: BusinessEvent, OperatorInsight,
+// ActionProposal. See docs/operator-foundation.md for the pipeline design.
+// These models never store financial facts of their own — amounts, dates,
+// and status are always read live from Invoice/Payment via the Phase 2
+// functions and only *referenced* here (invoiceId, customerId) or copied
+// into a JSON snapshot for audit purposes. AI never writes to this schema
+// directly; every row here is created by deterministic server code.
 
 generator client {
   provider = "prisma-client-js"
@@ -32,7 +40,8 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  memberships OrganizationMember[]
+  memberships             OrganizationMember[]
+  decidedActionProposals  ActionProposal[]
 
   @@map("users")
 }
@@ -44,11 +53,14 @@ model Organization {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  members        OrganizationMember[]
-  customers      Customer[]
-  invoices       Invoice[]
-  payments       Payment[]
-  activityEvents ActivityEvent[]
+  members         OrganizationMember[]
+  customers       Customer[]
+  invoices        Invoice[]
+  payments        Payment[]
+  activityEvents  ActivityEvent[]
+  businessEvents  BusinessEvent[]
+  operatorInsights OperatorInsight[]
+  actionProposals ActionProposal[]
 
   @@map("organizations")
 }
@@ -81,9 +93,12 @@ model Customer {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  invoices       Invoice[]
-  activityEvents ActivityEvent[]
+  organization    Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoices        Invoice[]
+  activityEvents  ActivityEvent[]
+  businessEvents  BusinessEvent[]
+  operatorInsights OperatorInsight[]
+  actionProposals ActionProposal[]
 
   @@index([organizationId])
   @@index([organizationId, archivedAt])
@@ -109,10 +124,13 @@ model Invoice {
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
-  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  customer       Customer        @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  payments       Payment[]
-  activityEvents ActivityEvent[]
+  organization    Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer        Customer          @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  payments        Payment[]
+  activityEvents  ActivityEvent[]
+  businessEvents  BusinessEvent[]
+  operatorInsights OperatorInsight[]
+  actionProposals ActionProposal[]
 
   // Invoice numbers are unique per organization, not globally — see
   // docs/accounts-receivable.md#invoice-numbering.
@@ -148,6 +166,11 @@ enum ActivityEventType {
   INVOICE_CANCELLED
   PAYMENT_RECORDED
   INVOICE_PAID
+  // Phase 3: Operator action-proposal decisions, reusing the same
+  // append-only audit trail every other tenant action already uses rather
+  // than inventing a parallel one — see docs/operator-foundation.md.
+  ACTION_PROPOSAL_APPROVED
+  ACTION_PROPOSAL_DISMISSED
 }
 
 model ActivityEvent {
@@ -168,4 +191,129 @@ model ActivityEvent {
   @@index([customerId])
   @@index([invoiceId])
   @@map("activity_events")
+}
+
+// --- Phase 3: Operator Foundation --------------------------------------
+// event -> insight -> proposal -> human approval. See
+// docs/operator-foundation.md for the full pipeline design and
+// SECURITY.md for the trust-boundary chain these models sit inside.
+
+enum BusinessEventType {
+  // The only detector Phase 3 implements. More event types (payment
+  // received, promise broken, ...) are additive in later phases.
+  INVOICE_OVERDUE
+}
+
+/// A deterministically detected fact about the business — never an AI
+/// opinion. `dedupeKey` plus the unique constraint below is what makes the
+/// detector idempotent: re-running it for an invoice that's still overdue
+/// finds the existing row instead of creating a duplicate. `data` is a
+/// point-in-time JSON snapshot of the facts that triggered detection
+/// (amounts already formatted to strings — bigint does not survive
+/// JSON.stringify), kept for audit/display; it is never re-read as a live
+/// financial source — computeInvoiceFinancials is, every time.
+model BusinessEvent {
+  id             String            @id @default(cuid())
+  organizationId String
+  type           BusinessEventType
+  customerId     String?
+  invoiceId      String?
+  dedupeKey      String
+  data           Json
+  detectedAt     DateTime          @default(now())
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  invoice      Invoice?          @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  insights     OperatorInsight[]
+
+  @@unique([organizationId, type, dedupeKey])
+  @@index([organizationId, type])
+  @@index([invoiceId])
+  @@map("business_events")
+}
+
+enum InsightPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+/// A structured interpretation of one BusinessEvent. `priority` is always
+/// computed deterministically (see src/server/operator/insights.ts) — AI,
+/// when enabled, may only contribute `summary`/`aiTone` display text via a
+/// Zod-validated response, never the priority or any financial field.
+/// `@@unique([organizationId, businessEventId])` caps this at one insight
+/// per event, so re-running the pipeline for an already-processed event is
+/// a no-op rather than a duplicate.
+model OperatorInsight {
+  id              String          @id @default(cuid())
+  organizationId  String
+  businessEventId String
+  customerId      String?
+  invoiceId       String?
+  priority        InsightPriority
+  summary         String
+  aiGenerated     Boolean         @default(false)
+  aiProvider      String?
+  createdAt       DateTime        @default(now())
+
+  organization  Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  businessEvent BusinessEvent    @relation(fields: [businessEventId], references: [id], onDelete: Cascade)
+  customer      Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  invoice       Invoice?         @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  proposals     ActionProposal[]
+
+  @@unique([organizationId, businessEventId])
+  @@index([organizationId, priority])
+  @@map("operator_insights")
+}
+
+enum ActionType {
+  // The only action type Phase 3 allows. Server-side allowlisted in
+  // src/server/operator/proposals.ts — AI output can never introduce a
+  // new value here; it isn't asked for one.
+  SEND_PAYMENT_REMINDER
+}
+
+enum ActionProposalStatus {
+  PENDING
+  APPROVED
+  DISMISSED
+  // Not reachable in Phase 3 — no execution path exists yet. Modeled now
+  // so Phase 4 (actual sending) doesn't require a schema migration to add
+  // states retroactively onto rows that already exist.
+  EXECUTED
+  FAILED
+}
+
+/// A proposed action a human must approve before anything happens.
+/// Approving this row in Phase 3 only flips its status — see
+/// src/server/operator/approval.ts and the Action Center UI, which is
+/// explicit that execution is not enabled yet. `@@unique` on
+/// [organizationId, insightId, type] keeps proposal creation idempotent
+/// the same way BusinessEvent/OperatorInsight are.
+model ActionProposal {
+  id              String               @id @default(cuid())
+  organizationId  String
+  insightId       String
+  customerId      String?
+  invoiceId       String?
+  type            ActionType
+  status          ActionProposalStatus @default(PENDING)
+  reasoning       String
+  suggestedTone   String?
+  decidedAt       DateTime?
+  decidedByUserId String?
+  createdAt       DateTime             @default(now())
+
+  organization  Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  insight       OperatorInsight @relation(fields: [insightId], references: [id], onDelete: Cascade)
+  customer      Customer?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  invoice       Invoice?        @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  decidedByUser User?           @relation(fields: [decidedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, insightId, type])
+  @@index([organizationId, status])
+  @@map("action_proposals")
 }

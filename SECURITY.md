@@ -4,6 +4,35 @@ PAYNORA handles financial data (invoices, payments, customer collection
 communication) for multiple tenants. Security is a baseline requirement,
 not a later add-on.
 
+## Trust boundary chain (Operator / AI, Phase 3+)
+
+Every AI-assisted feature in this codebase — currently just the Operator's
+insight wording — flows through one fixed chain, and each link only trusts
+the one before it after an explicit check:
+
+```
+User
+  -> Server-side authorization (requireOrganizationMembershipForPage)
+  -> Tenant context (organizationId re-verified against the DB, never trusted from a cookie or client value)
+  -> Deterministic business logic (src/server/ar/*, src/server/operator/events.ts, insights.ts, proposals.ts)
+  -> AI boundary (src/server/ai/service.ts — optional, never required, never trusted with authorization)
+  -> Validated structured output (Zod schema, src/server/ai/gateway.ts — invalid output is discarded, not partially used)
+  -> Allowlisted ActionProposal (src/server/operator/proposals.ts — server-side ActionType allowlist; AI is never asked for and never validated to produce an action type)
+  -> Human approval (src/server/operator/approval.ts — PENDING -> APPROVED/DISMISSED only; approving never executes anything in Phase 3)
+```
+
+**AI is an untrusted, probabilistic subsystem. Its output is never treated
+as authorization, and it is never the source of truth for any financial
+fact** (outstanding amount, paid amount, currency, due date, days overdue,
+invoice status, or tenant/customer ownership) — those are always read from
+the deterministic Phase 2 AR domain and only ever *passed to* the AI layer
+as prepared, structured context, never derived *from* an AI response. The
+one thing an AI response is allowed to influence is display text (an
+insight's summary wording) — validated against a fixed schema before use,
+and always with a deterministic fallback when AI is disabled, misconfigured,
+times out, or fails. See `docs/operator-foundation.md` and
+`docs/ai-architecture.md` for the full design.
+
 ## Principles
 
 - **Validate at the boundary.** All external input — HTTP requests, AI
@@ -21,9 +50,13 @@ not a later add-on.
   except `.env.example`, which documents variable names only — no real
   values. See `.env.example` for the current (empty) list.
 - **Prompt-injection awareness.** Customer email/message content fed into
-  AI features is untrusted input. Before any AI feature consumes external
-  communication (Phase 3+), its prompt construction is reviewed for
-  injection risk and its output is schema-validated before use.
+  AI features is untrusted input, never an instruction. Every AI request
+  (`AIRequest` in `src/server/ai/types.ts`) structurally separates fixed,
+  operator-authored instructions (`system`) from business data
+  (`input`) — business data, including customer-authored free text, is
+  never concatenated into `system`. Tested against a concrete injection
+  attempt in `src/server/operator/ai-context.test.ts`; see
+  `docs/operator-foundation.md#prompt-injection-defense`.
 - **Idempotency for money-adjacent automation.** Background jobs and
   webhook handlers (Phase 4+) are designed to be safely retried — running a
   reminder job twice must not send a duplicate reminder.
@@ -31,7 +64,44 @@ not a later add-on.
   observability infrastructure is added) excludes credentials, tokens, and
   full customer payment details.
 
-## Current status (Phase 2)
+## Current status (Phase 3)
+
+- **AI is never authorization and never a source of financial truth** —
+  see [Trust boundary chain](#trust-boundary-chain-operator--ai-phase-3) above.
+- **Action type allowlisting**: `src/server/operator/proposals.ts` checks
+  every proposed action against a server-side allowlist
+  (`SEND_PAYMENT_REMINDER` only in Phase 3) before writing a row. AI is
+  never asked for and never validated to produce an action type — the
+  schema it must satisfy (`reminderInsightOutputSchema`) has no such field.
+- **AI output validation**: every `AIProvider` response is validated
+  against a Zod schema (`runAIGeneration`, `src/server/ai/gateway.ts`)
+  before any caller sees it; invalid output is discarded, never partially
+  trusted.
+- **No AI credentials required to run the app**: `AI_PROVIDER` defaults to
+  `"none"`; the app boots, and the Operator pipeline runs end to end
+  (event detection, insight/proposal creation with deterministic
+  fallback), with zero AI configuration. Verified by CI, which never sets
+  `AI_PROVIDER` and makes zero AI network calls.
+- **Approval is a strict, tenant-scoped state machine**:
+  `src/server/operator/approval.ts` only allows `PENDING` → `APPROVED` or
+  `PENDING` → `DISMISSED` (same-state calls are idempotent no-ops;
+  anything else throws `InvalidActionProposalTransitionError`), scoped by
+  `organizationId` (`OperatorResourceNotFoundError` for a cross-tenant
+  proposal id — the same enumeration-safe pattern as Phase 1/2), and
+  audited via the existing `ActivityEvent` trail.
+- **Approving never executes anything.** There is no send path in Phase 3
+  — the Action Center UI is explicit about this ("Approved — execution is
+  not enabled yet"), never implying an action was actually taken.
+- **Every Phase 3 resource is tenant-scoped** (`BusinessEvent`,
+  `OperatorInsight`, `ActionProposal`) the same way Phase 2 resources are —
+  covered by tenant isolation tests in every `src/server/operator/*.test.ts` file.
+- **Idempotency**: every write in the Operator pipeline is enforced
+  idempotent by a database unique constraint, not just an application-level
+  check — re-running the pipeline, including under concurrent requests,
+  converges on the same rows rather than duplicating them. See
+  `docs/operator-foundation.md#idempotency`.
+
+## Previously established (Phase 2)
 
 - **Financial amounts are never trusted from the client.** Every
   Server Action re-derives outstanding balances and validates amounts
