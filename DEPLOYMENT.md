@@ -59,6 +59,36 @@ npm run test
 `vitest.config.mts` defaults `DATABASE_URL` for the test run to
 `paynora_test` on `localhost:5432`; set `TEST_DATABASE_URL` to override.
 
+## Collections automation scheduler
+
+Collections automation (Phase 5, see `docs/collections-automation.md`) is
+disabled by default in every environment, including local dev — running
+`npm run dev` with no extra configuration behaves exactly as it did before
+Phase 5 existed. To exercise it locally:
+
+```bash
+# in .env.local
+AUTOMATION_ENABLED=true
+AUTOMATION_CRON_SECRET=$(openssl rand -base64 24)
+```
+
+With that set, an OWNER can drive `runAutomationTick` from the
+`/app/[orgSlug]/automation` page's dev-only manual trigger (never rendered
+when `NODE_ENV=production`), or you can call the real scheduler endpoint
+directly:
+
+```bash
+curl -X POST http://localhost:3000/internal/automation/tick \
+  -H "Authorization: Bearer $AUTOMATION_CRON_SECRET"
+```
+
+For a real deployment, point any scheduler capable of an authenticated
+HTTPS POST on an interval (Vercel Cron, a self-hosted `cron` + `curl`, a
+systemd timer, a scheduled CI workflow — none of it is hardcoded into the
+app) at that same endpoint with the same secret. See
+`docs/collections-automation.md#scheduler-deployment` for the full
+design and a reasonable interval.
+
 ## Hosting (future)
 
 No hosting target is committed to yet. The constraint that shapes the
@@ -76,4 +106,6 @@ here when made — not before.
 
 See `.env.example` for the authoritative, current list. From Phase 1
 onward, `DATABASE_URL` and `AUTH_SECRET` are required — both are free and
-local, no paid or foreign-only service involved.
+local, no paid or foreign-only service involved. `AUTOMATION_ENABLED`/
+`AUTOMATION_CRON_SECRET` (Phase 5) are optional and default to fully
+disabled — see [Collections automation scheduler](#collections-automation-scheduler).

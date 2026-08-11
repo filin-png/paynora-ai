@@ -2,14 +2,16 @@
 
 **Status: User, Organization, OrganizationMember (Phase 1); Customer,
 Invoice, Payment, ActivityEvent (Phase 2); BusinessEvent,
-OperatorInsight, ActionProposal (Phase 3); and Communication,
-DeliveryAttempt (Phase 4) are implemented** — see `prisma/schema.prisma`,
-`docs/identity-and-tenancy.md`, `docs/accounts-receivable.md`,
-`docs/operator-foundation.md`, and `docs/communications.md` for the
+OperatorInsight, ActionProposal (Phase 3); Communication, DeliveryAttempt
+(Phase 4); and CollectionPolicy, CollectionPolicyStep, CollectionSequence,
+CollectionStepExecution (Phase 5) are implemented** — see
+`prisma/schema.prisma`, `docs/identity-and-tenancy.md`,
+`docs/accounts-receivable.md`, `docs/operator-foundation.md`,
+`docs/communications.md`, and `docs/collections-automation.md` for the
 actual schemas and design rationale. Everything else below
-(CollectionSequence, PaymentPromise, Subscription) is design direction
-for Phase 5+, not implemented yet. This document exists so later phases
-have a shared target instead of inventing the domain ad hoc.
+(PaymentPromise, Subscription) is design direction for Phase 6+, not
+implemented yet. This document exists so later phases have a shared
+target instead of inventing the domain ad hoc.
 
 ## Conceptual flow
 
@@ -18,11 +20,14 @@ Organization → Customers → Invoices → Risk Analysis → Collection Actions
 ```
 
 Phase 3 implements "Risk Analysis → Collection Actions" up to human
-approval; Phase 4 carries it through to a real sent email:
+approval; Phase 4 carries it through to a real sent email; Phase 5 adds
+the scheduling that drives the same pipeline automatically:
 
 ```
-Invoice (overdue) → BusinessEvent → OperatorInsight → ActionProposal
-  → [approve] → Communication draft → [review/edit] → [Send] → EmailProvider
+CollectionPolicy → CollectionSequence (per invoice) → [tick, step due]
+  → BusinessEvent → OperatorInsight → ActionProposal          [Phase 3, reused]
+  → [approve, human or — if AUTO_SEND — the engine] → Communication draft
+  → [review/edit, or auto] → [Send] → EmailProvider            [Phase 4, reused]
   → DeliveryAttempt → Communication SENT → ActionProposal EXECUTED
 ```
 
@@ -91,13 +96,25 @@ Invoice (overdue) → BusinessEvent → OperatorInsight → ActionProposal
   full attempt history survives any number of retries. See
   `docs/communications.md#delivery-semantics` for why this exists instead
   of a single mutable "last attempt" field on `Communication`.
-- **CollectionSequence** — rules describing when reminders fire relative
-  to an invoice's due date, and the scheduling to fire them
-  automatically. Phase 4 deliberately built only the manual, one-at-a-time
-  send path (`docs/communications.md#explicitly-out-of-scope-in-phase-4`);
-  sequencing/automation is a later phase.
+- **CollectionPolicy** / **CollectionPolicyStep** *(implemented, Phase 5)*
+  — a tenant-scoped, versioned template of ordered steps
+  (`daysAfterDue`/`action`/`tone`). Editing a policy's steps writes a new
+  version rather than mutating existing rows, so an in-flight
+  `CollectionSequence` (below) is never retroactively changed by a later
+  edit. See `docs/collections-automation.md#policy-model`.
+- **CollectionSequence** *(implemented, Phase 5)* — the runtime instance
+  of a policy applied to one invoice (`@unique` on
+  `[organizationId, invoiceId]`), locking in the policy's version at
+  enrollment time. Strict state machine (`ACTIVE`/`PAUSED`/`COMPLETED`/
+  `STOPPED` with a typed stop reason) — see
+  `docs/collections-automation.md#sequence-lifecycle`.
+- **CollectionStepExecution** *(implemented, Phase 5)* — one row per
+  (sequence, step) claim attempt (`@@unique([sequenceId, stepId])`), the
+  database-backed invariant that makes a logical collection step
+  impossible to execute twice under concurrent workers. See
+  `docs/collections-automation.md#concurrency`.
 - **PaymentPromise** — a customer's promise to pay by a specific date.
-  Manual entry first (Phase 5); automatic extraction from replies is a
+  Manual entry first (Phase 6+); automatic extraction from replies is a
   later capability layered on top via the AI provider.
 - **Subscription** — PAYNORA's own commercial subscription for an
   Organization (billing for using PAYNORA, not a Customer's payment).

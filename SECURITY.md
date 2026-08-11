@@ -58,6 +58,32 @@ a human clicking Send in the UI, ever invokes an `EmailProvider`. See
 naive "wrap the provider call in a DB transaction" approach is unsafe and
 what Phase 4 does instead.
 
+## Trust boundary chain (Collections Automation, Phase 5)
+
+Phase 5 adds a *trigger* upstream of the Phase 3/4 chains above — a
+scheduled tick — without adding a second path into either chain:
+
+```
+Scheduler (any vendor, or a dev-only manual trigger)
+  -> Internal auth boundary (src/server/collections/scheduler-auth.ts — AUTOMATION_CRON_SECRET, timing-safe compare; the dev trigger instead re-verifies OWNER role)
+  -> runAutomationTick (src/server/collections/engine.ts — never trusts a client-supplied `now` or tenant id)
+  -> Fresh eligibility re-check (live financials, sequence/policy state, prior-communication safety — re-derived every tick, never cached)
+  -> [enters the Phase 3 chain above unchanged: BusinessEvent -> OperatorInsight -> ActionProposal]
+  -> APPROVAL_REQUIRED: stops here, a human takes it from ActionProposal onward exactly as in Phase 3/4
+  -> AUTO_SEND (OWNER opt-in only): approveActionProposal + sendCommunication, i.e. re-enters the Phase 4 chain above unchanged, as the OWNER who explicitly authorized it
+```
+
+**A schedule is never authorization to send.** Every tick re-derives
+whether an invoice still needs action from the live database — an
+invoice that was overdue an hour ago and is paid now gets zero
+communication, unconditionally. **AUTO_SEND never bypasses Phase 3/4**:
+it calls the exact same `approveActionProposal`/`sendCommunication`
+functions a human's click would call, with a real, audited acting user
+(the OWNER who explicitly enabled `AUTO_SEND`, recorded at the moment
+they did so) — there is no direct `EmailProvider`/`nodemailer` call
+anywhere in `src/server/collections/`. See `docs/collections-automation.md`
+for the full design, including the concurrency and payment-race reasoning.
+
 ## Principles
 
 - **Validate at the boundary.** All external input — HTTP requests, AI
@@ -87,13 +113,63 @@ what Phase 4 does instead.
   — an atomic conditional DB claim ensures a double-click or two
   concurrent requests can never both dispatch to the email provider; see
   `docs/communications.md#concurrency` for the proof (real concurrent
-  tests, not just the design intent). Background job scheduling for
-  *automated* sends is still Phase 5, not built yet.
+  tests, not just the design intent). Phase 5's `runAutomationTick` is
+  idempotent the same way, at every stage: enrollment
+  (`@@unique([organizationId, invoiceId])`), step claiming
+  (`@@unique([sequenceId, stepId])`), and the reused Phase 3/4 creation
+  functions — a repeated tick with the same `now` never duplicates
+  anything, proven with real repeated-call tests.
 - **No sensitive data in logs.** Structured logging (introduced when
   observability infrastructure is added) excludes credentials, tokens, and
   full customer payment details.
 
-## Current status (Phase 4)
+## Current status (Phase 5)
+
+- **A schedule is never permission to send.** Every organization/sequence
+  the tick considers is re-checked against live state — paid, cancelled,
+  archived customer, disabled policy, or a blocked-by-uncertain-delivery
+  invoice all result in zero action, every time, regardless of what an
+  earlier tick decided. See
+  [Trust boundary chain (Collections Automation)](#trust-boundary-chain-collections-automation-phase-5).
+- **Two independent kill switches, both required.** The deployment-level
+  `AUTOMATION_ENABLED` env flag (default `false`) and the organization-
+  level toggle (default `false`) both gate the entire tick — an
+  organization can never receive automated action unless both an operator
+  and that organization's owner have explicitly opted in.
+- **`AUTO_SEND` cannot bypass approval/send semantics** — see
+  [Trust boundary chain (Collections Automation)](#trust-boundary-chain-collections-automation-phase-5).
+  Default off; OWNER-only opt-in, recorded with the authorizing user and
+  timestamp (`CollectionPolicy.autoSendEnabledByUserId`/`autoSendEnabledAt`).
+- **No client-supplied execution time or tenant.** `runAutomationTick`'s
+  `now` parameter is only ever populated with `new Date()` in production
+  code paths; the scheduler endpoint (`POST /internal/automation/tick`)
+  parses no request body at all, so there is no field a caller could use
+  to select or spoof which organization gets processed.
+- **Scheduler authentication.** `AUTOMATION_CRON_SECRET`, compared with
+  `crypto.timingSafeEqual` to avoid a timing side channel; a missing or
+  wrong secret returns `401` with no detail about what was expected, and
+  an unconfigured deployment returns `503` before any comparison even
+  happens.
+- **DB-backed worker-vs-worker invariant**, not an in-memory lock:
+  `@@unique([sequenceId, stepId])` on `CollectionStepExecution` — proven
+  with a real concurrent-tick test asserting exactly one execution
+  results, in both `APPROVAL_REQUIRED` and `AUTO_SEND` modes (the latter
+  additionally proving the email provider is called exactly once).
+- **Every Phase 5 resource is tenant-scoped** (`CollectionPolicy`,
+  `CollectionPolicyStep`, `CollectionSequence`, `CollectionStepExecution`)
+  the same way every earlier phase's resources are — covered by tenant
+  isolation tests in `src/server/collections/*.test.ts`.
+- **No secret logging.** `AUTOMATION_CRON_SECRET` is never written to any
+  log; `runAutomationTick`'s structured summary log line contains only
+  counts and organization ids, never an email body or AI credential.
+- **Server-side allowlisting, again.** `CollectionStepAction` is checked
+  against a server-side allowlist (`ALLOWED_COLLECTION_STEP_ACTIONS`,
+  `src/server/collections/policy-schema.ts`) — the same pattern as Phase
+  3's `ActionType` allowlist — and recipients are always resolved
+  server-side from `Customer.email` via the reused Phase 4 draft
+  function, never a client-suppliable value.
+
+## Previously established (Phase 4)
 
 - **Sending is always a distinct, explicit, later action** — see
   [Trust boundary chain (Communications / Email)](#trust-boundary-chain-communications--email-phase-4)

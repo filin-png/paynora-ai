@@ -5,6 +5,74 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Phase 5: Collections Automation Engine
+
+- `CollectionPolicy`/`CollectionPolicyStep`/`CollectionSequence`/
+  `CollectionStepExecution` Prisma models and an additive migration
+  (Phase 1–4 migrations untouched), plus `Organization.automationEnabled`
+  and ten new `ActivityEventType` values. Policy steps are versioned —
+  editing a policy's steps writes a new version rather than mutating
+  existing rows, and a `CollectionSequence` locks in the version it was
+  enrolled under, so a policy edit never retroactively changes an
+  in-flight sequence.
+- `src/server/collections/policy.ts`: tenant-scoped policy CRUD, a
+  single-default-policy selector, automation-mode switching
+  (`APPROVAL_REQUIRED`/`AUTO_SEND`) that records the authorizing OWNER,
+  and the organization-level automation kill switch — all OWNER-only.
+- `src/server/collections/enrollment.ts`: idempotent, bulk-query lazy
+  enrollment of eligible OPEN invoices — no per-invoice cron rows, no
+  duplicate sequences under concurrent ticks.
+- `src/server/collections/engine.ts`: `runAutomationTick(now, options)`,
+  the scheduler-independent core. **Schedule ≠ permission to send** — every
+  tick re-verifies live financial state, sequence status, policy
+  enablement, and prior-communication safety immediately before creating
+  or executing anything, never trusting a previous tick's decision.
+  Deterministic relative to its injected `now` (threaded through as an
+  optional `today` override on `getInvoiceWithFinancials`/
+  `listInvoicesWithFinancials`/`buildDeterministicInvoiceContext` — a
+  small, backward-compatible extension to Phase 2/4 code, not a fork of
+  it). A DB-unique-constraint claim (`@@unique([sequenceId, stepId])`) is
+  the sole worker-vs-worker concurrency invariant — no in-memory lock.
+  Catch-up after a scheduler gap executes only the single most-advanced
+  due step, marking earlier ones `SKIPPED` — never a reminder burst.
+- Reuses Phase 3's Operator pipeline unchanged
+  (`ensureInsightForInvoiceOverdueEvent`, now documented as intentionally
+  event-type-agnostic) and extends `ensureReminderProposalForInsight`
+  with an optional explicit `tone` parameter so a policy step's
+  configured tone can drive a reminder instead of insight priority — the
+  only change made to existing Phase 3 code. No second Operator was
+  built.
+- `AUTO_SEND` implemented: default off, OWNER-only opt-in per policy,
+  composes only the existing `approveActionProposal` (Phase 3) and
+  `prepareReminderCommunication`/`sendCommunication` (Phase 4) — no
+  direct `EmailProvider`/`nodemailer` call anywhere in
+  `src/server/collections/`, and a fresh financial re-check immediately
+  before the send. `UNCERTAIN` or a stuck `SENDING` `Communication` on an
+  invoice blocks all further automation on it, self-healing once a human
+  resolves it — no "wait N days and send anyway" logic.
+- `src/app/internal/automation/tick/route.ts`: the vendor-neutral
+  scheduler adapter (`POST /internal/automation/tick`), authenticated via
+  a constant-time-compared `AUTOMATION_CRON_SECRET` bearer token, no
+  request body parsed (a global tick has no tenant a caller could spoof).
+  New `AUTOMATION_ENABLED`/`AUTOMATION_CRON_SECRET` env vars, Zod-
+  validated, safe defaults (disabled unless explicitly configured).
+- `src/app/app/[orgSlug]/automation/`: kill switch, policy management,
+  active-sequence list with pause/resume/stop, and a manual tick trigger
+  rendered only outside production and explicitly labeled dev-only — the
+  UI never claims "Automation running" as a statement about a real
+  scheduler it cannot observe. Invoice detail page gets an honest
+  collections-status block (active/paused/blocked-uncertain/completed/
+  stopped).
+- 72 new tests (287 total) covering policy validation, enrollment
+  idempotency, worker-vs-worker concurrency, repeated-tick idempotency,
+  catch-up, full/partial payment, cancellation, archived customer,
+  policy-disabled, pause, `UNCERTAIN`/stuck-`SENDING` blocking, `AUTO_SEND`
+  safety, scheduler authentication, tenant isolation, and two full E2E
+  scenarios — zero real network calls, reusing Phase 4's fake email
+  provider.
+- Manually verified in a real browser end to end (see
+  `docs/collections-automation.md#verification`).
+
 ### Added — Phase 4: Communications Foundation + Email Execution
 
 - `Communication`/`DeliveryAttempt` Prisma models and their migration,

@@ -234,9 +234,20 @@ Operator" is a Server Action a signed-in member of the organization
 triggers explicitly (`requireOrganizationMembershipForPage`, the same
 tenant-authorization guard every other mutation in this codebase uses). It
 is safe to click repeatedly — see [Idempotency](#idempotency) — and safe to
-leave un-clicked; nothing runs on its own. A later phase may add a
-scheduler; Phase 3 deliberately does not, per the project's rule against
-building infrastructure before a phase actually needs it.
+leave un-clicked; nothing runs on its own.
+
+**Phase 5 added a scheduler on top of this, not instead of it.**
+`runAutomationTick` (`src/server/collections/engine.ts`) calls the exact
+same idempotent Operator functions this document describes —
+`ensureInsightForInvoiceOverdueEvent` (reused unchanged for a second
+`BusinessEventType`, `COLLECTION_STEP_DUE`, since it never actually
+depended on the event type) and `ensureReminderProposalForInsight`
+(extended with an optional explicit `tone` parameter, its only change) —
+it does not add a second Operator or a competing pipeline. "Run Operator"
+on this page still only ever detects `INVOICE_OVERDUE` manually; Phase 5's
+scheduled detection of `COLLECTION_STEP_DUE` is a separate, policy-driven
+trigger documented in `docs/collections-automation.md`. Both write through
+the same insight/proposal functions and land in the same Action Center.
 
 ## Observability
 
@@ -259,7 +270,12 @@ item noted:
   `FAILED` remains unreachable by design (see
   [Approval workflow](#approval-workflow) above). Telegram/SMS/WhatsApp
   are still not built.
-- Any scheduler, cron job, or background queue — still true in Phase 4.
+- Any scheduler, cron job, or background queue — still true in Phase 4;
+  **built in Phase 5** (`runAutomationTick` + the internal HTTP scheduler
+  adapter), reusing this document's own insight/proposal functions rather
+  than a second Operator — see
+  [Manual run, not a scheduler](#manual-run-not-a-scheduler) above and
+  `docs/collections-automation.md`.
 - A second AI-assisted action type beyond `SEND_PAYMENT_REMINDER` — still
   true.
 - A real, paid AI provider integration (GigaChat or otherwise) — still
