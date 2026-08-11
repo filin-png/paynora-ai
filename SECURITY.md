@@ -28,10 +28,35 @@ invoice status, or tenant/customer ownership) — those are always read from
 the deterministic Phase 2 AR domain and only ever *passed to* the AI layer
 as prepared, structured context, never derived *from* an AI response. The
 one thing an AI response is allowed to influence is display text (an
-insight's summary wording) — validated against a fixed schema before use,
-and always with a deterministic fallback when AI is disabled, misconfigured,
-times out, or fails. See `docs/operator-foundation.md` and
-`docs/ai-architecture.md` for the full design.
+insight's summary, or an email's subject/body wording) — validated against
+a fixed schema before use, and always with a deterministic fallback when
+AI is disabled, misconfigured, times out, or fails. See
+`docs/operator-foundation.md` and `docs/ai-architecture.md` for the full
+design.
+
+## Trust boundary chain (Communications / Email, Phase 4)
+
+The chain above ends at human approval. Phase 4 extends it one more step
+— from an approved proposal to a real external side effect — with the
+same "trust nothing further downstream than necessary" discipline:
+
+```
+ActionProposal (APPROVED, SEND_PAYMENT_REMINDER only)
+  -> Draft preparation (src/server/communications/draft.ts — deterministic recipient/facts; AI, if used, only affects wording)
+  -> Human review/edit (src/server/communications/editing.ts — subject/body only; recipient/invoice/customer/proposal are never editable through this path)
+  -> Explicit Send (a distinct user action — approving never reaches this step by itself)
+  -> Email boundary (src/server/email/service.ts — resolveEmailProvider(); throws before any state change if unconfigured)
+  -> Provider dispatch (src/server/email/gateway.ts — timeout + normalized outcome: success / definite rejection / unknown)
+  -> Confirmed-success-only proposal execution (src/server/communications/send.ts — ActionProposal -> EXECUTED only on a confirmed SUCCESS, never on FAILED or UNCERTAIN)
+```
+
+**Sending is never implicit.** No code path sends an email as a
+consequence of approval, of running the Operator, of AI output, or of any
+other action — only an explicit call to `sendCommunication`, triggered by
+a human clicking Send in the UI, ever invokes an `EmailProvider`. See
+`docs/communications.md` for the full design, including exactly why a
+naive "wrap the provider call in a DB transaction" approach is unsafe and
+what Phase 4 does instead.
 
 ## Principles
 
@@ -57,14 +82,59 @@ times out, or fails. See `docs/operator-foundation.md` and
   never concatenated into `system`. Tested against a concrete injection
   attempt in `src/server/operator/ai-context.test.ts`; see
   `docs/operator-foundation.md#prompt-injection-defense`.
-- **Idempotency for money-adjacent automation.** Background jobs and
-  webhook handlers (Phase 4+) are designed to be safely retried — running a
-  reminder job twice must not send a duplicate reminder.
+- **Idempotency for money-adjacent automation.** `sendCommunication`
+  (`src/server/communications/send.ts`) is designed to be safely retried
+  — an atomic conditional DB claim ensures a double-click or two
+  concurrent requests can never both dispatch to the email provider; see
+  `docs/communications.md#concurrency` for the proof (real concurrent
+  tests, not just the design intent). Background job scheduling for
+  *automated* sends is still Phase 5, not built yet.
 - **No sensitive data in logs.** Structured logging (introduced when
   observability infrastructure is added) excludes credentials, tokens, and
   full customer payment details.
 
-## Current status (Phase 3)
+## Current status (Phase 4)
+
+- **Sending is always a distinct, explicit, later action** — see
+  [Trust boundary chain (Communications / Email)](#trust-boundary-chain-communications--email-phase-4)
+  above. Approving a proposal (Phase 3) is unchanged and still never
+  sends anything.
+- **Recipient and sender are never user input.** `Communication.recipient`
+  is set once, server-side, from `Customer.email`, at draft-creation time
+  — no form field anywhere accepts an arbitrary recipient.
+  `PAYNORA_EMAIL_FROM` is a server environment variable; there is no
+  per-message `from` field. This is what keeps Phase 4 from becoming a
+  general-purpose email relay — see `docs/communications.md#sender-safety`.
+- **Header injection is rejected, not sanitized.** A subject containing a
+  CR or LF is rejected outright by `updateCommunicationDraft`'s Zod
+  schema (`src/server/communications/editing.ts`), not stripped or
+  escaped — tested directly against a `Bcc:`-injection attempt.
+- **No duplicate provider dispatch under concurrency.** `sendCommunication`
+  claims a communication via an atomic conditional DB update before ever
+  calling the provider; a double-click, two concurrent requests, or a
+  concurrent retry can only ever result in one actual provider call —
+  proven with real concurrent-request tests that count actual invocations
+  of the (fake) provider, not just check the final DB state. See
+  `docs/communications.md#concurrency`.
+- **Ambiguous outcomes are never presented as certain.** A timeout or
+  unrecognized provider error is recorded as `UNCERTAIN`, distinct from a
+  confirmed `FAILED` — the UI says "Delivery status uncertain. Do not
+  resend automatically," and resending requires an explicit, separately-
+  labeled, confirmation-gated action, never a blind automatic retry. See
+  `docs/communications.md#unknown-outcomes`.
+- **No email credentials required to run the app**: `EMAIL_PROVIDER`
+  defaults to `"none"`; the app boots, and drafting/preview/editing all
+  work end to end with zero email configuration. Verified by CI, which
+  never sets `EMAIL_PROVIDER` and makes zero real email network calls.
+- **Every Phase 4 resource is tenant-scoped** (`Communication`,
+  `DeliveryAttempt`) the same way Phase 2/3 resources are — covered by
+  tenant isolation tests in `src/server/communications/*.test.ts`.
+- **`ActionProposal.EXECUTED` is set in exactly one place**
+  (`src/server/communications/send.ts`, on confirmed success only), via
+  the same atomic conditional-update pattern as Phase 3's approval fix —
+  a failed or uncertain send can never be mistaken for an executed one.
+
+## Previously established (Phase 3)
 
 - **AI is never authorization and never a source of financial truth** —
   see [Trust boundary chain](#trust-boundary-chain-operator--ai-phase-3) above.

@@ -18,6 +18,12 @@
 // functions and only *referenced* here (invoiceId, customerId) or copied
 // into a JSON snapshot for audit purposes. AI never writes to this schema
 // directly; every row here is created by deterministic server code.
+//
+// Phase 4 introduces Communications Foundation + Email Execution:
+// Communication, DeliveryAttempt. See docs/communications.md for the
+// lifecycle, delivery semantics, and idempotency strategy. A Communication
+// is always tied 1:1 to the ActionProposal it was drafted for; sending one
+// is a distinct, explicit step from approving the proposal it came from.
 
 generator client {
   provider = "prisma-client-js"
@@ -61,6 +67,8 @@ model Organization {
   businessEvents  BusinessEvent[]
   operatorInsights OperatorInsight[]
   actionProposals ActionProposal[]
+  communications  Communication[]
+  deliveryAttempts DeliveryAttempt[]
 
   @@map("organizations")
 }
@@ -99,6 +107,7 @@ model Customer {
   businessEvents  BusinessEvent[]
   operatorInsights OperatorInsight[]
   actionProposals ActionProposal[]
+  communications  Communication[]
 
   @@index([organizationId])
   @@index([organizationId, archivedAt])
@@ -131,6 +140,7 @@ model Invoice {
   businessEvents  BusinessEvent[]
   operatorInsights OperatorInsight[]
   actionProposals ActionProposal[]
+  communications  Communication[]
 
   // Invoice numbers are unique per organization, not globally — see
   // docs/accounts-receivable.md#invoice-numbering.
@@ -171,6 +181,16 @@ enum ActivityEventType {
   // than inventing a parallel one — see docs/operator-foundation.md.
   ACTION_PROPOSAL_APPROVED
   ACTION_PROPOSAL_DISMISSED
+  // Phase 4: Communications — see docs/communications.md. Retrying a send
+  // reuses COMMUNICATION_SEND_ATTEMPTED (attempt number is in the event's
+  // metadata) rather than a separate "retry" type — it's the same kind of
+  // fact (an attempt was made) either way.
+  COMMUNICATION_PREPARED
+  COMMUNICATION_EDITED
+  COMMUNICATION_SEND_ATTEMPTED
+  COMMUNICATION_SENT
+  COMMUNICATION_SEND_FAILED
+  ACTION_PROPOSAL_EXECUTED
 }
 
 model ActivityEvent {
@@ -280,19 +300,28 @@ enum ActionProposalStatus {
   PENDING
   APPROVED
   DISMISSED
-  // Not reachable in Phase 3 — no execution path exists yet. Modeled now
-  // so Phase 4 (actual sending) doesn't require a schema migration to add
-  // states retroactively onto rows that already exist.
+  // Reachable starting Phase 4: set only after a Communication's send is
+  // *confirmed* successful (src/server/communications/send.ts) — never on
+  // approval, and never on an ambiguous/uncertain delivery outcome.
   EXECUTED
+  // Deliberately not set by Phase 4. A failed or uncertain send leaves the
+  // proposal APPROVED — failure/uncertainty belongs to the Communication
+  // and its DeliveryAttempt history (which can be retried), not to the
+  // proposal itself. Reserved for a future phase that needs a distinct
+  // "this proposal can never be executed" terminal state.
   FAILED
 }
 
 /// A proposed action a human must approve before anything happens.
-/// Approving this row in Phase 3 only flips its status — see
-/// src/server/operator/approval.ts and the Action Center UI, which is
-/// explicit that execution is not enabled yet. `@@unique` on
-/// [organizationId, insightId, type] keeps proposal creation idempotent
-/// the same way BusinessEvent/OperatorInsight are.
+/// Approving this row only flips its status to APPROVED — see
+/// src/server/operator/approval.ts. Phase 4 adds the next step: an
+/// APPROVED SEND_PAYMENT_REMINDER proposal can have exactly one
+/// Communication drafted for it (see the `communication` relation below),
+/// and only a *confirmed successful send* of that Communication moves the
+/// proposal to EXECUTED — see src/server/communications/send.ts and
+/// docs/communications.md. `@@unique` on [organizationId, insightId, type]
+/// keeps proposal creation idempotent the same way BusinessEvent/
+/// OperatorInsight are.
 model ActionProposal {
   id              String               @id @default(cuid())
   organizationId  String
@@ -312,8 +341,132 @@ model ActionProposal {
   customer      Customer?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
   invoice       Invoice?        @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
   decidedByUser User?           @relation(fields: [decidedByUserId], references: [id], onDelete: SetNull)
+  communication Communication?
 
   @@unique([organizationId, insightId, type])
   @@index([organizationId, status])
   @@map("action_proposals")
+}
+
+// --- Phase 4: Communications Foundation + Email Execution ---------------
+// Communication drafting/preview/send, and the DeliveryAttempt audit
+// trail behind it. See docs/communications.md for the full lifecycle,
+// delivery semantics (why there is no exactly-once guarantee and what
+// UNCERTAIN means), and idempotency strategy.
+
+enum CommunicationChannel {
+  // The only channel Phase 4 implements. Telegram/SMS/WhatsApp are
+  // explicitly out of scope — see docs/communications.md.
+  EMAIL
+}
+
+enum CommunicationPurpose {
+  // The only purpose Phase 4 implements — mirrors ActionType.SEND_PAYMENT_REMINDER.
+  PAYMENT_REMINDER
+}
+
+/// DRAFT -> SENDING -> SENT | FAILED | UNCERTAIN, plus FAILED/UNCERTAIN ->
+/// SENDING on retry. See docs/communications.md#state-machine for the
+/// full transition table and src/server/communications/send.ts for the
+/// atomic compare-and-swap that enforces it (same technique as
+/// src/server/operator/approval.ts's PENDING -> APPROVED/DISMISSED fix).
+enum CommunicationStatus {
+  DRAFT
+  SENDING
+  SENT
+  FAILED
+  // A dispatch attempt's outcome could not be confirmed either way (our
+  // own timeout, a network error, or a process crash mid-attempt — see
+  // docs/communications.md#unknown-outcomes). Never auto-retried.
+  UNCERTAIN
+}
+
+/// A single logical communication with a customer — currently always one
+/// email drafted for exactly one approved SEND_PAYMENT_REMINDER proposal
+/// (`@@unique` on actionProposalId). `recipient`/`subject`/`body` are
+/// snapshotted here, not read live from Customer at send time: once
+/// dispatch starts (status leaves DRAFT) they are immutable, so what the
+/// user reviewed is provably what was — or was attempted to be — sent.
+model Communication {
+  id               String               @id @default(cuid())
+  organizationId   String
+  customerId       String
+  invoiceId        String
+  actionProposalId String               @unique
+  channel          CommunicationChannel @default(EMAIL)
+  purpose          CommunicationPurpose
+  recipient        String
+  subject          String
+  body             String
+  status           CommunicationStatus  @default(DRAFT)
+  aiGenerated      Boolean              @default(false)
+  aiProvider       String?
+  sentAt           DateTime?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  organization     Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer         Customer          @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  invoice          Invoice           @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  actionProposal   ActionProposal    @relation(fields: [actionProposalId], references: [id], onDelete: Restrict)
+  deliveryAttempts DeliveryAttempt[]
+
+  @@index([organizationId, status])
+  @@index([customerId])
+  @@index([invoiceId])
+  @@map("communications")
+}
+
+enum DeliveryAttemptStatus {
+  // Set the instant an attempt is claimed, before the provider call is
+  // made. A row stuck here (no terminal status ever recorded) means the
+  // process died mid-attempt — see docs/communications.md#unknown-outcomes;
+  // the UI treats it exactly like UNCERTAIN.
+  PENDING
+  SUCCESS
+  FAILED
+  // The provider call itself did not resolve with a definite outcome
+  // (timeout, network error, or any error the provider adapter didn't
+  // classify as a definite rejection) — see EmailProviderRejectedError
+  // vs. everything else in src/server/email/errors.ts.
+  UNKNOWN
+}
+
+enum DeliveryFailureCategory {
+  CONFIGURATION
+  VALIDATION
+  PROVIDER_REJECTED
+  TRANSIENT_PROVIDER_ERROR
+  TIMEOUT_OR_UNKNOWN
+}
+
+/// One row per actual dispatch attempt (initial send or retry) — never
+/// mutated after it reaches a terminal status, so the full attempt
+/// history survives regardless of how many times a communication is
+/// retried. `idempotencyKey` is passed to the EmailProvider for adapters
+/// that support provider-side deduplication (most don't — see
+/// docs/communications.md#delivery-semantics for why the real duplicate
+/// protection here is the DB-level compare-and-swap on Communication.status,
+/// not this key).
+model DeliveryAttempt {
+  id                String                   @id @default(cuid())
+  organizationId    String
+  communicationId   String
+  attemptNumber     Int
+  provider          String
+  idempotencyKey    String                   @unique
+  status            DeliveryAttemptStatus    @default(PENDING)
+  failureCategory   DeliveryFailureCategory?
+  failureMessage    String?
+  providerMessageId String?
+  startedAt         DateTime                 @default(now())
+  completedAt       DateTime?
+
+  organization  Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  communication Communication @relation(fields: [communicationId], references: [id], onDelete: Cascade)
+
+  @@unique([communicationId, attemptNumber])
+  @@index([organizationId])
+  @@index([communicationId])
+  @@map("delivery_attempts")
 }

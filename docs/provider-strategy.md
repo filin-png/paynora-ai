@@ -1,11 +1,13 @@
 # Provider Strategy
 
-**Status: `AIProvider`'s interface and Gateway are implemented (Phase 3);
-every other provider below is not implemented yet, and `AIProvider` has no
-real vendor adapter behind it either** — see `docs/ai-architecture.md`.
-This document records the intended boundary and the constraint driving it,
-so each phase that adds a provider has a consistent pattern to follow
-instead of inventing one per integration.
+**Status: `AIProvider` (Phase 3) and `EmailProvider` (Phase 4) are
+implemented. `AIProvider` has no real vendor adapter behind it yet;
+`EmailProvider` does — an SMTP adapter, not a vendor SDK (see below).
+Every other provider below is not implemented yet.** See
+`docs/ai-architecture.md` and `docs/communications.md`. This document
+records the intended boundary and the constraint driving it, so each
+phase that adds a provider has a consistent pattern to follow instead of
+inventing one per integration.
 
 ## Why this matters for a sellable asset
 
@@ -35,12 +37,12 @@ interface — this is an ordering decision, not a permanent exclusion.
 
 | Boundary            | Purpose                                   | Initial candidate       | Status        |
 | -------------------- | ------------------------------------------ | ------------------------ | -------------- |
-| `AIProvider`          | Structured AI generation (Operator insight wording) | GigaChat        | Interface + Gateway implemented (Phase 3); no vendor adapter yet |
-| `EmailProvider`       | Transactional & collection email          | TBD at Phase 4           | Not implemented (Phase 4) |
+| `AIProvider`          | Structured AI generation (insight/email wording) | GigaChat        | Interface + Gateway implemented (Phase 3); no vendor adapter yet |
+| `EmailProvider`       | Transactional payment-reminder email       | SMTP (any relay)         | Implemented (Phase 4) — see `docs/communications.md#provider-abstraction` |
 | `PaymentProvider`     | PAYNORA's own subscription billing        | TBD at Phase 6           | Not implemented (Phase 6) |
 | `AnalyticsProvider`   | Product analytics                         | TBD at Phase 7/8          | Not implemented |
 | `StorageProvider`     | File/document storage                     | TBD when first needed     | Not implemented |
-| `JobProvider`         | Background job scheduling                 | TBD at Phase 4            | Not implemented (Phase 4) |
+| `JobProvider`         | Background job scheduling                 | TBD at a future phase, if one ever needs scheduled/automated sends | Not implemented — Phase 4's "Send" is a synchronous, human-triggered action, deliberately not queued |
 
 Note: `PaymentProvider` here is PAYNORA's own subscription billing
 (Phase 6), distinct from the Phase 7 "integrations" work that connects to a

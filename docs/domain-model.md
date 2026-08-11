@@ -1,13 +1,14 @@
 # Domain Model
 
 **Status: User, Organization, OrganizationMember (Phase 1); Customer,
-Invoice, Payment, ActivityEvent (Phase 2); and BusinessEvent,
-OperatorInsight, ActionProposal (Phase 3) are implemented** — see
-`prisma/schema.prisma`, `docs/identity-and-tenancy.md`,
-`docs/accounts-receivable.md`, and `docs/operator-foundation.md` for the
+Invoice, Payment, ActivityEvent (Phase 2); BusinessEvent,
+OperatorInsight, ActionProposal (Phase 3); and Communication,
+DeliveryAttempt (Phase 4) are implemented** — see `prisma/schema.prisma`,
+`docs/identity-and-tenancy.md`, `docs/accounts-receivable.md`,
+`docs/operator-foundation.md`, and `docs/communications.md` for the
 actual schemas and design rationale. Everything else below
 (CollectionSequence, PaymentPromise, Subscription) is design direction
-for Phase 4+, not implemented yet. This document exists so later phases
+for Phase 5+, not implemented yet. This document exists so later phases
 have a shared target instead of inventing the domain ad hoc.
 
 ## Conceptual flow
@@ -16,11 +17,13 @@ have a shared target instead of inventing the domain ad hoc.
 Organization → Customers → Invoices → Risk Analysis → Collection Actions → Payment → Analytics
 ```
 
-Phase 3 implements the "Risk Analysis → Collection Actions" step up to
-the point of human approval:
+Phase 3 implements "Risk Analysis → Collection Actions" up to human
+approval; Phase 4 carries it through to a real sent email:
 
 ```
-Invoice (overdue) → BusinessEvent → OperatorInsight → ActionProposal → human approval
+Invoice (overdue) → BusinessEvent → OperatorInsight → ActionProposal
+  → [approve] → Communication draft → [review/edit] → [Send] → EmailProvider
+  → DeliveryAttempt → Communication SENT → ActionProposal EXECUTED
 ```
 
 ## Entities
@@ -66,18 +69,33 @@ Invoice (overdue) → BusinessEvent → OperatorInsight → ActionProposal → h
   `priority` plus a summary that is deterministic by default and may be
   AI-enriched (wording only, schema-validated) when AI is enabled. One per
   `BusinessEvent`.
-- **ActionProposal** *(implemented, Phase 3)* — a proposed action
-  (`SEND_PAYMENT_REMINDER` is the only type Phase 3 allows) awaiting human
-  approval or dismissal. `EXECUTED`/`FAILED` statuses exist in the schema
-  for a future phase's execution step but are not reachable yet — Phase 3
-  never sends anything, even after approval. See
-  `docs/operator-foundation.md#action-safety` and `#approval-workflow`.
-- **Reminder** — the actual collection communication (subject/body,
-  delivery channel, send status) sent once an `ActionProposal` is
-  approved. Not modeled yet — Phase 4, once there's an `EmailProvider` to
-  send through.
-- **CollectionSequence** — rules describing when reminders fire relative to
-  an invoice's due date. Phase 4.
+- **ActionProposal** *(implemented, Phase 3, extended Phase 4)* — a
+  proposed action (`SEND_PAYMENT_REMINDER` is the only type allowed)
+  awaiting human approval or dismissal. `EXECUTED` is reachable starting
+  Phase 4 — set only after a `Communication`'s send is *confirmed*
+  successful, never on approval and never on an ambiguous outcome.
+  `FAILED` remains unreachable — a failed/uncertain send leaves the
+  proposal `APPROVED`; failure belongs to the `Communication`/
+  `DeliveryAttempt` history, which can be retried. See
+  `docs/operator-foundation.md#action-safety`,
+  `docs/communications.md#action-proposal-integration`.
+- **Communication** *(implemented, Phase 4)* — the "Reminder" concept
+  from earlier drafts of this document, actually built: one email
+  (`channel: EMAIL`, `purpose: PAYMENT_REMINDER` — the only members of
+  each enum) drafted for exactly one approved `ActionProposal`
+  (`@unique` on `actionProposalId`). Recipient/subject/body are
+  snapshotted and frozen once sending starts — see
+  `docs/communications.md#state-machine`.
+- **DeliveryAttempt** *(implemented, Phase 4)* — one row per actual
+  dispatch attempt (initial send or retry), never overwritten, so the
+  full attempt history survives any number of retries. See
+  `docs/communications.md#delivery-semantics` for why this exists instead
+  of a single mutable "last attempt" field on `Communication`.
+- **CollectionSequence** — rules describing when reminders fire relative
+  to an invoice's due date, and the scheduling to fire them
+  automatically. Phase 4 deliberately built only the manual, one-at-a-time
+  send path (`docs/communications.md#explicitly-out-of-scope-in-phase-4`);
+  sequencing/automation is a later phase.
 - **PaymentPromise** — a customer's promise to pay by a specific date.
   Manual entry first (Phase 5); automatic extraction from replies is a
   later capability layered on top via the AI provider.

@@ -4,6 +4,21 @@ import { prisma } from "@/server/db/client";
 import { recordActivityEvent } from "@/server/ar/activity";
 import { InvalidActionProposalTransitionError, OperatorResourceNotFoundError } from "./errors";
 
+/**
+ * Single tenant-scoped proposal lookup with the context the Action Center
+ * detail page (`/app/[orgSlug]/actions/[proposalId]`) needs to render a
+ * review/send flow — see src/server/communications/draft.ts for how a
+ * SEND_PAYMENT_REMINDER proposal becomes a Communication.
+ */
+export async function getActionProposal(organizationId: string, proposalId: string) {
+  const proposal = await prisma.actionProposal.findFirst({
+    where: { id: proposalId, organizationId },
+    include: { invoice: { include: { customer: true } }, customer: true, insight: true },
+  });
+  if (!proposal) throw new OperatorResourceNotFoundError("Action proposal");
+  return proposal;
+}
+
 const DECISION_LABEL: Record<"APPROVED" | "DISMISSED", string> = {
   APPROVED: "approved",
   DISMISSED: "dismissed",
@@ -121,16 +136,17 @@ export async function listPendingActionProposals(organizationId: string) {
 const RECENTLY_DECIDED_LIMIT = 20;
 
 /**
- * Proposals a human has already approved or dismissed, most recent first —
- * shown alongside the pending list so the Action Center stays honest about
- * what happened to a decision instead of the row just disappearing. See
- * docs/operator-foundation.md#action-center-ui.
+ * Proposals a human has already approved, dismissed, or (Phase 4) sent,
+ * most recent first — shown alongside the pending list so the Action
+ * Center stays honest about what happened to a decision instead of the
+ * row just disappearing. See docs/operator-foundation.md#action-center-ui
+ * and docs/communications.md for the APPROVED -> ... -> EXECUTED path.
  */
 export async function listRecentlyDecidedActionProposals(organizationId: string, take = RECENTLY_DECIDED_LIMIT) {
   return prisma.actionProposal.findMany({
-    where: { organizationId, status: { in: ["APPROVED", "DISMISSED"] } },
+    where: { organizationId, status: { in: ["APPROVED", "DISMISSED", "EXECUTED"] } },
     include: { invoice: { include: { customer: true } }, customer: true, insight: true },
-    orderBy: { decidedAt: "desc" },
+    orderBy: [{ decidedAt: "desc" }, { createdAt: "desc" }],
     take,
   });
 }

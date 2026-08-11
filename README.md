@@ -5,15 +5,18 @@ employees) that helps them track accounts receivable, spot payment risk
 early, and automate collection follow-up — without replacing the accounting
 software they already use.
 
-**Project status: Phase 3 — Operator Foundation.** Authentication,
-organizations, tenant isolation, customers, invoices, payments, and a
-real AR dashboard are implemented (Phase 1–2). Phase 3 adds an
-event → insight → proposal → human-approval pipeline (an Action Center
-that proposes payment reminders for overdue invoices) and a
-provider-agnostic AI Gateway — but **nothing is ever sent
-automatically**: every proposal requires human approval, and approving
-one still doesn't send anything yet. See
-[docs/operator-foundation.md](./docs/operator-foundation.md) and
+**Project status: Phase 4 — Communications Foundation + Email
+Execution.** Authentication, organizations, tenant isolation, customers,
+invoices, payments, and a real AR dashboard are implemented (Phase 1–2).
+Phase 3 added an event → insight → proposal → human-approval pipeline (an
+Action Center that proposes payment reminders for overdue invoices) and a
+provider-agnostic AI Gateway. Phase 4 carries an approved proposal the
+rest of the way to a real sent email — but **approval never sends
+anything by itself**: a human reviews an editable draft and clicks Send
+as a separate, explicit step, and the UI is always honest about delivery
+state (including "uncertain" when a provider outcome genuinely can't be
+confirmed). See [docs/communications.md](./docs/communications.md),
+[docs/operator-foundation.md](./docs/operator-foundation.md), and
 [ROADMAP.md](./ROADMAP.md) for what's next.
 
 ## Tech stack
@@ -22,13 +25,16 @@ one still doesn't send anything yet. See
 - **UI**: Tailwind CSS, shadcn/ui-compatible component architecture
 - **Database**: PostgreSQL via Prisma — User, Organization, OrganizationMember,
   Customer, Invoice, Payment, ActivityEvent, BusinessEvent, OperatorInsight,
-  ActionProposal
+  ActionProposal, Communication, DeliveryAttempt
 - **Auth**: Auth.js v5 (Credentials + JWT sessions), bcrypt password hashing
 - **Money**: integer minor units as `BigInt` — never floating point; see
   [docs/accounts-receivable.md](./docs/accounts-receivable.md)
 - **AI**: provider-agnostic Gateway (`AI_PROVIDER=none` by default, no
   credentials required to run the app); see
   [docs/ai-architecture.md](./docs/ai-architecture.md)
+- **Email**: provider-agnostic Gateway over SMTP (`EMAIL_PROVIDER=none` by
+  default, no credentials required to run the app or draft/preview
+  reminders); see [docs/communications.md](./docs/communications.md)
 - **Validation**: Zod
 - **Testing**: Vitest, including real-database tenant-isolation and
   concurrency tests
@@ -92,6 +98,7 @@ locally, including the separate test database integration tests use.
 - [docs/identity-and-tenancy.md](./docs/identity-and-tenancy.md) — auth, tenancy, authorization design
 - [docs/accounts-receivable.md](./docs/accounts-receivable.md) — money representation, invoice lifecycle, concurrency
 - [docs/operator-foundation.md](./docs/operator-foundation.md) — event → insight → proposal → approval pipeline
+- [docs/communications.md](./docs/communications.md) — draft → review → send email, delivery semantics, idempotency
 - [docs/domain-model.md](./docs/domain-model.md) — core domain entities
 - [docs/ai-architecture.md](./docs/ai-architecture.md) — AI provider abstraction
 - [docs/provider-strategy.md](./docs/provider-strategy.md) — external provider boundaries

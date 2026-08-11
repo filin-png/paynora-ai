@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import type { AIRequest } from "@/server/ai/types";
-import type { DeterministicInvoiceContext } from "./context";
+import type { DeterministicInvoiceContext } from "@/server/ar/reminder-context";
 
 export const reminderInsightOutputSchema = z.object({
   tone: z.enum(["friendly", "professional", "firm"]),

@@ -1,0 +1,280 @@
+import type {
+  ActionProposal,
+  Communication,
+  CommunicationStatus,
+  DeliveryAttempt,
+  DeliveryFailureCategory,
+} from "@prisma/client";
+
+import { recordActivityEvent } from "@/server/ar/activity";
+import { prisma } from "@/server/db/client";
+import { EmailProviderRejectedError } from "@/server/email/errors";
+import { dispatchEmail } from "@/server/email/gateway";
+import { getSenderAddress, resolveEmailProvider } from "@/server/email/service";
+import type { EmailProvider } from "@/server/email/types";
+import { CommunicationResourceNotFoundError, InvalidCommunicationTransitionError } from "./errors";
+
+export type SendCommunicationOptions = {
+  /**
+   * Must be true when the communication's current status is UNCERTAIN.
+   * There is no other way to resend from UNCERTAIN — see
+   * docs/communications.md#unknown-outcomes. Has no effect from any other
+   * status (DRAFT/FAILED are always retryable without it).
+   */
+  acknowledgeUncertainRisk?: boolean;
+  /**
+   * Test-only dependency injection point. Production code paths never
+   * pass this — they always go through `resolveEmailProvider()`, which is
+   * what enforces EMAIL_PROVIDER/PAYNORA_EMAIL_FROM configuration. Tests
+   * use it to exercise success/rejection/timeout outcomes deterministically
+   * via src/server/email/providers/fake.ts without a real network call —
+   * see src/server/communications/send.test.ts.
+   */
+  provider?: EmailProvider;
+};
+
+export type SendCommunicationResult = {
+  communication: Communication;
+  deliveryAttempt: DeliveryAttempt;
+  /** Set only when this call is the one that moved the proposal to EXECUTED. */
+  actionProposal: ActionProposal | null;
+};
+
+export async function listDeliveryAttempts(organizationId: string, communicationId: string) {
+  return prisma.deliveryAttempt.findMany({
+    where: { organizationId, communicationId },
+    orderBy: { attemptNumber: "asc" },
+  });
+}
+
+const ALWAYS_SENDABLE_FROM: CommunicationStatus[] = ["DRAFT", "FAILED"];
+const UNCERTAIN_SENDABLE_FROM: CommunicationStatus[] = ["DRAFT", "FAILED", "UNCERTAIN"];
+
+/**
+ * The one function that ever calls an EmailProvider. Two-phase by design
+ * — see docs/communications.md#delivery-semantics for why a single DB
+ * transaction cannot safely wrap the external call:
+ *
+ * 1. Atomically claim the communication (DRAFT/FAILED[/UNCERTAIN with
+ *    `acknowledgeUncertainRisk`] -> SENDING) and create a PENDING
+ *    DeliveryAttempt, in one transaction. Only one of any number of
+ *    concurrent callers can win this claim — Postgres serializes
+ *    concurrent UPDATEs on the same row and re-evaluates the WHERE clause
+ *    against the winner's committed state (same technique as
+ *    src/server/operator/approval.ts's PENDING -> APPROVED/DISMISSED
+ *    fix) — so a double-click or two concurrent requests can never both
+ *    reach step 2; the loser gets a clear
+ *    InvalidCommunicationTransitionError instead.
+ * 2. Call the EmailProvider *outside* any transaction, using the content
+ *    this call just claimed (never a stale read — see
+ *    src/server/communications/editing.ts for why a concurrent edit can't
+ *    smuggle different content in here).
+ * 3. Record the outcome in a second transaction: a confirmed success ->
+ *    SENT (and the ActionProposal -> EXECUTED, the only place that
+ *    happens); a definite `EmailProviderRejectedError` -> FAILED;
+ *    anything else (timeout, network error, unrecognized exception) ->
+ *    UNCERTAIN — never treated as a confirmed failure, never
+ *    auto-retried.
+ *
+ * If step 3 itself fails to commit after a successful provider call
+ * (process crash, DB outage), the row is left at SENDING — which the
+ * Action Center treats identically to UNCERTAIN, since a resting
+ * `SENDING` a user can actually see is definitionally stuck (a live
+ * in-flight request blocks the Server Action that would show it). This
+ * is a documented, accepted limitation, not a solved problem: without an
+ * outbox/reconciler — explicitly out of scope for Phase 4 (no
+ * schedulers) — no single-process app can make a stronger guarantee
+ * here. See docs/communications.md#unknown-outcomes.
+ */
+export async function sendCommunication(
+  organizationId: string,
+  communicationId: string,
+  userId: string,
+  options: SendCommunicationOptions = {},
+): Promise<SendCommunicationResult> {
+  // Resolved and validated *before* any state changes — a misconfigured
+  // or disabled provider must never create a DeliveryAttempt or move the
+  // communication into SENDING. See docs/communications.md#sender-safety.
+  const provider = options.provider ?? resolveEmailProvider();
+  const from = getSenderAddress();
+
+  const allowedFrom = options.acknowledgeUncertainRisk ? UNCERTAIN_SENDABLE_FROM : ALWAYS_SENDABLE_FROM;
+
+  const claimed = await prisma.$transaction(async (tx) => {
+    const claim = await tx.communication.updateMany({
+      where: { id: communicationId, organizationId, status: { in: allowedFrom } },
+      data: { status: "SENDING" },
+    });
+
+    if (claim.count !== 1) {
+      const current = await tx.communication.findFirst({ where: { id: communicationId, organizationId } });
+      if (!current) throw new CommunicationResourceNotFoundError("Communication");
+      if (current.status === "UNCERTAIN" && !options.acknowledgeUncertainRisk) {
+        throw new InvalidCommunicationTransitionError(
+          current.status,
+          "resending after an uncertain delivery outcome requires explicit acknowledgement that this may send a duplicate email",
+        );
+      }
+      if (current.status === "SENDING") {
+        throw new InvalidCommunicationTransitionError(
+          current.status,
+          "a send is already in progress, or a previous attempt never finished recording its outcome — this is not safe to retry automatically",
+        );
+      }
+      throw new InvalidCommunicationTransitionError(current.status, "cannot send from this status");
+    }
+
+    const communication = await tx.communication.findUniqueOrThrow({ where: { id: communicationId } });
+    const attemptNumber = (await tx.deliveryAttempt.count({ where: { communicationId } })) + 1;
+
+    const deliveryAttempt = await tx.deliveryAttempt.create({
+      data: {
+        organizationId,
+        communicationId,
+        attemptNumber,
+        provider: provider.name,
+        idempotencyKey: `${communicationId}:${attemptNumber}`,
+        status: "PENDING",
+      },
+    });
+
+    await recordActivityEvent(tx, {
+      organizationId,
+      type: "COMMUNICATION_SEND_ATTEMPTED",
+      summary: `Payment reminder email send attempt #${attemptNumber} started for invoice ${communication.invoiceId}`,
+      customerId: communication.customerId,
+      invoiceId: communication.invoiceId,
+      metadata: { attemptNumber },
+    });
+
+    return { communication, deliveryAttempt };
+  });
+
+  const { communication, deliveryAttempt } = claimed;
+
+  try {
+    const result = await dispatchEmail(provider, {
+      to: communication.recipient,
+      from,
+      subject: communication.subject,
+      text: communication.body,
+      idempotencyKey: deliveryAttempt.idempotencyKey,
+    });
+    return await finalizeSuccess(organizationId, communication, deliveryAttempt, userId, result.providerMessageId);
+  } catch (error) {
+    if (error instanceof EmailProviderRejectedError) {
+      return await finalizeTerminal(organizationId, communication, deliveryAttempt, {
+        deliveryStatus: "FAILED",
+        communicationStatus: "FAILED",
+        failureCategory: "PROVIDER_REJECTED",
+        failureMessage: error.message,
+        outcome: "FAILED",
+      });
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    return await finalizeTerminal(organizationId, communication, deliveryAttempt, {
+      deliveryStatus: "UNKNOWN",
+      communicationStatus: "UNCERTAIN",
+      failureCategory: "TIMEOUT_OR_UNKNOWN",
+      failureMessage: message,
+      outcome: "UNCERTAIN",
+    });
+  }
+}
+
+async function finalizeSuccess(
+  organizationId: string,
+  communication: Communication,
+  deliveryAttempt: DeliveryAttempt,
+  userId: string,
+  providerMessageId: string | undefined,
+): Promise<SendCommunicationResult> {
+  return prisma.$transaction(async (tx) => {
+    const updatedAttempt = await tx.deliveryAttempt.update({
+      where: { id: deliveryAttempt.id },
+      data: { status: "SUCCESS", providerMessageId, completedAt: new Date() },
+    });
+    const updatedCommunication = await tx.communication.update({
+      where: { id: communication.id },
+      data: { status: "SENT", sentAt: new Date() },
+    });
+    await recordActivityEvent(tx, {
+      organizationId,
+      type: "COMMUNICATION_SENT",
+      summary: `Payment reminder email sent for invoice ${communication.invoiceId}`,
+      customerId: communication.customerId,
+      invoiceId: communication.invoiceId,
+    });
+
+    // Only a *confirmed successful send* executes the proposal — approving
+    // never does (Phase 3), and a failed/uncertain send never does
+    // either. Compare-and-swap for consistency with the rest of the
+    // codebase, even though in normal operation at most one send can ever
+    // succeed per communication (this function's own claim step already
+    // prevents a second concurrent dispatch). Deliberately does not touch
+    // decidedAt/decidedByUserId — those still record who *approved* the
+    // proposal; who triggered the send is recorded on the
+    // ACTION_PROPOSAL_EXECUTED activity event instead.
+    let actionProposal: ActionProposal | null = null;
+    const proposalUpdate = await tx.actionProposal.updateMany({
+      where: { id: communication.actionProposalId, organizationId, status: "APPROVED" },
+      data: { status: "EXECUTED" },
+    });
+    if (proposalUpdate.count === 1) {
+      actionProposal = await tx.actionProposal.findUniqueOrThrow({
+        where: { id: communication.actionProposalId },
+      });
+      await recordActivityEvent(tx, {
+        organizationId,
+        type: "ACTION_PROPOSAL_EXECUTED",
+        summary: `Payment reminder proposal executed for invoice ${communication.invoiceId}`,
+        customerId: communication.customerId,
+        invoiceId: communication.invoiceId,
+        metadata: { sentByUserId: userId },
+      });
+    }
+
+    return { communication: updatedCommunication, deliveryAttempt: updatedAttempt, actionProposal };
+  });
+}
+
+async function finalizeTerminal(
+  organizationId: string,
+  communication: Communication,
+  deliveryAttempt: DeliveryAttempt,
+  outcome: {
+    deliveryStatus: "FAILED" | "UNKNOWN";
+    communicationStatus: "FAILED" | "UNCERTAIN";
+    failureCategory: DeliveryFailureCategory;
+    failureMessage: string;
+    outcome: "FAILED" | "UNCERTAIN";
+  },
+): Promise<SendCommunicationResult> {
+  return prisma.$transaction(async (tx) => {
+    const updatedAttempt = await tx.deliveryAttempt.update({
+      where: { id: deliveryAttempt.id },
+      data: {
+        status: outcome.deliveryStatus,
+        failureCategory: outcome.failureCategory,
+        failureMessage: outcome.failureMessage,
+        completedAt: new Date(),
+      },
+    });
+    const updatedCommunication = await tx.communication.update({
+      where: { id: communication.id },
+      data: { status: outcome.communicationStatus },
+    });
+    await recordActivityEvent(tx, {
+      organizationId,
+      type: "COMMUNICATION_SEND_FAILED",
+      summary:
+        outcome.outcome === "FAILED"
+          ? `Payment reminder email send failed for invoice ${communication.invoiceId}`
+          : `Payment reminder email delivery status uncertain for invoice ${communication.invoiceId}`,
+      customerId: communication.customerId,
+      invoiceId: communication.invoiceId,
+      metadata: { outcome: outcome.outcome, failureCategory: outcome.failureCategory },
+    });
+    return { communication: updatedCommunication, deliveryAttempt: updatedAttempt, actionProposal: null };
+  });
+}
