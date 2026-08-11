@@ -4,8 +4,12 @@
 // Organization, and OrganizationMember. See docs/identity-and-tenancy.md
 // for the design rationale (auth approach, tenant isolation strategy).
 //
-// Domain models for Phase 2+ (Customer, Invoice, Payment, ...) are not
-// added here yet — see docs/domain-model.md.
+// Phase 2 introduces the accounts-receivable core: Customer, Invoice,
+// Payment, ActivityEvent. See docs/accounts-receivable.md for the money
+// representation, currency model, invoice lifecycle, and concurrency
+// strategy — those decisions shape several choices below that aren't
+// self-explanatory from the schema alone (e.g. why outstanding/paid amounts
+// are not columns here).
 
 generator client {
   provider = "prisma-client-js"
@@ -40,7 +44,11 @@ model Organization {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  members OrganizationMember[]
+  members        OrganizationMember[]
+  customers      Customer[]
+  invoices       Invoice[]
+  payments       Payment[]
+  activityEvents ActivityEvent[]
 
   @@map("organizations")
 }
@@ -59,4 +67,105 @@ model OrganizationMember {
   @@unique([userId, organizationId])
   @@index([organizationId])
   @@map("organization_members")
+}
+
+model Customer {
+  id             String    @id @default(cuid())
+  organizationId String
+  name           String
+  email          String?
+  phone          String?
+  companyName    String?
+  notes          String?
+  archivedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoices       Invoice[]
+  activityEvents ActivityEvent[]
+
+  @@index([organizationId])
+  @@index([organizationId, archivedAt])
+  @@map("customers")
+}
+
+enum InvoiceStatus {
+  OPEN
+  CANCELLED
+}
+
+model Invoice {
+  id             String        @id @default(cuid())
+  organizationId String
+  customerId     String
+  number         String
+  currency       String        @db.Char(3)
+  amountMinor    BigInt
+  issueDate      DateTime      @db.Date
+  dueDate        DateTime      @db.Date
+  status         InvoiceStatus @default(OPEN)
+  notes          String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer       Customer        @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  payments       Payment[]
+  activityEvents ActivityEvent[]
+
+  // Invoice numbers are unique per organization, not globally — see
+  // docs/accounts-receivable.md#invoice-numbering.
+  @@unique([organizationId, number])
+  @@index([organizationId, status])
+  @@index([organizationId, dueDate])
+  @@index([customerId])
+  @@map("invoices")
+}
+
+model Payment {
+  id             String   @id @default(cuid())
+  organizationId String
+  invoiceId      String
+  amountMinor    BigInt
+  paidAt         DateTime @db.Date
+  note           String?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoice      Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId])
+  @@index([invoiceId])
+  @@map("payments")
+}
+
+enum ActivityEventType {
+  CUSTOMER_CREATED
+  CUSTOMER_UPDATED
+  CUSTOMER_ARCHIVED
+  INVOICE_CREATED
+  INVOICE_CANCELLED
+  PAYMENT_RECORDED
+  INVOICE_PAID
+}
+
+model ActivityEvent {
+  id             String            @id @default(cuid())
+  organizationId String
+  type           ActivityEventType
+  summary        String
+  metadata       Json?
+  customerId     String?
+  invoiceId      String?
+  createdAt      DateTime          @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  invoice      Invoice?     @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([customerId])
+  @@index([invoiceId])
+  @@map("activity_events")
 }

@@ -5,19 +5,24 @@ employees) that helps them track accounts receivable, spot payment risk
 early, and automate collection follow-up — without replacing the accounting
 software they already use.
 
-**Project status: Phase 1 — Identity & Multi-Tenancy.** Authentication,
-organizations, and tenant isolation are implemented. Accounts receivable
-features (customers, invoices, AR dashboard) are not — see
-[ROADMAP.md](./ROADMAP.md) for what's next.
+**Project status: Phase 2 — Accounts Receivable Core.** Authentication,
+organizations, tenant isolation, customers, invoices, payments, and a
+real AR dashboard are implemented. AI-generated reminders, collection
+automation, and billing are not — see [ROADMAP.md](./ROADMAP.md) for
+what's next.
 
 ## Tech stack
 
 - **Frontend/Backend**: Next.js (App Router), React, TypeScript (strict mode)
 - **UI**: Tailwind CSS, shadcn/ui-compatible component architecture
-- **Database**: PostgreSQL via Prisma — User, Organization, OrganizationMember
+- **Database**: PostgreSQL via Prisma — User, Organization, OrganizationMember,
+  Customer, Invoice, Payment, ActivityEvent
 - **Auth**: Auth.js v5 (Credentials + JWT sessions), bcrypt password hashing
+- **Money**: integer minor units as `BigInt` — never floating point; see
+  [docs/accounts-receivable.md](./docs/accounts-receivable.md)
 - **Validation**: Zod
-- **Testing**: Vitest, including real-database tenant-isolation tests
+- **Testing**: Vitest, including real-database tenant-isolation and
+  concurrency tests
 - **CI**: GitHub Actions
 
 The project is a modular monolith on purpose — see
@@ -76,6 +81,7 @@ locally, including the separate test database integration tests use.
 - [SECURITY.md](./SECURITY.md) — security baseline and reporting
 - [DEPLOYMENT.md](./DEPLOYMENT.md) — local and future deployment setup
 - [docs/identity-and-tenancy.md](./docs/identity-and-tenancy.md) — auth, tenancy, authorization design
+- [docs/accounts-receivable.md](./docs/accounts-receivable.md) — money representation, invoice lifecycle, concurrency
 - [docs/domain-model.md](./docs/domain-model.md) — core domain entities
 - [docs/ai-architecture.md](./docs/ai-architecture.md) — AI provider abstraction
 - [docs/provider-strategy.md](./docs/provider-strategy.md) — external provider boundaries

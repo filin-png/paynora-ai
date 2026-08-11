@@ -15,8 +15,8 @@ not a later add-on.
   the acting user is authorized for the organization the data belongs to.
 - **Tenant isolation is a hard requirement.** Organization A must never be
   able to read or modify Organization B's data, under any code path.
-  Automated tests cover this once multi-tenant data access exists
-  (Phase 1).
+  Automated tests cover every tenant-owned resource — memberships (Phase 1)
+  and customers/invoices/payments/activity (Phase 2).
 - **Secrets never enter source control.** `.env*` files are gitignored
   except `.env.example`, which documents variable names only — no real
   values. See `.env.example` for the current (empty) list.
@@ -31,7 +31,41 @@ not a later add-on.
   observability infrastructure is added) excludes credentials, tokens, and
   full customer payment details.
 
-## Current status (Phase 1)
+## Current status (Phase 2)
+
+- **Financial amounts are never trusted from the client.** Every
+  Server Action re-derives outstanding balances and validates amounts
+  server-side (`amountMinorSchema`, `parseAmountInput` — see
+  `docs/accounts-receivable.md`); nothing about a payment's validity is
+  decided from a value the browser calculated or sent unchecked.
+- **Overpayment and race conditions**: `recordPayment` locks the invoice
+  row (`SELECT ... FOR UPDATE`) for the transaction's duration, so two
+  concurrent payment submissions against the same invoice cannot jointly
+  overpay it. Verified with a real concurrent-request test
+  (`src/server/ar/payments.test.ts`), not just documented — see
+  `docs/accounts-receivable.md#concurrency`.
+- **Every Phase 2 resource is tenant-scoped** (`Customer`, `Invoice`,
+  `Payment`, `ActivityEvent`): all lookups filter by `organizationId`
+  alongside the resource id, so a cross-tenant id fails exactly like a
+  nonexistent one (`ArResourceNotFoundError`) — the same enumeration-safe
+  pattern as Phase 1's organization access checks. Covered by tenant
+  isolation tests in every `src/server/ar/*.test.ts` file.
+- **Mass assignment**: Server Actions read named `FormData` fields
+  individually and pass them through a Zod schema — never a raw spread of
+  client-submitted data into a Prisma `data:` object.
+- **Archived customers**: archiving excludes a customer from the invoice
+  creation picker but never touches their existing invoices or payments —
+  archival cannot be used to make it look like money owed disappeared.
+- **Financial history is not deletable** through normal application code
+  paths: `Invoice.customerId` and `Payment.invoiceId` foreign keys are
+  `ON DELETE RESTRICT`, and there is no invoice or payment delete
+  operation at all — see `docs/accounts-receivable.md#archival--deletion`.
+- **Input validation**: customer, invoice, and payment input all go
+  through Zod schemas (`src/server/ar/customers.ts`, `invoices.ts`,
+  `payments.ts`) before touching the database, including cross-field
+  checks (due date on/after issue date) and currency allowlisting.
+
+## Previously established (Phase 1)
 
 - **Passwords** are hashed with bcrypt (cost 12, `src/server/auth/password.ts`)
   and never stored or logged in plain text. Login compares against a

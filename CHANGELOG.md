@@ -5,6 +5,68 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — Phase 2: Accounts Receivable Core
+
+- `cancelInvoice` now locks the invoice row (`SELECT ... FOR UPDATE`, the
+  same lock `recordPayment` takes, extracted into a shared
+  `lockInvoiceForUpdate`) and re-checks recorded payments only after
+  acquiring that lock, instead of reading them before the transaction
+  started. Previously, a payment recorded concurrently with a
+  cancellation could commit after `cancelInvoice`'s initial (unlocked)
+  check but before its status update, leaving a `CANCELLED` invoice with
+  a payment against it. Both operations now serialize against each other
+  correctly; whichever commits first determines the outcome, and the
+  other is rejected (`InvoiceCancelledError` or the new
+  `InvoiceHasPaymentsError`). Verified with a concurrency test that fires
+  real concurrent `cancelInvoice`/`recordPayment` calls and asserts the
+  invariant holds regardless of which one wins — see
+  `docs/accounts-receivable.md#concurrency`.
+
+### Added — Phase 2: Accounts Receivable Core
+
+- `Customer`, `Invoice`, `Payment`, `ActivityEvent` Prisma models and their
+  migration, including hand-added CHECK constraints (positive amounts,
+  due date on/after issue date, currency format).
+- Money represented as integer minor units stored as `BigInt` (Postgres
+  `BIGINT`) — not the `Int` originally drafted, which was rejected during
+  review as an artificial ~21.4M-major-unit cap unacceptable for a
+  commercial product. `bigint` never crosses a Server Action/Client
+  Component boundary; only formatted strings or raw form input do. See
+  `docs/accounts-receivable.md#money-representation`.
+- Currency as a validated 3-letter allowlist (`RUB`/`USD`/`EUR`) living on
+  the invoice; `Payment` has no currency field of its own, eliminating a
+  mismatch invariant by construction rather than checking it at runtime.
+- Invoice lifecycle: only `OPEN`/`CANCELLED` persisted; paid, partially
+  paid, and overdue are derived from amount, due date, and recorded
+  payments — never a second, driftable source of truth.
+- Outstanding balance computed live from persisted payments on every
+  read, never stored as a mutable column.
+- Business-date semantics (`@db.Date`, string comparison) for issue/due/
+  paid dates, avoiding UTC/local timezone bugs in overdue determination.
+- Concurrency-safe payment recording: `SELECT ... FOR UPDATE` row lock
+  inside a transaction, so two payments recorded at the same time against
+  the same invoice cannot jointly overpay it — verified with a test that
+  fires two real concurrent requests, not just documented.
+- Deterministic (non-AI) "invoices requiring attention": overdue, then due
+  within 7 days.
+- Append-only activity timeline, tenant-isolated, reused as-is by every
+  Phase 2 entity and designed to extend to Phase 3+ automation events
+  without a redesign.
+- Customer and Invoice UI (list/create/detail/edit/archive; list/create/
+  detail with filters and overdue indication), payment recording on
+  invoice detail, and a real AR dashboard (org home page) — grouped by
+  currency, no fabricated data, clean empty states. Org settings (members,
+  rename) moved to `/app/[orgSlug]/settings` to make room for the
+  dashboard as the org home page.
+- 78 new automated tests (real Postgres) covering customer/invoice/
+  payment CRUD and validation, tenant isolation for every Phase 2
+  resource, currency grouping, date boundaries, and the payment
+  concurrency race — 115 total across the project.
+- New `docs/accounts-receivable.md`; README, ARCHITECTURE, SECURITY,
+  DEPLOYMENT, and `docs/domain-model.md` updated to match.
+- `tsconfig.json` target bumped to `ES2022` (from `ES2017`) — required for
+  `BigInt` literal syntax; Node 22 supports it natively.
+
 ### Added — Phase 1: Identity & Multi-Tenancy
 
 - Authentication via Auth.js v5 (Credentials provider, JWT sessions),
