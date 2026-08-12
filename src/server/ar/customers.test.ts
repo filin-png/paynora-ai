@@ -157,4 +157,16 @@ describe("listCustomers — pagination", () => {
     // docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-6.
     expect(result).toHaveLength(1);
   });
+
+  it("a cursor id belonging to another organization's customer never leaks that organization's data", async () => {
+    const { organization: orgA } = await createTestOrganization("Org A");
+    const { organization: orgB } = await createTestOrganization("Org B");
+    const customerB = await createCustomer(orgB.id, { name: "Org B Customer" });
+    await createCustomer(orgA.id, { name: "Org A Customer" });
+
+    const result = await listCustomers(orgA.id, { take: 10, cursor: customerB.id });
+
+    expect(result.every((c) => c.organizationId === orgA.id)).toBe(true);
+    expect(result.some((c) => c.id === customerB.id)).toBe(false);
+  });
 });

@@ -208,6 +208,22 @@ describe("listInvoicesWithFinancials — pagination", () => {
     expect(page).toHaveLength(2);
     expect(page.every(({ invoice }) => invoice.customerId === customerA.id)).toBe(true);
   });
+
+  it("a cursor id belonging to another organization's invoice never leaks that organization's data", async () => {
+    const { organization: orgA, customer: customerA } = await setupOrgWithCustomer("Org A");
+    const { organization: orgB, customer: customerB } = await setupOrgWithCustomer("Org B");
+    const invoiceB = await createInvoice(orgB.id, { ...validInvoice, number: "B-1", customerId: customerB.id });
+    await createInvoice(orgA.id, { ...validInvoice, number: "A-1", customerId: customerA.id });
+
+    // orgA queries using orgB's real invoice id as the pagination cursor —
+    // this must never surface orgB's invoice, and must behave exactly
+    // like a nonexistent/meaningless cursor, not throw or leak a signal
+    // distinguishing "exists in another org" from "doesn't exist at all".
+    const result = await listInvoicesWithFinancials(orgA.id, "all", { take: 10, cursor: invoiceB.id });
+
+    expect(result.every(({ invoice }) => invoice.organizationId === orgA.id)).toBe(true);
+    expect(result.some(({ invoice }) => invoice.id === invoiceB.id)).toBe(false);
+  });
 });
 
 describe("cancelInvoice", () => {

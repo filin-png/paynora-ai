@@ -155,4 +155,19 @@ describe("listInvoiceActivity / listCustomerActivity — pagination", () => {
     const ids = [...firstPage, ...secondPage].map((e) => e.id);
     expect(new Set(ids).size).toBe(4);
   });
+
+  it("a cursor id belonging to another organization's activity event never leaks that organization's data", async () => {
+    const { organization: orgA } = await createTestOrganization("Org A");
+    const { organization: orgB } = await createTestOrganization("Org B");
+    const customerA = await createCustomer(orgA.id, { name: "A Customer" });
+    const customerB = await createCustomer(orgB.id, { name: "B Customer" });
+    const eventB = await prisma.activityEvent.findFirstOrThrow({
+      where: { organizationId: orgB.id, customerId: customerB.id },
+    });
+
+    const result = await listCustomerActivity(orgA.id, customerA.id, { take: 10, cursor: eventB.id });
+
+    expect(result.every((e) => e.organizationId === orgA.id)).toBe(true);
+    expect(result.some((e) => e.id === eventB.id)).toBe(false);
+  });
 });
