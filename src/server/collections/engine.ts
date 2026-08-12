@@ -9,7 +9,7 @@ import {
 import { approveActionProposal } from "@/server/operator/approval";
 import { ensureInsightForInvoiceOverdueEvent } from "@/server/operator/insights";
 import { ensureReminderProposalForInsight } from "@/server/operator/proposals";
-import { prepareReminderCommunication } from "@/server/communications/draft";
+import { prepareReminderCommunication, type AiOverride } from "@/server/communications/draft";
 import { sendCommunication } from "@/server/communications/send";
 import { recordActivityEvent } from "@/server/ar/activity";
 import { daysBetween, toDateOnlyString } from "@/server/ar/dates";
@@ -26,6 +26,14 @@ const UNIQUE_CONSTRAINT_VIOLATION = "P2002";
 export type AutomationTickSummary = {
   globallyDisabled: boolean;
   organizationsProcessed: number;
+  // Phase 9 (docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-5): how many
+  // automation-enabled organizations were NOT processed this invocation
+  // because they didn't fit in this call's batch — 0 means the batch
+  // covered every eligible organization. Not "lost" work: the next
+  // invocation picks up the least-recently-processed organizations first
+  // (Organization.automationLastTickAt), so this is a queue depth, not a
+  // skip count.
+  organizationsRemaining: number;
   scanned: number;
   enrolled: number;
   claimed: number;
@@ -40,6 +48,7 @@ function emptySummary(globallyDisabled: boolean): AutomationTickSummary {
   return {
     globallyDisabled,
     organizationsProcessed: 0,
+    organizationsRemaining: 0,
     scanned: 0,
     enrolled: 0,
     claimed: 0,
@@ -70,58 +79,168 @@ function emptySummary(globallyDisabled: boolean): AutomationTickSummary {
  * load-time singleton — see src/lib/env.ts — so this is the same
  * dependency-injection escape hatch `now` is, applied to a second
  * non-deterministic/environmental input).
+ *
+ * Phase 9 bounded-batch model (docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md
+ * P1-5): a global tick (no `options.organizationId`) processes at most
+ * `options.batchSize` (default `AUTOMATION_BATCH_SIZE`) organizations,
+ * least-recently-processed first (`Organization.automationLastTickAt`,
+ * updated after every org this invocation touches, success or failure).
+ * This makes one invocation's work bounded and finite regardless of how
+ * many organizations exist — the *next* invocation picks up where this
+ * one left off, fairly, without any request/response cursor token to
+ * lose. One organization's own unexpected exception (e.g. a malformed
+ * policy blowing up the bulk fetch, not just a single sequence's
+ * processing) is caught per-organization so it can never abort the rest
+ * of the batch — see the try/catch inside the loop below, a level above
+ * `processOrganizationTick`'s existing per-*sequence* isolation.
+ *
+ * Every invocation persists one `AutomationTickRun` row — a durable
+ * heartbeat `src/server/collections/health.ts` reads from, so "is
+ * automation actually running" is answerable from the database, not from
+ * whoever happens to be watching a log stream.
  */
 export async function runAutomationTick(
   now: Date = new Date(),
   options: {
     organizationId?: string;
     globalEnabled?: boolean;
+    batchSize?: number;
     emailProvider?: EmailProvider;
     messagingProvider?: MessagingProvider;
+    aiOverride?: AiOverride;
   } = {},
 ): Promise<AutomationTickSummary> {
+  const wallClockStartedAt = new Date();
   const startedAt = Date.now();
   const globalEnabled = options.globalEnabled ?? env.AUTOMATION_ENABLED;
   if (!globalEnabled) {
     const summary = emptySummary(true);
     logTickSummary(options.organizationId, summary, Date.now() - startedAt);
+    await persistTickRun(wallClockStartedAt, Date.now() - startedAt, summary, false, null);
     return summary;
   }
 
   const today = toDateOnlyString(now);
   const summary = emptySummary(false);
 
-  const targetOrganizationIds = await resolveTargetOrganizationIds(options.organizationId);
-  for (const organizationId of targetOrganizationIds) {
-    summary.organizationsProcessed += 1;
-    const counts = await processOrganizationTick(organizationId, today, options.emailProvider, options.messagingProvider);
-    summary.scanned += counts.scanned;
-    summary.enrolled += counts.enrolled;
-    summary.claimed += counts.claimed;
-    summary.executed += counts.executed;
-    summary.skipped += counts.skipped;
-    summary.stopped += counts.stopped;
-    summary.blocked += counts.blocked;
-    summary.failed += counts.failed;
-  }
+  try {
+    const batchSize = options.batchSize ?? env.AUTOMATION_BATCH_SIZE;
+    const { ids: targetOrganizationIds, totalEligible } = await resolveTargetOrganizations(
+      options.organizationId,
+      batchSize,
+    );
+    summary.organizationsRemaining = Math.max(0, totalEligible - targetOrganizationIds.length);
 
-  logTickSummary(options.organizationId, summary, Date.now() - startedAt);
-  return summary;
+    for (const organizationId of targetOrganizationIds) {
+      summary.organizationsProcessed += 1;
+      try {
+        const counts = await processOrganizationTick(
+          organizationId,
+          today,
+          options.emailProvider,
+          options.messagingProvider,
+          options.aiOverride,
+        );
+        summary.scanned += counts.scanned;
+        summary.enrolled += counts.enrolled;
+        summary.claimed += counts.claimed;
+        summary.executed += counts.executed;
+        summary.skipped += counts.skipped;
+        summary.stopped += counts.stopped;
+        summary.blocked += counts.blocked;
+        summary.failed += counts.failed;
+      } catch (error) {
+        // One organization's bulk-fetch or policy data blowing up must
+        // never take the rest of the batch down with it.
+        summary.failed += 1;
+        logOrganizationFailure(organizationId, error);
+      } finally {
+        await prisma.organization
+          .update({ where: { id: organizationId }, data: { automationLastTickAt: wallClockStartedAt } })
+          .catch(() => {
+            // Never let cursor bookkeeping itself break the tick.
+          });
+      }
+    }
+
+    logTickSummary(options.organizationId, summary, Date.now() - startedAt);
+    await persistTickRun(wallClockStartedAt, Date.now() - startedAt, summary, false, null);
+    return summary;
+  } catch (error) {
+    // A failure here is not one organization's problem — it's the tick
+    // infrastructure itself (e.g. the initial organization-selection
+    // query failing). Recorded distinctly (`crashed: true`) so a health
+    // check can tell "the scheduler ran but some orgs failed" apart from
+    // "the scheduler itself broke," then re-thrown so the calling HTTP
+    // route still reports failure to whatever's watching it.
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[automation] tick crashed organizationId=${options.organizationId ?? "ALL"}: ${message}`);
+    await persistTickRun(wallClockStartedAt, Date.now() - startedAt, summary, true, message);
+    throw error;
+  }
 }
 
-async function resolveTargetOrganizationIds(organizationId?: string): Promise<string[]> {
+async function resolveTargetOrganizations(
+  organizationId: string | undefined,
+  batchSize: number,
+): Promise<{ ids: string[]; totalEligible: number }> {
   if (organizationId) {
     const org = await prisma.organization.findUnique({
       where: { id: organizationId },
       select: { id: true, automationEnabled: true },
     });
-    return org?.automationEnabled ? [org.id] : [];
+    const eligible = org?.automationEnabled ? [org.id] : [];
+    return { ids: eligible, totalEligible: eligible.length };
   }
-  const orgs = await prisma.organization.findMany({
-    where: { automationEnabled: true },
-    select: { id: true },
-  });
-  return orgs.map((org) => org.id);
+  const [batch, totalEligible] = await Promise.all([
+    prisma.organization.findMany({
+      where: { automationEnabled: true },
+      // Least-recently-processed first; a stable `id` tiebreaker keeps
+      // ordering deterministic across ties (most commonly many `null`s —
+      // organizations never processed yet) rather than letting Postgres
+      // reorder them arbitrarily between calls.
+      orderBy: [{ automationLastTickAt: { sort: "asc", nulls: "first" } }, { id: "asc" }],
+      take: batchSize,
+      select: { id: true },
+    }),
+    prisma.organization.count({ where: { automationEnabled: true } }),
+  ]);
+  return { ids: batch.map((org) => org.id), totalEligible };
+}
+
+async function persistTickRun(
+  startedAt: Date,
+  durationMs: number,
+  summary: AutomationTickSummary,
+  crashed: boolean,
+  errorMessage: string | null,
+): Promise<void> {
+  await prisma.automationTickRun
+    .create({
+      data: {
+        startedAt,
+        completedAt: new Date(),
+        durationMs,
+        globallyDisabled: summary.globallyDisabled,
+        organizationsProcessed: summary.organizationsProcessed,
+        organizationsRemaining: summary.organizationsRemaining,
+        scanned: summary.scanned,
+        enrolled: summary.enrolled,
+        claimed: summary.claimed,
+        executed: summary.executed,
+        skipped: summary.skipped,
+        stopped: summary.stopped,
+        blocked: summary.blocked,
+        failed: summary.failed,
+        crashed,
+        errorMessage: errorMessage?.slice(0, 2000),
+      },
+    })
+    .catch((error: unknown) => {
+      // Telemetry persistence must never be the reason a tick "fails".
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[automation] failed to persist tick run telemetry: ${message}`);
+    });
 }
 
 type OrgCounts = {
@@ -156,6 +275,7 @@ async function processOrganizationTick(
   today: string,
   emailProvider?: EmailProvider,
   messagingProvider?: MessagingProvider,
+  aiOverride?: AiOverride,
 ): Promise<OrgCounts> {
   const counts = emptyOrgCounts();
 
@@ -220,6 +340,7 @@ async function processOrganizationTick(
         isBlocked: blockedInvoiceIds.has(sequence.invoiceId),
         emailProvider,
         messagingProvider,
+        aiOverride,
       });
       counts.claimed += outcome.claimed;
       counts.executed += outcome.executed;
@@ -249,6 +370,7 @@ type SequenceTickContext = {
   isBlocked: boolean;
   emailProvider?: EmailProvider;
   messagingProvider?: MessagingProvider;
+  aiOverride?: AiOverride;
 };
 
 /**
@@ -265,7 +387,7 @@ async function processSequenceTick(
   ctx: SequenceTickContext,
 ): Promise<SequenceOutcome> {
   const outcome = emptyOutcome();
-  const { financialsEntry, policy, steps, executedStepIds, isBlocked, emailProvider, messagingProvider } = ctx;
+  const { financialsEntry, policy, steps, executedStepIds, isBlocked, emailProvider, messagingProvider, aiOverride } = ctx;
 
   if (!financialsEntry) return outcome;
   const { invoice, financials } = financialsEntry;
@@ -350,7 +472,15 @@ async function processSequenceTick(
   outcome.executed = 1;
 
   if (policy.automationMode === "AUTO_SEND" && policy.autoSendEnabledByUserId) {
-    await executeAutoSend(sequence, proposal.id, policy.autoSendEnabledByUserId, today, emailProvider, messagingProvider);
+    await executeAutoSend(
+      sequence,
+      proposal.id,
+      policy.autoSendEnabledByUserId,
+      today,
+      emailProvider,
+      messagingProvider,
+      aiOverride,
+    );
   }
 
   return outcome;
@@ -539,10 +669,11 @@ async function executeAutoSend(
   today: string,
   emailProvider?: EmailProvider,
   messagingProvider?: MessagingProvider,
+  aiOverride?: AiOverride,
 ): Promise<void> {
   try {
     await approveActionProposal(sequence.organizationId, proposalId, actingUserId);
-    const { communication } = await prepareReminderCommunication(sequence.organizationId, proposalId);
+    const { communication } = await prepareReminderCommunication(sequence.organizationId, proposalId, aiOverride);
 
     // Defense-in-depth, immediately before the external call, since a full
     // round trip through approve+prepare has elapsed since the sequence-
@@ -613,6 +744,14 @@ export async function isAutoSendStillAuthorized(sequence: CollectionSequence): P
 function logTickSummary(organizationId: string | undefined, summary: AutomationTickSummary, durationMs: number): void {
   console.info(
     `[automation] tick complete organizationId=${organizationId ?? "ALL"} durationMs=${durationMs} ${JSON.stringify(summary)}`,
+  );
+}
+
+function logOrganizationFailure(organizationId: string, error: unknown): void {
+  const name = error instanceof Error ? error.name : "UnknownError";
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(
+    `[automation] failed to process organization (isolated from the rest of the batch) organizationId=${organizationId}: ${name}: ${message}`,
   );
 }
 
