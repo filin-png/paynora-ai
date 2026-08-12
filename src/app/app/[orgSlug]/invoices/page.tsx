@@ -1,12 +1,18 @@
 import Link from "next/link";
+import { Plus, Receipt } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageHeader } from "@/components/ui/page-header";
+import { Table, TableBody, TableCell, TableContainer, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import type { Currency } from "@/server/ar/currency";
 import { listInvoicesWithFinancials, type InvoiceListFilter } from "@/server/ar/invoices";
 import { formatMoney } from "@/server/ar/money";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
+import { getCollectionsBadgesForInvoices } from "../collections-badge";
 import { getInvoiceStatusDisplay } from "./status";
 
 const FILTERS: { value: InvoiceListFilter; label: string }[] = [
@@ -30,68 +36,88 @@ export default async function InvoicesPage({
     : "all";
   const context = await requireOrganizationMembershipForPage(orgSlug);
   const invoices = await listInvoicesWithFinancials(context.organization.id, filter);
+  const collectionsBadges = await getCollectionsBadgesForInvoices(
+    context.organization.id,
+    invoices.map(({ invoice }) => invoice.id),
+  );
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Invoices</h1>
-          <p className="mt-1 text-sm text-muted">
-            {invoices.length === 0 ? "No invoices to show." : `${invoices.length} invoice(s).`}
-          </p>
-        </div>
-        <Link
-          href={`/app/${orgSlug}/invoices/new`}
-          className={cn(buttonVariants({ variant: "primary" }))}
-        >
-          New invoice
-        </Link>
-      </div>
-
-      <div className="flex gap-4 text-sm">
-        {FILTERS.map((f) => (
-          <Link
-            key={f.value}
-            href={f.value === "all" ? `/app/${orgSlug}/invoices` : `/app/${orgSlug}/invoices?filter=${f.value}`}
-            className={filter === f.value ? "font-medium text-foreground" : "text-muted hover:text-foreground"}
-          >
-            {f.label}
+      <PageHeader
+        title="Invoices"
+        description={invoices.length === 0 ? "No invoices to show." : `${invoices.length} invoice${invoices.length === 1 ? "" : "s"}.`}
+        actions={
+          <Link href={`/app/${orgSlug}/invoices/new`} className={cn(buttonVariants())}>
+            <Plus className="size-4" />
+            New invoice
           </Link>
-        ))}
-      </div>
+        }
+      />
+
+      <Tabs
+        items={FILTERS.map((f) => ({
+          href: f.value === "all" ? `/app/${orgSlug}/invoices` : `/app/${orgSlug}/invoices?filter=${f.value}`,
+          label: f.label,
+          active: filter === f.value,
+        }))}
+      />
 
       {invoices.length > 0 ? (
-        <ul className="flex flex-col divide-y divide-border rounded-md border border-border">
-          {invoices.map(({ invoice, financials }) => {
-            const status = getInvoiceStatusDisplay(invoice, financials);
-            return (
-              <li key={invoice.id}>
-                <Link
-                  href={`/app/${orgSlug}/invoices/${invoice.id}`}
-                  className="flex items-center justify-between gap-4 px-4 py-3 text-sm hover:bg-foreground/5"
-                >
-                  <div className="flex flex-col">
-                    <span className="font-medium">{invoice.number}</span>
-                    <span className="text-muted">{invoice.customer.name}</span>
-                  </div>
-                  <div className="flex items-center gap-4">
-                    <span className="text-muted">
-                      due {invoice.dueDate.toISOString().slice(0, 10)}
-                    </span>
-                    <span className="font-medium">
+        <TableContainer>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Invoice</TableHead>
+                <TableHead>Customer</TableHead>
+                <TableHead className="text-right">Amount</TableHead>
+                <TableHead className="text-right">Outstanding</TableHead>
+                <TableHead>Due</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Collections</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {invoices.map(({ invoice, financials }) => {
+                const status = getInvoiceStatusDisplay(invoice, financials);
+                const collectionsBadge = collectionsBadges.get(invoice.id) ?? null;
+                return (
+                  <TableRow key={invoice.id} className="cursor-pointer">
+                    <TableCell className="p-0">
+                      <Link href={`/app/${orgSlug}/invoices/${invoice.id}`} className="block px-4 py-3.5 font-medium text-foreground">
+                        {invoice.number}
+                      </Link>
+                    </TableCell>
+                    <TableCell className="text-muted">{invoice.customer.name}</TableCell>
+                    <TableCell className="text-right tabular-nums text-muted">
+                      {formatMoney(financials.amountMinor, invoice.currency as Currency)}
+                    </TableCell>
+                    <TableCell className="text-right font-medium tabular-nums text-foreground">
                       {formatMoney(financials.outstandingMinor, invoice.currency as Currency)}
-                    </span>
-                    <Badge tone={status.tone}>{status.label}</Badge>
-                  </div>
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap text-muted">{invoice.dueDate.toISOString().slice(0, 10)}</TableCell>
+                    <TableCell>
+                      <Badge tone={status.tone}>{status.label}</Badge>
+                    </TableCell>
+                    <TableCell>
+                      {collectionsBadge ? <Badge tone={collectionsBadge.tone}>{collectionsBadge.label}</Badge> : <span className="text-xs text-muted-foreground">—</span>}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </TableContainer>
       ) : (
-        <p className="rounded-md border border-dashed border-border px-4 py-10 text-center text-sm text-muted">
-          No invoices to show.
-        </p>
+        <EmptyState
+          icon={Receipt}
+          title="No invoices yet"
+          description="Create your first invoice to start tracking receivables."
+          action={
+            <Link href={`/app/${orgSlug}/invoices/new`} className={cn(buttonVariants())}>
+              Create your first invoice
+            </Link>
+          }
+        />
       )}
     </div>
   );

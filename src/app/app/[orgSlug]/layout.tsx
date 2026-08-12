@@ -1,10 +1,17 @@
-import Link from "next/link";
+import { Header, SignOutButton } from "@/components/app-shell/header";
+import { Sidebar } from "@/components/app-shell/sidebar";
+import { signOut } from "@/server/auth/config";
+import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
 
 /**
- * Pure UI chrome — deliberately does not itself verify tenant membership.
- * Every page under this layout calls requireOrganizationMembershipForPage
- * (or the OWNER-only variant) itself; duplicating that check here would
- * only add a redundant query, not additional protection.
+ * The authenticated app shell for a specific organization — sidebar +
+ * header, both real navigation (see docs/product-ui.md#app-shell). Pure
+ * UI chrome: this deliberately re-verifies tenant membership itself
+ * (unlike the pre-Phase-7 layout, which left that entirely to each page)
+ * only to resolve the organization name/role for display — every page
+ * under this layout still calls requireOrganizationMembershipForPage (or
+ * the OWNER-only variant) itself before touching any data, so this is a
+ * second read, not a second authorization boundary.
  */
 export default async function OrganizationLayout({
   children,
@@ -14,27 +21,32 @@ export default async function OrganizationLayout({
   params: Promise<{ orgSlug: string }>;
 }) {
   const { orgSlug } = await params;
-  const base = `/app/${orgSlug}`;
-
-  const navItems = [
-    { href: base, label: "Dashboard" },
-    { href: `${base}/customers`, label: "Customers" },
-    { href: `${base}/invoices`, label: "Invoices" },
-    { href: `${base}/actions`, label: "Actions" },
-    { href: `${base}/automation`, label: "Automation" },
-    { href: `${base}/settings`, label: "Settings" },
-  ];
+  const context = await requireOrganizationMembershipForPage(orgSlug);
 
   return (
-    <div className="flex flex-col gap-8">
-      <nav className="flex gap-6 border-b border-border pb-4 text-sm font-medium text-muted">
-        {navItems.map((item) => (
-          <Link key={item.href} href={item.href} className="hover:text-foreground">
-            {item.label}
-          </Link>
-        ))}
-      </nav>
-      {children}
+    <div className="flex min-h-screen bg-background">
+      <Sidebar orgSlug={orgSlug} orgName={context.organization.name} role={context.role} />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <Header
+          orgSlug={orgSlug}
+          orgName={context.organization.name}
+          userEmail={context.user.email}
+          userName={context.user.name}
+          signOutForm={
+            <form
+              action={async () => {
+                "use server";
+                await signOut({ redirectTo: "/" });
+              }}
+            >
+              <SignOutButton />
+            </form>
+          }
+        />
+        <main className="min-w-0 flex-1 px-4 py-8 sm:px-6 lg:px-10">
+          <div className="mx-auto w-full max-w-6xl">{children}</div>
+        </main>
+      </div>
     </div>
   );
 }

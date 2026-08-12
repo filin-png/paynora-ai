@@ -1,0 +1,55 @@
+import { ChevronDown, LogOut } from "lucide-react";
+
+import { DropdownMenu, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
+import { MobileNav } from "./mobile-nav";
+
+export function Header({
+  orgSlug,
+  orgName,
+  userEmail,
+  userName,
+  signOutForm,
+}: {
+  orgSlug: string;
+  orgName: string;
+  userEmail: string;
+  userName: string | null;
+  signOutForm: React.ReactNode;
+}) {
+  return (
+    <header className="flex h-16 shrink-0 items-center justify-between border-b border-border bg-surface/80 px-4 backdrop-blur sm:px-6">
+      <div className="flex items-center gap-3">
+        <MobileNav orgSlug={orgSlug} orgName={orgName} />
+        <span className="hidden text-sm font-medium text-muted lg:inline">{orgName}</span>
+      </div>
+
+      <DropdownMenu
+        trigger={
+          <span className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-foreground hover:bg-accent-soft">
+            <span className="flex size-7 items-center justify-center rounded-full bg-accent-soft text-xs font-semibold text-primary">
+              {(userName ?? userEmail).slice(0, 1).toUpperCase()}
+            </span>
+            <span className="hidden max-w-40 truncate sm:inline">{userName ?? userEmail}</span>
+            <ChevronDown className="size-4 text-muted-foreground" />
+          </span>
+        }
+      >
+        <DropdownMenuLabel>{userEmail}</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem className="p-0">{signOutForm}</DropdownMenuItem>
+      </DropdownMenu>
+    </header>
+  );
+}
+
+export function SignOutButton() {
+  return (
+    <button
+      type="submit"
+      className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-foreground hover:bg-accent-soft"
+    >
+      <LogOut className="size-4" />
+      Sign out
+    </button>
+  );
+}

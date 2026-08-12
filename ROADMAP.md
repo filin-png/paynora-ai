@@ -118,7 +118,7 @@ concurrency/race-condition reasoning and everything deliberately left out.
       normalized `BillingSubscriptionStatus`, `WebhookEventIdentity` for
       webhook idempotency) — explicitly for PAYNORA's own subscription
       billing, distinct from AR/collections; no Prisma schema, no real
-      Stripe/YooKassa SDK call (that's Phase 8, below)
+      Stripe/YooKassa SDK call (that's Phase 9, below)
 - [x] Cross-cutting Provider Registry (`src/server/providers/`):
       configuration-derived health model (`HEALTHY`/`DISABLED`/`UNKNOWN`
       only — `DEGRADED`/`DOWN` reserved for a future live health-check,
@@ -144,7 +144,54 @@ status table distinguishing implemented-with-tests from
 recognized-but-unimplemented from documented-only, and exactly why each
 scope decision was made.
 
-## Phase 7 — Intelligence
+## Phase 7 — Premium Product Experience & Complete UI — ✅ complete (2026-08-12)
+
+- [x] Restrained "premium financial control system" visual identity —
+      navy/graphite navigation, one indigo accent, semantic color
+      (green/amber/red) reserved for real financial meaning, light + dark
+      palettes, `prefers-reduced-motion` respected globally
+- [x] Original PAYNORA mark + wordmark (`src/components/brand/logo.tsx`,
+      `app/icon.svg`) — no third-party logo or stock asset
+- [x] Reusable design system (`src/components/ui/`): Button, Input,
+      Textarea, Select, Switch, Label, Badge, Card, MetricCard, Table,
+      EmptyState, Alert, Dialog, DropdownMenu, Tabs, Skeleton, Tooltip,
+      StatusIndicator, PageHeader/SectionHeader — `class-variance-
+      authority` for variants, native `<dialog>` for modals, no new UI
+      dependency beyond `lucide-react` for icons
+- [x] Full responsive app shell — navy sidebar + header on desktop,
+      slide-out drawer below `lg` — with an org-scoped route group fix
+      (`app/(no-org)/`) so `/app`'s minimal layout no longer nested
+      inside the org sidebar shell (a real Next.js layout-nesting bug
+      found and fixed, not cosmetic)
+- [x] Rebuilt commercial landing page, split-panel auth pages, and a real
+      onboarding flow (first-organization creation)
+- [x] Rebuilt dashboard, Invoices, Customers, Action Center, Automation,
+      and Settings (General/Members/Integrations/Billing/Security) UIs —
+      every number and status is real data through existing Phase 1–6
+      server functions, plus two new batched read helpers
+      (`getCustomerReceivablesSummaries`, `getCollectionsBadgesForInvoices`)
+      added specifically to avoid an N+1 query per list row
+- [x] Action Center reframed around detect → recommend → review →
+      approve/edit/reject/send, including a real fix for an unhandled
+      crash when a proposal's customer has no email on file
+- [x] Real empty/loading/error/not-found states everywhere — new
+      `src/lib/not-found.ts#isResourceNotFoundError` recognizes every
+      domain's not-found error class so pages render a real 404 instead
+      of the generic error boundary
+- [x] Verified responsive at 390/768/1024/1440px (zero horizontal
+      overflow) and accessible (zero axe-core violations across ten
+      pages after fixing one contrast issue and one unlabeled control —
+      see `docs/product-ui.md#accessibility`)
+- [x] Real-browser Playwright QA of the full golden path with zero real
+      vendor network calls; 13 new targeted tests (391 total) covering
+      the two new read helpers and the not-found classifier
+- [x] Zero Prisma schema changes — this phase is UI/presentation only,
+      every domain rule from Phase 1–6 is unchanged
+
+See `docs/product-ui.md` for the full design system, page architecture,
+responsive/accessibility approach, and known limitations.
+
+## Phase 8 — Intelligence
 
 - [ ] Payment behavior analytics
 - [ ] Promise-to-pay tracking, manual first, automatic extraction later
@@ -152,7 +199,7 @@ scope decision was made.
 - [ ] Risk scoring improvements
 - [ ] Collection performance analytics
 
-## Phase 8 — Monetization
+## Phase 9 — Monetization
 
 - [ ] Subscription domain model (Prisma schema — not yet added; Phase 6
       deliberately stopped short of this, see
@@ -165,17 +212,17 @@ scope decision was made.
 - [ ] Subscription lifecycle (trial, active, past-due, cancelled) driven
       by real, verified `BillingProvider` webhooks
 
-## Phase 9 — Integrations (only per validated customer demand)
+## Phase 10 — Integrations (only per validated customer demand)
 
 - [ ] Accounting system integrations (candidates: local/regional + QuickBooks, Xero)
 - [ ] Payment processor integrations for customer-facing collection (distinct
-      from Phase 8's PAYNORA-subscription billing — candidates: Stripe once
+      from Phase 9's PAYNORA-subscription billing — candidates: Stripe once
       relevant, regional providers)
 - [ ] Invoice import (CSV/XLSX)
 - [ ] Object storage (S3-compatible, Yandex Object Storage) for the first
       feature that needs to store a file/document
 
-## Phase 10 — Commercialization
+## Phase 11 — Commercialization
 
 - [ ] Landing page + pricing
 - [ ] Onboarding flow
@@ -184,7 +231,7 @@ scope decision was made.
 - [ ] Legal pages
 - [ ] Support workflow
 
-## Phase 11 — Exit Readiness
+## Phase 12 — Exit Readiness
 
 - [ ] Remove founder dependencies
 - [ ] Complete operational documentation

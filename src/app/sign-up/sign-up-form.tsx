@@ -2,7 +2,9 @@
 
 import { useActionState } from "react";
 import Link from "next/link";
+import { ArrowRight } from "lucide-react";
 
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,11 +14,11 @@ export function SignUpForm() {
   const [state, formAction, isPending] = useActionState(signUpAction, null);
 
   return (
-    <div className="w-full max-w-sm">
-      <h1 className="text-2xl font-semibold tracking-tight">Create your account</h1>
+    <div>
+      <h1 className="text-2xl font-semibold tracking-tight text-foreground">Create your account</h1>
       <p className="mt-2 text-sm text-muted">
         Already have an account?{" "}
-        <Link href="/sign-in" className="font-medium text-foreground hover:underline">
+        <Link href="/sign-in" className="font-medium text-primary hover:underline">
           Sign in
         </Link>
       </p>
@@ -41,18 +43,19 @@ export function SignUpForm() {
             autoComplete="new-password"
             minLength={8}
             required
+            aria-describedby="password-hint"
+            aria-invalid={state?.error ? true : undefined}
           />
-          <p className="text-xs text-muted">At least 8 characters.</p>
+          <p id="password-hint" className="text-xs text-muted">
+            At least 8 characters.
+          </p>
         </div>
 
-        {state?.error ? (
-          <p className="text-sm text-red-600" role="alert">
-            {state.error}
-          </p>
-        ) : null}
+        {state?.error ? <Alert tone="danger">{state.error}</Alert> : null}
 
-        <Button type="submit" disabled={isPending} className="mt-2">
+        <Button type="submit" disabled={isPending} size="lg" className="mt-2">
           {isPending ? "Creating account…" : "Create account"}
+          {!isPending ? <ArrowRight className="size-4" /> : null}
         </Button>
       </form>
     </div>

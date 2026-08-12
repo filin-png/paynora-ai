@@ -2,9 +2,12 @@
 
 import { useActionState } from "react";
 
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { SUPPORTED_CURRENCIES } from "@/server/ar/currency";
 import { createInvoiceAction, type InvoiceFormState } from "./actions";
 
@@ -29,16 +32,10 @@ export function InvoiceForm({
   const [state, formAction, isPending] = useActionState(action, null);
 
   return (
-    <form action={formAction} className="flex max-w-lg flex-col gap-4">
+    <form action={formAction} className="flex flex-col gap-4">
       <div className="flex flex-col gap-2">
         <Label htmlFor="customerId">Customer</Label>
-        <select
-          id="customerId"
-          name="customerId"
-          required
-          defaultValue={defaultCustomerId ?? ""}
-          className="flex h-10 w-full rounded-md border border-border bg-transparent px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-primary"
-        >
+        <Select id="customerId" name="customerId" required defaultValue={defaultCustomerId ?? ""}>
           <option value="" disabled>
             Select a customer
           </option>
@@ -47,7 +44,7 @@ export function InvoiceForm({
               {customer.name}
             </option>
           ))}
-        </select>
+        </Select>
       </div>
 
       <div className="flex flex-col gap-2">
@@ -58,19 +55,13 @@ export function InvoiceForm({
       <div className="flex gap-4">
         <div className="flex flex-1 flex-col gap-2">
           <Label htmlFor="currency">Currency</Label>
-          <select
-            id="currency"
-            name="currency"
-            required
-            defaultValue={SUPPORTED_CURRENCIES[0]}
-            className="flex h-10 w-full rounded-md border border-border bg-transparent px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-primary"
-          >
+          <Select id="currency" name="currency" required defaultValue={SUPPORTED_CURRENCIES[0]}>
             {SUPPORTED_CURRENCIES.map((currency) => (
               <option key={currency} value={currency}>
                 {currency}
               </option>
             ))}
-          </select>
+          </Select>
         </div>
         <div className="flex flex-1 flex-col gap-2">
           <Label htmlFor="amount">Amount</Label>
@@ -91,19 +82,10 @@ export function InvoiceForm({
 
       <div className="flex flex-col gap-2">
         <Label htmlFor="notes">Notes</Label>
-        <textarea
-          id="notes"
-          name="notes"
-          rows={3}
-          className="flex w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-primary"
-        />
+        <Textarea id="notes" name="notes" rows={3} placeholder="Optional — visible only to your team" />
       </div>
 
-      {state?.error ? (
-        <p className="text-sm text-red-600" role="alert">
-          {state.error}
-        </p>
-      ) : null}
+      {state?.error ? <Alert tone="danger">{state.error}</Alert> : null}
 
       <Button type="submit" disabled={isPending} className="mt-2 self-start">
         {isPending ? "Creating…" : "Create invoice"}

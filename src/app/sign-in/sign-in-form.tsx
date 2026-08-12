@@ -2,7 +2,9 @@
 
 import { useActionState } from "react";
 import Link from "next/link";
+import { ArrowRight } from "lucide-react";
 
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,11 +14,11 @@ export function SignInForm({ callbackUrl }: { callbackUrl: string }) {
   const [state, formAction, isPending] = useActionState(signInAction, null);
 
   return (
-    <div className="w-full max-w-sm">
-      <h1 className="text-2xl font-semibold tracking-tight">Sign in</h1>
+    <div>
+      <h1 className="text-2xl font-semibold tracking-tight text-foreground">Welcome back</h1>
       <p className="mt-2 text-sm text-muted">
         Don&apos;t have an account?{" "}
-        <Link href="/sign-up" className="font-medium text-foreground hover:underline">
+        <Link href="/sign-up" className="font-medium text-primary hover:underline">
           Create one
         </Link>
       </p>
@@ -37,17 +39,15 @@ export function SignInForm({ callbackUrl }: { callbackUrl: string }) {
             type="password"
             autoComplete="current-password"
             required
+            aria-invalid={state?.error ? true : undefined}
           />
         </div>
 
-        {state?.error ? (
-          <p className="text-sm text-red-600" role="alert">
-            {state.error}
-          </p>
-        ) : null}
+        {state?.error ? <Alert tone="danger">{state.error}</Alert> : null}
 
-        <Button type="submit" disabled={isPending} className="mt-2">
+        <Button type="submit" disabled={isPending} size="lg" className="mt-2">
           {isPending ? "Signing in…" : "Sign in"}
+          {!isPending ? <ArrowRight className="size-4" /> : null}
         </Button>
       </form>
     </div>

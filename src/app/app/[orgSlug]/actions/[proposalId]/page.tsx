@@ -1,9 +1,14 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
+import { ArrowLeft } from "lucide-react";
 import type { Communication, DeliveryAttempt } from "@prisma/client";
 
+import { Alert } from "@/components/ui/alert";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
-import { buttonVariants } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { PageHeader, SectionHeader } from "@/components/ui/page-header";
+import { isResourceNotFoundError } from "@/lib/not-found";
 import { getCommunicationForProposal } from "@/server/communications/draft";
 import { listDeliveryAttempts } from "@/server/communications/send";
 import { getActionProposal } from "@/server/operator/approval";
@@ -32,7 +37,10 @@ export default async function ActionProposalPage({
 }) {
   const { orgSlug, proposalId } = await params;
   const context = await requireOrganizationMembershipForPage(orgSlug);
-  const proposal = await getActionProposal(context.organization.id, proposalId);
+  const proposal = await getActionProposal(context.organization.id, proposalId).catch((error: unknown) => {
+    if (isResourceNotFoundError(error)) notFound();
+    throw error;
+  });
   const communication = await getCommunicationForProposal(context.organization.id, proposalId);
   const deliveryAttempts = communication
     ? await listDeliveryAttempts(context.organization.id, communication.id)
@@ -43,35 +51,52 @@ export default async function ActionProposalPage({
   return (
     <div className="flex max-w-2xl flex-col gap-8">
       <div>
-        <Link href={`/app/${orgSlug}/actions`} className="text-xs text-muted hover:underline">
-          &larr; Back to Action Center
+        <Link
+          href={`/app/${orgSlug}/actions`}
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-muted hover:text-foreground"
+        >
+          <ArrowLeft className="size-3.5" />
+          Action Center
         </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Payment reminder</h1>
-        {proposal.invoice ? (
-          <p className="mt-1 text-sm text-muted">
-            <Link href={`/app/${orgSlug}/invoices/${proposal.invoice.id}`} className="hover:underline">
-              Invoice {proposal.invoice.number}
-            </Link>{" "}
-            — {proposal.invoice.customer.name}
-          </p>
-        ) : (
-          <p className="mt-1 text-sm text-muted">Invoice no longer available</p>
-        )}
+        <PageHeader
+          className="mt-3"
+          title="Payment reminder"
+          description={
+            proposal.invoice ? (
+              <>
+                <Link href={`/app/${orgSlug}/invoices/${proposal.invoice.id}`} className="font-medium text-primary hover:underline">
+                  Invoice {proposal.invoice.number}
+                </Link>{" "}
+                — {proposal.invoice.customer.name}
+              </>
+            ) : (
+              "Invoice no longer available"
+            )
+          }
+        />
       </div>
 
       {proposal.status !== "APPROVED" && proposal.status !== "EXECUTED" ? (
-        <p className="rounded-md border border-dashed border-border px-4 py-10 text-center text-sm text-muted">
-          This proposal isn&rsquo;t approved yet — nothing to review here.
-        </p>
+        <Alert tone="neutral">This proposal isn&rsquo;t approved yet — nothing to review here.</Alert>
+      ) : !communication && proposal.invoice && !proposal.invoice.customer.email ? (
+        <Alert tone="warning" title="This customer has no email address on file">
+          <p>
+            Add an email address for {proposal.invoice.customer.name} before a reminder can be prepared.
+          </p>
+          <Link
+            href={`/app/${orgSlug}/customers/${proposal.invoice.customer.id}/edit`}
+            className="mt-2 inline-block text-sm font-medium text-primary hover:underline"
+          >
+            Edit customer
+          </Link>
+        </Alert>
       ) : !communication ? (
-        <div className="flex flex-col gap-4">
+        <Card className="flex flex-col gap-4 p-6">
           <p className="text-sm text-muted">{proposal.reasoning}</p>
           <form action={boundPrepare}>
-            <button type="submit" className={cn(buttonVariants({ variant: "primary" }))}>
-              Prepare reminder email
-            </button>
+            <Button type="submit">Prepare reminder email</Button>
           </form>
-        </div>
+        </Card>
       ) : (
         <CommunicationReview
           orgSlug={orgSlug}
@@ -102,24 +127,24 @@ function CommunicationReview({
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="grid grid-cols-2 gap-4 rounded-md border border-border p-4 text-sm sm:grid-cols-3">
+      <Card className="grid grid-cols-2 gap-4 p-5 sm:grid-cols-3">
         <div>
-          <p className="text-xs text-muted">To</p>
-          <p className="mt-1 font-medium">{communication.recipient}</p>
+          <p className="text-xs font-medium text-muted-foreground">To</p>
+          <p className="mt-1 font-medium text-foreground">{communication.recipient}</p>
         </div>
         <div>
-          <p className="text-xs text-muted">Status</p>
+          <p className="text-xs font-medium text-muted-foreground">Status</p>
           <p className="mt-1">
             <Badge tone={status.tone}>{status.label}</Badge>
           </p>
         </div>
         {communication.sentAt ? (
           <div>
-            <p className="text-xs text-muted">Sent</p>
-            <p className="mt-1 font-medium">{communication.sentAt.toISOString().slice(0, 16).replace("T", " ")}</p>
+            <p className="text-xs font-medium text-muted-foreground">Sent</p>
+            <p className="mt-1 font-medium text-foreground">{communication.sentAt.toISOString().slice(0, 16).replace("T", " ")}</p>
           </div>
         ) : null}
-      </div>
+      </Card>
 
       {communication.status === "DRAFT" ? (
         <>
@@ -136,37 +161,29 @@ function CommunicationReview({
           </div>
         </>
       ) : (
-        <div className="rounded-md border border-border p-4 text-sm">
-          <p className="text-xs text-muted">Subject</p>
-          <p className="mt-1 font-medium">{communication.subject}</p>
-          <p className="mt-4 text-xs text-muted">Body</p>
-          <p className="mt-1 whitespace-pre-wrap">{communication.body}</p>
-        </div>
+        <Card className="p-5">
+          <p className="text-xs font-medium text-muted-foreground">Subject</p>
+          <p className="mt-1 font-medium text-foreground">{communication.subject}</p>
+          <p className="mt-4 text-xs font-medium text-muted-foreground">Body</p>
+          <p className="mt-1 whitespace-pre-wrap text-sm text-foreground">{communication.body}</p>
+        </Card>
       )}
 
       {communication.status === "FAILED" ? (
-        <div className="flex flex-col gap-2">
-          <p className="text-sm text-red-600">
-            {deliveryAttempts.at(-1)?.failureMessage ?? "The email provider rejected this message."}
-          </p>
-          <SendCommunicationForm
-            action={boundSend}
-            label="Retry"
-            pendingLabel="Retrying…"
-            variant="outline"
-          />
+        <div className="flex flex-col gap-3">
+          <Alert tone="danger">{deliveryAttempts.at(-1)?.failureMessage ?? "The email provider rejected this message."}</Alert>
+          <SendCommunicationForm action={boundSend} label="Retry" pendingLabel="Retrying…" variant="outline" />
         </div>
       ) : null}
 
       {communication.status === "SENDING" || communication.status === "UNCERTAIN" ? (
-        <div className="flex flex-col gap-2 rounded-md border border-amber-600/30 bg-amber-600/10 p-4">
-          <p className="text-sm font-medium text-amber-700 dark:text-amber-400">Delivery status uncertain</p>
-          <p className="text-sm text-muted">
-            We couldn&rsquo;t confirm whether this email was delivered. Do not resend automatically — resending
-            may send a duplicate. Only resend if you&rsquo;ve verified with the recipient or your email
-            provider that the original was not delivered.
+        <Alert tone="warning" title="Delivery status uncertain">
+          <p>
+            We couldn&rsquo;t confirm whether this email was delivered. Do not resend automatically — resending may
+            send a duplicate. Only resend if you&rsquo;ve verified with the recipient or your email provider that the
+            original was not delivered.
           </p>
-          <div className="mt-2">
+          <div className="mt-3">
             <SendCommunicationForm
               action={boundResendUncertain}
               label="Resend anyway (may send a duplicate)"
@@ -175,35 +192,37 @@ function CommunicationReview({
               confirmMessage="This may send a duplicate email if the previous attempt actually succeeded. Resend anyway?"
             />
           </div>
-        </div>
+        </Alert>
       ) : null}
 
       {deliveryAttempts.length > 0 ? (
         <div>
-          <h2 className="text-sm font-semibold">Delivery attempts</h2>
-          <ul className="mt-3 flex flex-col divide-y divide-border rounded-md border border-border text-sm">
-            {deliveryAttempts.map((attempt) => (
-              <li key={attempt.id} className="flex items-center justify-between gap-4 px-4 py-3">
-                <span>
-                  Attempt #{attempt.attemptNumber} — {attempt.provider}
-                </span>
-                <span className="flex items-center gap-2 text-muted">
-                  {attempt.failureMessage ? <span>{attempt.failureMessage}</span> : null}
-                  <Badge
-                    tone={
-                      attempt.status === "SUCCESS"
-                        ? "success"
-                        : attempt.status === "FAILED"
-                          ? "danger"
-                          : "warning"
-                    }
-                  >
-                    {attempt.status}
-                  </Badge>
-                </span>
-              </li>
-            ))}
-          </ul>
+          <SectionHeader title="Delivery attempts" />
+          <Card className="mt-3 overflow-hidden">
+            <ul className="divide-y divide-border text-sm">
+              {deliveryAttempts.map((attempt) => (
+                <li key={attempt.id} className="flex items-center justify-between gap-4 px-5 py-3">
+                  <span className="text-foreground">
+                    Attempt #{attempt.attemptNumber} — {attempt.provider}
+                  </span>
+                  <span className="flex items-center gap-2 text-muted">
+                    {attempt.failureMessage ? <span className="text-xs">{attempt.failureMessage}</span> : null}
+                    <Badge
+                      tone={
+                        attempt.status === "SUCCESS"
+                          ? "success"
+                          : attempt.status === "FAILED"
+                            ? "danger"
+                            : "warning"
+                      }
+                    >
+                      {attempt.status.charAt(0) + attempt.status.slice(1).toLowerCase()}
+                    </Badge>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </Card>
         </div>
       ) : null}
     </div>

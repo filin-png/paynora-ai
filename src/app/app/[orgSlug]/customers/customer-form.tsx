@@ -2,9 +2,11 @@
 
 import { useActionState } from "react";
 
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 
 export type CustomerFormState = { error: string } | null;
 type CustomerFormAction = (
@@ -30,7 +32,7 @@ export function CustomerForm({
   const [state, formAction, isPending] = useActionState(action, null);
 
   return (
-    <form action={formAction} className="flex max-w-lg flex-col gap-4">
+    <form action={formAction} className="flex flex-col gap-4">
       <div className="flex flex-col gap-2">
         <Label htmlFor="name">Name</Label>
         <Input id="name" name="name" required maxLength={200} defaultValue={defaultValues?.name} />
@@ -62,20 +64,10 @@ export function CustomerForm({
 
       <div className="flex flex-col gap-2">
         <Label htmlFor="notes">Notes</Label>
-        <textarea
-          id="notes"
-          name="notes"
-          rows={3}
-          defaultValue={defaultValues?.notes ?? undefined}
-          className="flex w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-primary"
-        />
+        <Textarea id="notes" name="notes" rows={3} defaultValue={defaultValues?.notes ?? undefined} />
       </div>
 
-      {state?.error ? (
-        <p className="text-sm text-red-600" role="alert">
-          {state.error}
-        </p>
-      ) : null}
+      {state?.error ? <Alert tone="danger">{state.error}</Alert> : null}
 
       <Button type="submit" disabled={isPending} className="mt-2 self-start">
         {isPending ? "Saving…" : submitLabel}

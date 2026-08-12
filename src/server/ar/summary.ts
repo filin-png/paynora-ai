@@ -97,3 +97,45 @@ export async function listRecentPayments(organizationId: string, take = RECENT_P
     take,
   });
 }
+
+export type CustomerReceivablesSummary = {
+  openInvoiceCount: number;
+  outstandingByCurrency: { currency: Currency; outstandingMinor: bigint }[];
+};
+
+/**
+ * Per-customer outstanding exposure for the customer list page — one
+ * organization-wide query (`listInvoicesWithFinancials`, already used
+ * elsewhere), grouped by customer in memory. Not a per-customer query:
+ * calling that once per row would be an N+1 pattern on a page that can
+ * list many customers. Never sums across currencies, same rule as
+ * `getOrganizationArSummary`.
+ */
+export async function getCustomerReceivablesSummaries(
+  organizationId: string,
+): Promise<Map<string, CustomerReceivablesSummary>> {
+  const openInvoices = await listInvoicesWithFinancials(organizationId, "open");
+
+  const byCustomer = new Map<string, Map<Currency, bigint>>();
+  const openCounts = new Map<string, number>();
+
+  for (const { invoice, financials } of openInvoices) {
+    if (financials.isPaid) continue;
+    const currency = invoice.currency as Currency;
+    const currencyTotals = byCustomer.get(invoice.customerId) ?? new Map<Currency, bigint>();
+    currencyTotals.set(currency, (currencyTotals.get(currency) ?? 0n) + financials.outstandingMinor);
+    byCustomer.set(invoice.customerId, currencyTotals);
+    openCounts.set(invoice.customerId, (openCounts.get(invoice.customerId) ?? 0) + 1);
+  }
+
+  const result = new Map<string, CustomerReceivablesSummary>();
+  for (const [customerId, currencyTotals] of byCustomer) {
+    result.set(customerId, {
+      openInvoiceCount: openCounts.get(customerId) ?? 0,
+      outstandingByCurrency: Array.from(currencyTotals.entries())
+        .map(([currency, outstandingMinor]) => ({ currency, outstandingMinor }))
+        .sort((a, b) => a.currency.localeCompare(b.currency)),
+    });
+  }
+  return result;
+}
