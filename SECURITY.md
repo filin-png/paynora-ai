@@ -84,6 +84,56 @@ they did so) — there is no direct `EmailProvider`/`nodemailer` call
 anywhere in `src/server/collections/`. See `docs/collections-automation.md`
 for the full design, including the concurrency and payment-race reasoning.
 
+## Trust boundary chain (Integration & Provider Foundation, Phase 6)
+
+Phase 6 adds three new provider categories (`MessagingProvider`,
+`BillingProvider`, and extended `AIProvider` routing) but adds **no new
+entry point into the trust boundary chains above** — no domain code calls
+`MessagingProvider` yet, and `BillingProvider` is a verification/
+normalization boundary only, with no writer of financial state behind it.
+The chain that does apply, for every gateway (AI/Email/Messaging alike):
+
+```
+Provider adapter (src/server/{ai,email,messaging}/providers/*.ts)
+  -> Gateway (runAIGeneration / dispatchEmail / dispatchMessage — timeout +
+     normalized errors + secret-free telemetry, the one place a provider
+     is actually invoked, regardless of caller)
+  -> Service (resolve*Provider() — the one place that knows which vendor
+     is configured; throws *DisabledError/*NotImplementedError before any
+     call, never silently no-ops)
+  -> Domain code (only Email has a real caller today —
+     src/server/communications/send.ts; Messaging and Billing have none)
+```
+
+**A `BillingProvider` must never itself change financial state.**
+`verifyAndParseWebhook` (`src/server/billing/types.ts`) only verifies
+authenticity and normalizes a webhook into a `NormalizedSubscriptionEvent`
+— it throws `BillingWebhookVerificationError` on a failed signature check
+rather than returning a best-guess result, so a forged webhook can never
+reach domain code labeled as legitimate. There is no domain code that
+applies one yet (Phase 8, per `ROADMAP.md`); when that domain exists, it
+is responsible for its own idempotency check against
+`eventIdentity.eventId` before applying anything.
+
+**A health check must never perform a dangerous side effect.**
+`ProviderHealthStatus` (`src/server/providers/registry.ts`) is derived
+entirely from configuration — no code path in this phase sends a real
+email, spends a paid AI call, or posts a real Telegram message just to
+determine health. `DEGRADED`/`DOWN` are defined but never produced by any
+code today, precisely so a future live health-check mechanism (which
+would need its own explicit side-effect budget) can be added without a
+breaking type change, not by accident.
+
+**Deployment profile is never a security boundary.** `DEPLOYMENT_PROFILE`
+is descriptive metadata only (see
+`docs/integration-architecture.md#deployment-profiles`) — selecting a
+vendor outside its profile's recommendation is never rejected, so nothing
+in this phase should be read as enforcing which vendors a given
+organization "is allowed" to use.
+
+See `docs/integration-architecture.md` for the full design, including why
+each provider category stopped where it did.
+
 ## Principles
 
 - **Validate at the boundary.** All external input — HTTP requests, AI
@@ -123,7 +173,72 @@ for the full design, including the concurrency and payment-race reasoning.
   observability infrastructure is added) excludes credentials, tokens, and
   full customer payment details.
 
-## Current status (Phase 5)
+## Current status (Phase 6)
+
+- **Secrets are never sent to the client, logged, or included in an
+  error.** Every new secret env var (`OPENROUTER_API_KEY`,
+  `MISTRAL_API_KEY`, `TELEGRAM_BOT_TOKEN`) lives under `src/server/` or
+  `src/lib/env.ts` only. The shared OpenRouter/Mistral HTTP helper
+  (`src/server/ai/providers/openai-compatible-chat.ts`) throws only the
+  HTTP status code on a non-OK response — never the response body (could
+  echo request content) or any request header (would include the
+  `Authorization` bearer). The Telegram adapter never includes the request
+  URL (embeds the bot token as a path segment) in a thrown error — only
+  the status code and Telegram's own `description` field. Tested directly:
+  `openrouter.test.ts`/`mistral.test.ts`/`telegram.test.ts` each assert a
+  thrown error's message never contains the configured secret, even when
+  the mocked vendor response body itself contains something secret-shaped.
+- **Provider telemetry has no field a secret, password, email body,
+  invoice content, or raw webhook payload could occupy** —
+  `ProviderTelemetryEvent` (`src/server/providers/telemetry.ts`) is a
+  fixed, narrow shape enforced structurally (TypeScript rejects an
+  unlisted field), not just by convention. Wired into every gateway
+  (`ai/gateway.ts`, `email/gateway.ts`, `messaging/gateway.ts`) so every
+  call is recorded regardless of caller, with tests asserting the message
+  text/recipient/request contents never appear in a logged line.
+- **AI routing is bounded, never an unbounded retry loop.**
+  `tryGenerateStructured` (`src/server/ai/service.ts`) tries at most two
+  providers — `AI_PROVIDER` then, only if configured, a distinct
+  `AI_PROVIDER_FALLBACK` — and stops at the first confirmed (schema-
+  validated) success; a provider that's unimplemented, misconfigured,
+  timed out, errored, or returned invalid output is tried at most once,
+  never retried itself. Proven with tests that count exactly how many
+  times a given provider was resolved/called under every failure
+  combination — see `src/server/ai/service.test.ts`.
+- **`BillingProvider` cannot change financial state and cannot fabricate
+  a webhook's authenticity** — see
+  [Trust boundary chain (Integration & Provider Foundation)](#trust-boundary-chain-integration--provider-foundation-phase-6)
+  above.
+- **No live network probe for health.** `resolveHealth`
+  (`src/server/providers/registry.ts`) is a pure function of configuration
+  — no code path in this phase can trigger a real email, AI call, or
+  Telegram message as a side effect of checking health.
+- **Zero AI/Messaging/Billing credentials required to run the app** —
+  `AI_PROVIDER`/`MESSAGING_PROVIDER`/`BILLING_PROVIDER` all default to
+  `"none"`; the full test suite (378 tests) and CI never set any of the
+  new Phase 6 secrets and make zero real network calls to OpenRouter,
+  Mistral, or Telegram.
+- **No new entry point exists for Messaging or Billing to bypass an
+  existing authorization boundary** — neither has a domain caller yet
+  (see [Messaging: a foundation with no caller](
+  docs/integration-architecture.md#messaging-a-foundation-with-no-caller)),
+  so there is nothing today for a forged Telegram identity or a fabricated
+  webhook to reach. The constraint for when a caller is added is
+  documented in `docs/integration-architecture.md#messaging` (a Telegram
+  chat id is never itself proof of PAYNORA authorization) and above (a
+  `BillingProvider` never itself changes financial state).
+- **Every new module still respects `tsconfig.json`'s `strict` mode and
+  the existing Zod-at-the-boundary discipline** — `AI_PROVIDER_FALLBACK`,
+  `MESSAGING_PROVIDER`/`TELEGRAM_BOT_TOKEN`,
+  `BILLING_PROVIDER`/`DEPLOYMENT_PROFILE`, and the OpenRouter/Mistral
+  config vars are all validated in `src/lib/env.ts`'s `superRefine` (e.g.
+  Telegram requires `TELEGRAM_BOT_TOKEN`; OpenRouter/Mistral require their
+  key+model whether selected as primary or fallback), tested in
+  `src/lib/env.test.ts`.
+
+See `docs/integration-architecture.md` for the full design.
+
+## Previously established (Phase 5)
 
 - **A schedule is never permission to send.** Every organization/sequence
   the tick considers is re-checked against live state — paid, cancelled,

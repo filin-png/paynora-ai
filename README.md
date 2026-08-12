@@ -5,7 +5,7 @@ employees) that helps them track accounts receivable, spot payment risk
 early, and automate collection follow-up — without replacing the accounting
 software they already use.
 
-**Project status: Phase 5 — Collections Automation Engine.**
+**Project status: Phase 6 — Integration & Provider Foundation.**
 Authentication, organizations, tenant isolation, customers, invoices,
 payments, and a real AR dashboard are implemented (Phase 1–2). Phase 3
 added an event → insight → proposal → human-approval pipeline (an Action
@@ -22,7 +22,15 @@ reminder for human review (the default) or — only if an organization
 owner explicitly opts in — sends it through the exact same Phase 4 send
 path. **A schedule is never permission to send**: every tick re-verifies
 live financial state, and automation is disabled by default at both the
-deployment and organization level. See
+deployment and organization level. Phase 6 extends the provider
+architecture beyond AI/Email: bounded AI routing with a real OpenRouter/
+Mistral fallback pair, a new `MessagingProvider` boundary with a real
+Telegram adapter (no domain caller wired in yet), and a `BillingProvider`
+type/contract for PAYNORA's own future subscription billing — plus a
+cross-cutting provider registry, deployment-profile metadata, and a
+secret-free telemetry boundary, all with **no new Prisma schema and no
+new external credential required to run the app.** See
+[docs/integration-architecture.md](./docs/integration-architecture.md),
 [docs/collections-automation.md](./docs/collections-automation.md),
 [docs/communications.md](./docs/communications.md),
 [docs/operator-foundation.md](./docs/operator-foundation.md), and
@@ -45,6 +53,13 @@ deployment and organization level. See
 - **Email**: provider-agnostic Gateway over SMTP (`EMAIL_PROVIDER=none` by
   default, no credentials required to run the app or draft/preview
   reminders); see [docs/communications.md](./docs/communications.md)
+- **Messaging**: provider-agnostic Gateway with a real Telegram adapter
+  (`MESSAGING_PROVIDER=none` by default; no domain feature calls it yet —
+  a foundation, see [docs/integration-architecture.md](./docs/integration-architecture.md#messaging))
+- **Billing**: `BillingProvider` type/contract for PAYNORA's own
+  subscription billing (`BILLING_PROVIDER=none` by default; no real
+  Stripe/YooKassa adapter yet, no Prisma schema — see
+  [docs/integration-architecture.md](./docs/integration-architecture.md#billing))
 - **Validation**: Zod
 - **Testing**: Vitest, including real-database tenant-isolation and
   concurrency tests
@@ -113,4 +128,5 @@ locally, including the separate test database integration tests use.
 - [docs/domain-model.md](./docs/domain-model.md) — core domain entities
 - [docs/ai-architecture.md](./docs/ai-architecture.md) — AI provider abstraction
 - [docs/provider-strategy.md](./docs/provider-strategy.md) — external provider boundaries
+- [docs/integration-architecture.md](./docs/integration-architecture.md) — Phase 6 cross-cutting provider registry, AI routing, Messaging, Billing
 - [docs/exit-readiness.md](./docs/exit-readiness.md) — commercial/due-diligence tracking
