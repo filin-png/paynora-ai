@@ -8,11 +8,19 @@ export async function getCollectionSequenceForInvoice(organizationId: string, in
   return prisma.collectionSequence.findFirst({ where: { organizationId, invoiceId } });
 }
 
+const ACTIVE_SEQUENCES_LIMIT = 500;
+
+/** Only consumed by the automation UI page — the automation tick engine (src/server/collections/engine.ts) queries active sequences itself and must never be capped here. */
 export async function listActiveCollectionSequences(organizationId: string) {
   return prisma.collectionSequence.findMany({
     where: { organizationId, status: { in: ["ACTIVE", "PAUSED"] } },
     include: { invoice: true, customer: true, policy: true },
     orderBy: { createdAt: "desc" },
+    // Defensive cap, not real pagination — see
+    // docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P2-3. Active sequences
+    // are naturally self-limiting (they leave this list on completion or
+    // manual stop); this only guards a badly neglected organization.
+    take: ACTIVE_SEQUENCES_LIMIT,
   });
 }
 

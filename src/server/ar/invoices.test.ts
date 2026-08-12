@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/server/db/client";
 import { resetDatabase } from "@/server/db/test-utils";
 import { createCustomer } from "./customers";
@@ -368,5 +368,33 @@ describe("computeInvoiceFinancials — lifecycle and dates", () => {
     );
     expect(financials.isOverdue).toBe(false);
     expect(financials.isPaid).toBe(false);
+  });
+});
+
+describe("computeInvoiceFinancials — financial invariant defense-in-depth (P2-2)", () => {
+  it("clamps outstandingMinor to zero (never negative) if paidMinor somehow exceeds amountMinor", () => {
+    const financials = computeInvoiceFinancials(
+      { amountMinor: majorToMinor(500), status: "OPEN" as const, dueDate: new Date("2026-08-20T00:00:00.000Z") },
+      majorToMinor(600), // more than amountMinor — should never happen via recordPayment's OverpaymentError, but this is the defense-in-depth backstop
+      "2026-08-15",
+    );
+
+    expect(financials.outstandingMinor).toBe(0n);
+    expect(financials.isPaid).toBe(true); // still correctly treated as fully paid, not "paid" with a negative balance
+    expect(financials.isOverdue).toBe(false);
+  });
+
+  it("logs the invariant violation for investigation rather than failing silently", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    computeInvoiceFinancials(
+      { amountMinor: majorToMinor(500), status: "OPEN" as const, dueDate: new Date("2026-08-20T00:00:00.000Z") },
+      majorToMinor(600),
+      "2026-08-15",
+    );
+
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy.mock.calls[0]?.[0]).toContain("financial invariant violated");
+    errorSpy.mockRestore();
   });
 });

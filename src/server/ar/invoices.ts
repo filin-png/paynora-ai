@@ -94,7 +94,23 @@ export function computeInvoiceFinancials(
   paidMinor: bigint,
   today?: string,
 ): InvoiceFinancials {
-  const outstandingMinor = invoice.amountMinor - paidMinor;
+  const rawOutstandingMinor = invoice.amountMinor - paidMinor;
+  // Defense-in-depth, not the primary guarantee — see
+  // docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P2-2. recordPayment's own
+  // OverpaymentError (src/server/ar/payments.ts) already prevents
+  // paidMinor from ever exceeding amountMinor through the normal payment
+  // path, so this should be unreachable. If it ever fires, something
+  // bypassed that check (a bug, a manual DB edit, a migration issue) and
+  // needs investigating. Logged loudly rather than either throwing here
+  // (which would break every other invoice's list/detail view too, since
+  // this pure function runs on every read path) or silently displaying a
+  // negative "outstanding" balance to a user.
+  if (rawOutstandingMinor < 0n) {
+    console.error(
+      `[invoices] financial invariant violated: paidMinor (${paidMinor}) exceeds amountMinor (${invoice.amountMinor}) — outstanding would be negative`,
+    );
+  }
+  const outstandingMinor = rawOutstandingMinor < 0n ? 0n : rawOutstandingMinor;
   const isOpen = invoice.status === "OPEN";
   return {
     amountMinor: invoice.amountMinor,

@@ -149,5 +149,11 @@ export async function listPaymentsForInvoice(organizationId: string, invoiceId: 
   return prisma.payment.findMany({
     where: { organizationId, invoiceId },
     orderBy: { paidAt: "desc" },
+    // Defensive cap, not real pagination — see
+    // docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P2-3. Payments per
+    // single invoice are naturally self-limiting (bounded by how many
+    // partial payments one invoice realistically gets); this only
+    // guards the pathological case.
+    take: 500,
   });
 }

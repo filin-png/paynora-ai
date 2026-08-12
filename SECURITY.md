@@ -292,6 +292,26 @@ for the full design.
 See `docs/communications.md` and `docs/integration-architecture.md` for
 the full design.
 
+## Organization deletion: irreversible cascade, no product UI path (Phase 9)
+
+Every business-data table's `organizationId` foreign key is
+`onDelete: Cascade` (`prisma/schema.prisma`) — deleting an `Organization`
+row deletes every `Customer`, `Invoice`, `Payment`, `ActivityEvent`,
+`Communication`, `DeliveryAttempt`, `CollectionPolicy`,
+`CollectionSequence`, and every other tenant-scoped record belonging to
+it, in one irreversible operation. There is deliberately no product code
+path that deletes an `Organization` — no Server Action, no admin UI —
+so this risk is currently theoretical, reachable only by someone with
+direct database access (e.g. `psql`) or a future feature that isn't
+built yet. Documented here specifically so that risk isn't invisible:
+anyone building an "delete organization" feature, or operating the
+database directly, needs to know a single `DELETE FROM organizations
+WHERE id = ...` takes every one of that organization's invoices and
+payment history with it, permanently, with no soft-delete or recovery
+path. See DEPLOYMENT.md's "Backups & point-in-time recovery" section for
+the only real mitigation available today (a database-level backup),
+since the application itself has no undo for this.
+
 ## Previously established (Phase 6)
 
 - **Secrets are never sent to the client, logged, or included in an

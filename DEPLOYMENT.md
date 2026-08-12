@@ -240,6 +240,36 @@ termination/reverse proxy, container orchestration platform, secrets
 manager, CDN. Standard "any competent hosting setup" concerns, left to
 whoever operates the actual deployment.
 
+## Backups & point-in-time recovery
+
+Not implemented by this application, and not something application code
+can substitute for — this is a hard requirement for whoever operates the
+production database, documented here because SECURITY.md's "Organization
+deletion" note points here, and because the audit found no backup story
+was written down anywhere.
+
+PAYNORA has no in-app soft-delete, undo, or recycle bin for any
+tenant-scoped data (see SECURITY.md's organization-deletion cascade
+note). The only real recovery path for accidental deletion, a bad
+migration, or storage corruption is a database-level backup taken
+independently of the app:
+
+- Enable your Postgres host's continuous backup / point-in-time recovery
+  (PITR) if it offers one (most managed Postgres providers do, as a
+  configuration toggle, not a code change).
+- If self-hosting Postgres directly, configure WAL archiving and
+  periodic base backups (`pg_basebackup` + continuous WAL archiving, or
+  `pg_dump` on a schedule as a lower-fidelity fallback) — standard
+  Postgres operations, not specific to this app.
+- Verify restores actually work before relying on them — an untested
+  backup is not a backup.
+
+This section intentionally stops at "here is what's required and why" —
+which specific tool or managed-provider feature to use depends on the
+hosting choice made under
+[Production hosting model](#production-hosting-model) above, which this
+repository doesn't dictate.
+
 ## Environment variables
 
 See `.env.example` for the authoritative, current list. From Phase 1
