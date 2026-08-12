@@ -11,6 +11,9 @@ import { createTestOrganization } from "@/server/ar/test-fixtures";
 import { EmailDisabledError } from "@/server/email/errors";
 import { createFakeEmailProvider } from "@/server/email/providers/fake";
 import type { EmailMessage, EmailProvider } from "@/server/email/types";
+import { MessagingDisabledError } from "@/server/messaging/errors";
+import { createFakeMessagingProvider } from "@/server/messaging/providers/fake";
+import type { MessagingMessage, MessagingProvider } from "@/server/messaging/types";
 import { prisma } from "@/server/db/client";
 import { resetDatabase } from "@/server/db/test-utils";
 import { prepareReminderCommunication } from "./draft";
@@ -43,6 +46,17 @@ async function createDraftCommunication(organizationId: string, userId: string, 
 async function setup() {
   const { organization, user } = await createTestOrganization();
   const customer = await createCustomer(organization.id, { name: "Acme Co", email: "billing@acme.example" });
+  const { invoice, proposal, communication } = await createDraftCommunication(organization.id, user.id, customer.id);
+  return { organization, user, customer, invoice, proposal, communication };
+}
+
+async function setupTelegram() {
+  const { organization, user } = await createTestOrganization();
+  const customer = await createCustomer(organization.id, { name: "Acme Co" });
+  // telegramChatId isn't part of customerInputSchema's create path used
+  // above by design (it's set separately, mirroring how a real user fills
+  // in the customer form) — set it directly for the test.
+  await prisma.customer.update({ where: { id: customer.id }, data: { telegramChatId: "555000111" } });
   const { invoice, proposal, communication } = await createDraftCommunication(organization.id, user.id, customer.id);
   return { organization, user, customer, invoice, proposal, communication };
 }
@@ -295,6 +309,113 @@ describe("sendCommunication — missing provider configuration", () => {
     expect(reloaded.status).toBe("DRAFT");
     const attempts = await prisma.deliveryAttempt.count({ where: { communicationId: communication.id } });
     expect(attempts).toBe(0);
+  });
+});
+
+describe("sendCommunication — Telegram channel", () => {
+  it("drafts with channel=TELEGRAM and recipient=the customer's chat id", async () => {
+    const { communication } = await setupTelegram();
+    expect(communication.channel).toBe("TELEGRAM");
+    expect(communication.recipient).toBe("555000111");
+  });
+
+  it("sends via the MessagingProvider, folding the subject into the message text (Telegram has no subject line)", async () => {
+    const { organization, user, communication } = await setupTelegram();
+    let received: MessagingMessage | null = null;
+    const provider: MessagingProvider = {
+      name: "spy",
+      async send(message) {
+        received = message;
+        return { provider: "spy" };
+      },
+    };
+
+    const result = await sendCommunication(organization.id, communication.id, user.id, {
+      messagingProvider: provider,
+    });
+
+    expect(result.communication.status).toBe("SENT");
+    expect(received).not.toBeNull();
+    expect(received!.to).toBe(communication.recipient);
+    expect(received!.text).toContain(communication.subject);
+    expect(received!.text).toContain(communication.body);
+  });
+
+  it("marks FAILED on a definite MessagingProviderRejectedError, and does not execute the proposal", async () => {
+    const { organization, user, proposal, communication } = await setupTelegram();
+    const provider = createFakeMessagingProvider({ kind: "rejected", message: "chat not found" });
+
+    const result = await sendCommunication(organization.id, communication.id, user.id, {
+      messagingProvider: provider,
+    });
+
+    expect(result.communication.status).toBe("FAILED");
+    expect(result.deliveryAttempt.failureCategory).toBe("PROVIDER_REJECTED");
+    const reloadedProposal = await prisma.actionProposal.findUniqueOrThrow({ where: { id: proposal.id } });
+    expect(reloadedProposal.status).toBe("APPROVED");
+  });
+
+  it("marks UNCERTAIN (never FAILED) on an unrecognized Telegram error — the same unknown-outcome discipline as email", async () => {
+    const { organization, user, communication } = await setupTelegram();
+    const provider = createFakeMessagingProvider({ kind: "error", message: "ECONNRESET" });
+
+    const result = await sendCommunication(organization.id, communication.id, user.id, {
+      messagingProvider: provider,
+    });
+
+    expect(result.communication.status).toBe("UNCERTAIN");
+    expect(result.deliveryAttempt.status).toBe("UNKNOWN");
+  });
+
+  it("throws MessagingDisabledError and makes no state changes when MESSAGING_PROVIDER=none (the test/CI default)", async () => {
+    const { organization, user, communication } = await setupTelegram();
+
+    await expect(sendCommunication(organization.id, communication.id, user.id)).rejects.toThrow(
+      MessagingDisabledError,
+    );
+
+    const reloaded = await prisma.communication.findUniqueOrThrow({ where: { id: communication.id } });
+    expect(reloaded.status).toBe("DRAFT");
+    const attempts = await prisma.deliveryAttempt.count({ where: { communicationId: communication.id } });
+    expect(attempts).toBe(0);
+  });
+
+  it("Send vs Send: a double-click on a Telegram communication never results in two provider dispatches", async () => {
+    const { organization, user, communication } = await setupTelegram();
+    let sendCount = 0;
+    const provider: MessagingProvider = {
+      name: "counting",
+      async send() {
+        sendCount += 1;
+        return { provider: "counting" };
+      },
+    };
+
+    const [first, second] = await Promise.allSettled([
+      sendCommunication(organization.id, communication.id, user.id, { messagingProvider: provider }),
+      sendCommunication(organization.id, communication.id, user.id, { messagingProvider: provider }),
+    ]);
+
+    const fulfilledCount = [first, second].filter((r) => r.status === "fulfilled").length;
+    expect(fulfilledCount).toBe(1);
+    expect(sendCount).toBe(1);
+  });
+});
+
+describe("sendCommunication — actor source", () => {
+  it("records source=USER by default, and source=AUTOMATION when explicitly passed", async () => {
+    const { organization, user, invoice, communication } = await setup();
+
+    await sendCommunication(organization.id, communication.id, user.id, {
+      provider: createFakeEmailProvider({ kind: "success" }),
+      actorSource: "AUTOMATION",
+    });
+
+    const events = await prisma.activityEvent.findMany({
+      where: { organizationId: organization.id, invoiceId: invoice.id, type: "COMMUNICATION_SENT" },
+    });
+    expect(events).toHaveLength(1);
+    expect((events[0]!.metadata as { source?: string } | null)?.source).toBe("AUTOMATION");
   });
 });
 

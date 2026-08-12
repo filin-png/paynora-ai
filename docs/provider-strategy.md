@@ -47,14 +47,14 @@ interface — this is an ordering decision, not a permanent exclusion.
 | `AIProvider`          | Structured AI generation (insight/email wording) | OpenRouter, Mistral (real); GigaChat, Yandex AI (recognized) | Interface + Gateway implemented (Phase 3); routing/fallback + two real vendor adapters (Phase 6) — see `docs/integration-architecture.md#ai-routing` |
 | `EmailProvider`       | Transactional payment-reminder email       | SMTP (any relay)         | Implemented (Phase 4) — see `docs/communications.md#provider-abstraction` |
 | `MessagingProvider`   | Operator notifications, future interactive actions | Telegram | Implemented (Phase 6) — real Bot API adapter, no domain caller yet, see `docs/integration-architecture.md#messaging` |
-| `BillingProvider`     | PAYNORA's own subscription billing        | Stripe, YooKassa         | Types/contract only (Phase 6); real adapter + Prisma schema is Phase 8 — see `docs/integration-architecture.md#billing` |
+| `BillingProvider`     | PAYNORA's own subscription billing        | Stripe, YooKassa         | Types/contract only (Phase 6); real adapter + Prisma schema is Phase 10 — see `docs/integration-architecture.md#billing` |
 | `AnalyticsProvider`   | Product analytics                         | PostHog                  | Not implemented — candidate documented in `docs/integration-architecture.md#documented-only-boundaries` |
 | `StorageProvider`     | File/document storage                     | S3-compatible, Yandex Object Storage | Not implemented — no current use case, see `docs/integration-architecture.md#documented-only-boundaries` |
-| `AccountingProvider`, `CRMProvider`, `BankingProvider` | Customer-facing integrations (1С, Bitrix24, amoCRM, bank APIs) | TBD, only per validated customer demand | Not implemented — Phase 9, documented only |
+| `AccountingProvider`, `CRMProvider`, `BankingProvider` | Customer-facing integrations (1С, Bitrix24, amoCRM, bank APIs) | TBD, only per validated customer demand | Not implemented — Phase 11, documented only |
 | `JobProvider`         | Background job scheduling                 | TBD at a future phase, if one ever needs scheduled/automated sends | Not implemented — Phase 4's "Send" is a synchronous, human-triggered action, deliberately not queued |
 
 Note: `BillingProvider` here is PAYNORA's own subscription billing
-(Phase 6 types, Phase 8 real implementation), distinct from the Phase 9
+(Phase 6 types, Phase 10 real implementation), distinct from the Phase 11
 "integrations" work that connects to a *customer's* accounting/payment
 infrastructure (QuickBooks, Xero, regional processors) — PAYNORA
 integrates with that infrastructure, it does not replace it.

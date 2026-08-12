@@ -111,7 +111,7 @@ authenticity and normalizes a webhook into a `NormalizedSubscriptionEvent`
 — it throws `BillingWebhookVerificationError` on a failed signature check
 rather than returning a best-guess result, so a forged webhook can never
 reach domain code labeled as legitimate. There is no domain code that
-applies one yet (Phase 8, per `ROADMAP.md`); when that domain exists, it
+applies one yet (Phase 10, per `ROADMAP.md`); when that domain exists, it
 is responsible for its own idempotency check against
 `eventIdentity.eventId` before applying anything.
 
@@ -133,6 +133,61 @@ organization "is allowed" to use.
 
 See `docs/integration-architecture.md` for the full design, including why
 each provider category stopped where it did.
+
+## Trust boundary chain (Production Communications & AI, Phase 8)
+
+Phase 8 gives `MessagingProvider` (Telegram) its first real domain caller
+and hardens the AI/Email gateways for production. The chain from Phase 6
+is unchanged in shape — every provider still flows
+`adapter -> Gateway -> Service -> domain code` — but two new boundaries
+are load-bearing now that Telegram is actually reachable:
+
+**A Telegram chat id is never PAYNORA identity.** `communication.recipient`
+(the chat id passed to `MessagingProvider.send`) is set exactly once, at
+draft time, by `resolveCommunicationDestination`
+(`src/server/communications/channel.ts`) reading `Customer.telegramChatId`
+— a tenant-scoped, server-side domain read. No code path accepts a chat
+id, organization id, or invoice id from a client request and uses it to
+select where a message goes or which tenant it belongs to;
+`sendCommunication` re-derives everything from `organizationId` +
+`communicationId`, both filtered by `organizationId` on every query (see
+`src/server/communications/send.ts`), so a guessed or forged
+`communicationId` from another organization resolves to "not found," never
+another tenant's data.
+
+**Channel selection has no silent fallback.** `resolveCommunicationDestination`
+auto-picks a channel only when exactly one destination is configured, and
+returns `blocked: true` with a human-readable reason otherwise (e.g. both
+Email and Telegram configured with no explicit preference) — there is no
+code path where "email failed" or "email missing" causes a silent retry
+on Telegram, or vice versa. See `src/server/communications/channel.test.ts`
+for the adversarial cases (both configured, neither configured, explicit
+preference pointing at a destination that isn't actually set).
+
+**AI is structurally never authoritative for a financial or identity
+value.** `prepareReminderCommunication` (`src/server/communications/draft.ts`)
+persists `recipient`, `channel`, `customerId`, `invoiceId`, and
+`organizationId` from server-side domain reads only; the AI's structured
+output (`ReminderEmailAIOutput`, `src/server/communications/ai-context.ts`)
+can populate `subject`/`body` alone — its Zod schema has no field capable
+of setting who a message goes to, how much is owed, or whether sending is
+authorized. This is unchanged from Phase 3's Operator insight schema
+(`tone`/`summary` only), reverified here for the communications path.
+
+**A timed-out request is actually cancelled, not just abandoned.**
+`runAIGeneration` and `dispatchMessage` (`src/server/ai/gateway.ts`,
+`src/server/messaging/gateway.ts`) create a real `AbortController` per
+call and abort it when the timeout fires; both real HTTP adapters forward
+`signal` into `fetch`. SMTP (socket-based, no `AbortSignal`) instead bounds
+every phase via nodemailer's `connectionTimeout`/`greetingTimeout`/
+`socketTimeout`. Either way, a timed-out attempt never keeps consuming a
+real connection in the background after this codebase has moved on to
+recording `UNCERTAIN` — see
+[Idempotency for money-adjacent automation](#principles) below for what
+happens to that `UNCERTAIN` state.
+
+See `docs/communications.md` and `docs/integration-architecture.md#ai-routing`
+for the full design.
 
 ## Principles
 
@@ -173,7 +228,71 @@ each provider category stopped where it did.
   observability infrastructure is added) excludes credentials, tokens, and
   full customer payment details.
 
-## Current status (Phase 6)
+## Current status (Phase 8)
+
+- **A Telegram chat id is never treated as PAYNORA identity or
+  authorization.** See
+  [Trust boundary chain (Production Communications & AI)](#trust-boundary-chain-production-communications--ai-phase-8)
+  above — `communication.recipient` is always a server-side read of
+  `Customer.telegramChatId`, filtered by `organizationId` on every query;
+  no request path accepts a chat id, org id, or invoice id from the client
+  and uses it to select a destination or tenant.
+- **Channel selection never silently substitutes one channel for
+  another.** `resolveCommunicationDestination`
+  (`src/server/communications/channel.ts`) either auto-resolves an
+  unambiguous single destination or returns `blocked: true` with a reason
+  — there is no "email failed, try Telegram instead" code path. Tested in
+  `src/server/communications/channel.test.ts` and
+  `draft.test.ts` (ambiguous/missing-destination cases).
+- **AI cannot set who a message goes to, how much is owed, or whether
+  sending is authorized** — only `subject`/`body` free text. See
+  [Trust boundary chain (Production Communications & AI)](#trust-boundary-chain-production-communications--ai-phase-8)
+  above.
+- **AI routing's retryable/non-retryable policy is explicit and tested.**
+  Every `AIProvider` failure kind (timeout, provider/rate-limit error,
+  invalid configuration, invalid output failing schema validation) is
+  fallback-eligible — there is no non-retryable category, because
+  "fallback" here always means a structurally different vendor and
+  credential, never a resubmission to the same one. See
+  `docs/integration-architecture.md#ai-routing` and
+  `src/server/ai/service.test.ts`'s dedicated policy test.
+- **Timeouts cancel the real request, not just a local promise.**
+  `runAIGeneration`/`dispatchMessage` create and abort a real
+  `AbortController` on timeout, forwarded into `fetch` by both real HTTP
+  adapters; SMTP bounds every socket phase via nodemailer's
+  `connectionTimeout`/`greetingTimeout`/`socketTimeout` instead (no
+  `AbortSignal` applies to a socket protocol). Proven with tests that
+  assert the signal a mocked provider received was actually aborted, not
+  merely present — `src/server/ai/gateway.test.ts`,
+  `src/server/messaging/gateway.test.ts`.
+- **Audit trail records who triggered a send.** `sendCommunication`'s
+  `actorSource` (`"USER"` | `"AUTOMATION"`) is recorded on the
+  `COMMUNICATION_SEND_ATTEMPTED`/`COMMUNICATION_SENT` `ActivityEvent`'s
+  `metadata.source` — a real gap found and fixed during this phase's
+  audit: Collections Automation's `executeAutoSend` previously omitted
+  this option entirely, silently defaulting to `"USER"` for an automated
+  send.
+- **Idempotency for Telegram inherits Email's guarantees, not a
+  reimplementation of them.** `dispatchByChannel`
+  (`src/server/communications/send.ts`) branches on channel only inside
+  the same atomic claim/dispatch/finalize state machine Phase 4
+  established — proven with a Telegram-specific concurrent double-send
+  test (`send.test.ts`), not merely asserted by code-reading.
+- **The dev-only live smoke-test CLI cannot run in CI or print a secret.**
+  `scripts/live-smoke-test.ts` refuses to run when `CI` or `VITEST` is set,
+  requires `--confirm` before any real vendor call, takes no default
+  recipient, and only ever logs a normalized provider name/result — never
+  a raw response, header, or credential. Not part of `npm test` or any CI
+  workflow; see `docs/integration-architecture.md#live-smoke-test`.
+- **Zero new credentials required to run the app or its test suite** —
+  `TELEGRAM_BOT_TOKEN` (already Phase 6) and the existing AI/SMTP vars
+  remain fully optional; the full test suite (416 tests) and CI make zero
+  real network calls to OpenRouter, Mistral, SMTP, or Telegram.
+
+See `docs/communications.md` and `docs/integration-architecture.md` for
+the full design.
+
+## Previously established (Phase 6)
 
 - **Secrets are never sent to the client, logged, or included in an
   error.** Every new secret env var (`OPENROUTER_API_KEY`,
@@ -218,15 +337,13 @@ each provider category stopped where it did.
   `"none"`; the full test suite (378 tests) and CI never set any of the
   new Phase 6 secrets and make zero real network calls to OpenRouter,
   Mistral, or Telegram.
-- **No new entry point exists for Messaging or Billing to bypass an
-  existing authorization boundary** — neither has a domain caller yet
-  (see [Messaging: a foundation with no caller](
-  docs/integration-architecture.md#messaging-a-foundation-with-no-caller)),
-  so there is nothing today for a forged Telegram identity or a fabricated
-  webhook to reach. The constraint for when a caller is added is
-  documented in `docs/integration-architecture.md#messaging` (a Telegram
-  chat id is never itself proof of PAYNORA authorization) and above (a
-  `BillingProvider` never itself changes financial state).
+- **As of Phase 6, neither Messaging nor Billing had a domain caller yet**
+  — Messaging's first real caller (Telegram as a communication channel)
+  was added in Phase 8; see
+  [Trust boundary chain (Production Communications & AI)](#trust-boundary-chain-production-communications--ai-phase-8)
+  above for the authorization boundary that applies now that it does.
+  Billing still has no domain caller (a `BillingProvider` never itself
+  changes financial state — see above).
 - **Every new module still respects `tsconfig.json`'s `strict` mode and
   the existing Zod-at-the-boundary discipline** — `AI_PROVIDER_FALLBACK`,
   `MESSAGING_PROVIDER`/`TELEGRAM_BOT_TOKEN`,

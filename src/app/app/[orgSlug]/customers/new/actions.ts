@@ -23,6 +23,11 @@ export async function createCustomerAction(
       phone: String(formData.get("phone") ?? ""),
       companyName: String(formData.get("companyName") ?? ""),
       notes: String(formData.get("notes") ?? ""),
+      telegramChatId: String(formData.get("telegramChatId") ?? ""),
+      preferredCommunicationChannel: String(formData.get("preferredCommunicationChannel") ?? "") as
+        | "EMAIL"
+        | "TELEGRAM"
+        | "",
     });
   } catch (error) {
     if (error instanceof z.ZodError) {

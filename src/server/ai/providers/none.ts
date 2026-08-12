@@ -9,7 +9,7 @@ import type { AIProvider, AIRequest, AIResult } from "../types";
  */
 export const noneProvider: AIProvider = {
   name: "none",
-  generateStructured<T>(_request: AIRequest<T>): Promise<AIResult<T>> {
+  generateStructured<T>(_request: AIRequest<T>, _options?: { signal?: AbortSignal }): Promise<AIResult<T>> {
     throw new AIDisabledError();
   },
 };

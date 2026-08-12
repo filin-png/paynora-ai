@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, Mail, Phone, Plus } from "lucide-react";
+import { ArrowLeft, Mail, Phone, Plus, Send, TriangleAlert } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { SectionHeader } from "@/components/ui/page-header";
 import { cn } from "@/lib/utils";
 import { isResourceNotFoundError } from "@/lib/not-found";
+import { resolveCommunicationDestination } from "@/server/communications/channel";
 import { listCustomerActivity } from "@/server/ar/activity";
 import { getCustomer } from "@/server/ar/customers";
 import { listInvoicesWithFinancials } from "@/server/ar/invoices";
@@ -71,6 +72,25 @@ export default async function CustomerDetailPage({
                 </span>
               ) : null}
               {customer.companyName ? <span>{customer.companyName}</span> : null}
+            </div>
+            <div className="mt-1.5">
+              {(() => {
+                const destination = resolveCommunicationDestination(customer);
+                if (destination.blocked) {
+                  return (
+                    <span className="inline-flex items-center gap-1.5 text-xs text-warning">
+                      <TriangleAlert className="size-3.5" />
+                      {destination.reason}
+                    </span>
+                  );
+                }
+                return (
+                  <span className="inline-flex items-center gap-1.5 text-xs text-muted">
+                    <Send className="size-3.5" />
+                    Reminders go to {destination.channel === "EMAIL" ? "email" : "Telegram"}: {destination.destination}
+                  </span>
+                );
+              })()}
             </div>
           </div>
           <div className="flex shrink-0 gap-2">

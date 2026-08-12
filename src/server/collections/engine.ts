@@ -17,6 +17,7 @@ import { getInvoiceWithFinancials, listInvoicesWithFinancials } from "@/server/a
 import { buildDeterministicInvoiceContext } from "@/server/ar/reminder-context";
 import { prisma } from "@/server/db/client";
 import type { EmailProvider } from "@/server/email/types";
+import type { MessagingProvider } from "@/server/messaging/types";
 import { env } from "@/lib/env";
 import { enrollEligibleInvoices } from "./enrollment";
 
@@ -72,7 +73,12 @@ function emptySummary(globallyDisabled: boolean): AutomationTickSummary {
  */
 export async function runAutomationTick(
   now: Date = new Date(),
-  options: { organizationId?: string; globalEnabled?: boolean; emailProvider?: EmailProvider } = {},
+  options: {
+    organizationId?: string;
+    globalEnabled?: boolean;
+    emailProvider?: EmailProvider;
+    messagingProvider?: MessagingProvider;
+  } = {},
 ): Promise<AutomationTickSummary> {
   const startedAt = Date.now();
   const globalEnabled = options.globalEnabled ?? env.AUTOMATION_ENABLED;
@@ -88,7 +94,7 @@ export async function runAutomationTick(
   const targetOrganizationIds = await resolveTargetOrganizationIds(options.organizationId);
   for (const organizationId of targetOrganizationIds) {
     summary.organizationsProcessed += 1;
-    const counts = await processOrganizationTick(organizationId, today, options.emailProvider);
+    const counts = await processOrganizationTick(organizationId, today, options.emailProvider, options.messagingProvider);
     summary.scanned += counts.scanned;
     summary.enrolled += counts.enrolled;
     summary.claimed += counts.claimed;
@@ -149,6 +155,7 @@ async function processOrganizationTick(
   organizationId: string,
   today: string,
   emailProvider?: EmailProvider,
+  messagingProvider?: MessagingProvider,
 ): Promise<OrgCounts> {
   const counts = emptyOrgCounts();
 
@@ -212,6 +219,7 @@ async function processOrganizationTick(
         executedStepIds: executedStepIdsBySequence.get(sequence.id) ?? new Set<string>(),
         isBlocked: blockedInvoiceIds.has(sequence.invoiceId),
         emailProvider,
+        messagingProvider,
       });
       counts.claimed += outcome.claimed;
       counts.executed += outcome.executed;
@@ -240,6 +248,7 @@ type SequenceTickContext = {
   executedStepIds: Set<string>;
   isBlocked: boolean;
   emailProvider?: EmailProvider;
+  messagingProvider?: MessagingProvider;
 };
 
 /**
@@ -256,7 +265,7 @@ async function processSequenceTick(
   ctx: SequenceTickContext,
 ): Promise<SequenceOutcome> {
   const outcome = emptyOutcome();
-  const { financialsEntry, policy, steps, executedStepIds, isBlocked, emailProvider } = ctx;
+  const { financialsEntry, policy, steps, executedStepIds, isBlocked, emailProvider, messagingProvider } = ctx;
 
   if (!financialsEntry) return outcome;
   const { invoice, financials } = financialsEntry;
@@ -341,7 +350,7 @@ async function processSequenceTick(
   outcome.executed = 1;
 
   if (policy.automationMode === "AUTO_SEND" && policy.autoSendEnabledByUserId) {
-    await executeAutoSend(sequence, proposal.id, policy.autoSendEnabledByUserId, today, emailProvider);
+    await executeAutoSend(sequence, proposal.id, policy.autoSendEnabledByUserId, today, emailProvider, messagingProvider);
   }
 
   return outcome;
@@ -529,6 +538,7 @@ async function executeAutoSend(
   actingUserId: string,
   today: string,
   emailProvider?: EmailProvider,
+  messagingProvider?: MessagingProvider,
 ): Promise<void> {
   try {
     await approveActionProposal(sequence.organizationId, proposalId, actingUserId);
@@ -553,7 +563,11 @@ async function executeAutoSend(
       return;
     }
 
-    await sendCommunication(sequence.organizationId, communication.id, actingUserId, { provider: emailProvider });
+    await sendCommunication(sequence.organizationId, communication.id, actingUserId, {
+      provider: emailProvider,
+      messagingProvider,
+      actorSource: "AUTOMATION",
+    });
   } catch (error) {
     // Not retried automatically within this tick — surfaced via the
     // Communication's own FAILED/UNCERTAIN status and the existing manual

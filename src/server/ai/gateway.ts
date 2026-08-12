@@ -27,8 +27,14 @@ export async function runAIGeneration<T>(
   const startedAt = Date.now();
 
   let raw: AIResult<T>;
+  const controller = new AbortController();
   try {
-    raw = await withTimeout(provider.generateStructured(request), provider.name, timeoutMs);
+    raw = await withTimeout(
+      provider.generateStructured(request, { signal: controller.signal }),
+      provider.name,
+      timeoutMs,
+      controller,
+    );
   } catch (error) {
     if (error instanceof AITimeoutError) {
       recordProviderTelemetry({
@@ -78,9 +84,27 @@ export async function runAIGeneration<T>(
   return { data: parsed.data, provider: raw.provider, usage: raw.usage };
 }
 
-function withTimeout<T>(promise: Promise<T>, providerName: string, timeoutMs: number): Promise<T> {
+/**
+ * Races the provider call against a timer, exactly as before — but now
+ * also aborts `controller` when the timer wins, so an adapter that
+ * forwards `signal` to `fetch` (every real HTTP adapter does) actually
+ * cancels the in-flight request at the socket level instead of leaving it
+ * running server-side with nothing left to read its result. Without this,
+ * a "timeout" was only ever a local promise race — the outbound request
+ * kept consuming a connection and vendor-side compute after this function
+ * had already moved on. See docs/ai-architecture.md#timeouts.
+ */
+function withTimeout<T>(
+  promise: Promise<T>,
+  providerName: string,
+  timeoutMs: number,
+  controller: AbortController,
+): Promise<T> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new AITimeoutError(providerName, timeoutMs)), timeoutMs);
+    const timer = setTimeout(() => {
+      controller.abort();
+      reject(new AITimeoutError(providerName, timeoutMs));
+    }, timeoutMs);
     promise.then(
       (value) => {
         clearTimeout(timer);

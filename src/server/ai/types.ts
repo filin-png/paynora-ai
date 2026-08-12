@@ -42,5 +42,12 @@ export type AIResult<T> = {
  */
 export interface AIProvider {
   readonly name: string;
-  generateStructured<T>(request: AIRequest<T>): Promise<AIResult<T>>;
+  /**
+   * `options.signal`, when provided, is a real `AbortSignal` the gateway
+   * aborts on timeout (src/server/ai/gateway.ts) — every adapter that
+   * makes an HTTP call must forward it to `fetch` so a timed-out request
+   * is actually cancelled at the socket level, not just abandoned while
+   * still running server-side. See docs/ai-architecture.md#timeouts.
+   */
+  generateStructured<T>(request: AIRequest<T>, options?: { signal?: AbortSignal }): Promise<AIResult<T>>;
 }

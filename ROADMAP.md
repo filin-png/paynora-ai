@@ -191,7 +191,70 @@ scope decision was made.
 See `docs/product-ui.md` for the full design system, page architecture,
 responsive/accessibility approach, and known limitations.
 
-## Phase 8 — Intelligence
+## Phase 8 — Production Communications & AI — ✅ complete (2026-08-12)
+
+- [x] AI (OpenRouter/Mistral) hardened for production: real
+      `AbortController`-based request cancellation on timeout (a timed-out
+      request's socket is now actually torn down, not just abandoned
+      client-side), HTTP status classification (401/403/429/5xx) without
+      ever logging a key, prompt, customer communication, or raw provider
+      response body
+- [x] AI routing's bounded fallback (primary → one optional, distinct-
+      vendor fallback, never a longer chain) explicitly documented and
+      tested as retryable/non-retryable-by-classification — see
+      `docs/integration-architecture.md#ai-routing`; every `AIProvider`
+      failure kind (timeout, provider/rate-limit error, invalid config,
+      invalid output) is fallback-eligible because "fallback" here always
+      means a different vendor/credential, never a resubmission to the
+      same one
+- [x] SMTP hardened: `connectionTimeout`/`greetingTimeout`/`socketTimeout`
+      bound every phase of a stuck connection (SMTP is socket-based, so
+      there is no `AbortSignal` the way the HTTP-based adapters take one)
+- [x] Telegram wired as a real, second communication channel — Prisma
+      schema extended (`CommunicationChannel.TELEGRAM`,
+      `Customer.telegramChatId`/`preferredCommunicationChannel`),
+      `sendCommunication`'s existing two-phase claim/dispatch/finalize
+      state machine now branches on channel, inheriting every existing
+      concurrency/idempotency/unknown-outcome guarantee for Telegram
+      automatically — a Telegram chat id is never trusted as PAYNORA
+      identity; every send is authorized server-side first
+- [x] Explicit, non-silent channel selection
+      (`src/server/communications/channel.ts#resolveCommunicationDestination`):
+      auto-resolves only when exactly one destination is configured,
+      otherwise reports `blocked: true` with a human-readable reason —
+      never a silent guess between Email and Telegram
+- [x] Collections Automation's `AUTO_SEND` path now threads a resolved,
+      channel-appropriate provider and records `actorSource: "AUTOMATION"`
+      on the audit trail (`ActivityEvent.metadata.source`) — a real gap
+      found and fixed during this phase, since it previously defaulted
+      silently to `"USER"` for automated sends
+- [x] Idempotency boundary reused, not reinvented: `Communication
+      .actionProposalId @unique` plus each collection step's own distinct
+      `ActionProposal` already transitively guarantees at most one
+      Communication per collection step, now channel-inclusive since
+      channel is fixed once at draft time
+- [x] Provider Settings UI (`/app/[orgSlug]/settings?tab=integrations`)
+      shows real per-vendor configured/active status (OpenRouter, Mistral,
+      SMTP, Telegram) — never a secret value, never an editable `.env`
+      field
+- [x] Dev-only live smoke-test CLI (`npm run smoke -- ai|email|telegram
+      ...`) to manually verify a real vendor later — never runs in CI, no
+      hardcoded recipient, requires `--confirm`, never prints a secret
+- [x] Adversarial security review of this phase's surface (SSRF, header/
+      CRLF injection, recipient spoofing, cross-tenant send, prompt
+      injection, AI-controlled financial values, duplicate sends, retry-
+      after-unknown-outcome, forged Telegram destination, secret/raw-
+      response leakage) — no new exploitable finding beyond the
+      `actorSource` audit gap above, which was fixed
+- [x] 416 tests passing, including new coverage for the Messaging
+      gateway's `AbortController` cancellation, Telegram end-to-end
+      `AUTO_SEND`, and the AI routing fallback-eligibility policy
+
+See `docs/communications.md` and `docs/integration-architecture.md` for
+the full design, including what is real-network-verified vs. only
+mock-tested so far.
+
+## Phase 9 — Intelligence
 
 - [ ] Payment behavior analytics
 - [ ] Promise-to-pay tracking, manual first, automatic extraction later
@@ -199,7 +262,7 @@ responsive/accessibility approach, and known limitations.
 - [ ] Risk scoring improvements
 - [ ] Collection performance analytics
 
-## Phase 9 — Monetization
+## Phase 10 — Monetization
 
 - [ ] Subscription domain model (Prisma schema — not yet added; Phase 6
       deliberately stopped short of this, see
@@ -212,17 +275,17 @@ responsive/accessibility approach, and known limitations.
 - [ ] Subscription lifecycle (trial, active, past-due, cancelled) driven
       by real, verified `BillingProvider` webhooks
 
-## Phase 10 — Integrations (only per validated customer demand)
+## Phase 11 — Integrations (only per validated customer demand)
 
 - [ ] Accounting system integrations (candidates: local/regional + QuickBooks, Xero)
 - [ ] Payment processor integrations for customer-facing collection (distinct
-      from Phase 9's PAYNORA-subscription billing — candidates: Stripe once
+      from Phase 10's PAYNORA-subscription billing — candidates: Stripe once
       relevant, regional providers)
 - [ ] Invoice import (CSV/XLSX)
 - [ ] Object storage (S3-compatible, Yandex Object Storage) for the first
       feature that needs to store a file/document
 
-## Phase 11 — Commercialization
+## Phase 12 — Commercialization
 
 - [ ] Landing page + pricing
 - [ ] Onboarding flow
@@ -231,7 +294,7 @@ responsive/accessibility approach, and known limitations.
 - [ ] Legal pages
 - [ ] Support workflow
 
-## Phase 12 — Exit Readiness
+## Phase 13 — Exit Readiness
 
 - [ ] Remove founder dependencies
 - [ ] Complete operational documentation

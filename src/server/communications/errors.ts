@@ -20,11 +20,18 @@ export class InvalidCommunicationTransitionError extends Error {
   }
 }
 
-/** The customer has no email address on file — cannot draft or send a reminder. */
-export class MissingCustomerEmailError extends Error {
-  constructor() {
-    super("Customer has no email address on file");
-    this.name = "MissingCustomerEmailError";
+/**
+ * No communication channel could be resolved for this customer — either
+ * nothing is configured, or more than one destination is configured with
+ * no explicit preference to break the tie. See
+ * src/server/communications/channel.ts#resolveCommunicationDestination.
+ * Never a silent fallback between channels — this is the explicit,
+ * catchable "blocked" outcome the brief calls for.
+ */
+export class CommunicationChannelBlockedError extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = "CommunicationChannelBlockedError";
   }
 }
 

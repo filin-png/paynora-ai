@@ -40,7 +40,10 @@ const DEFINITE_REJECTION_CODES = new Set([400, 403]);
 export function createTelegramProvider(fetchImpl: typeof fetch = fetch): MessagingProvider {
   return {
     name: "telegram",
-    async send(message: MessagingMessage): Promise<MessagingSendResult> {
+    async send(
+      message: MessagingMessage,
+      options?: { signal?: AbortSignal },
+    ): Promise<MessagingSendResult> {
       if (!env.TELEGRAM_BOT_TOKEN) {
         throw new MessagingConfigurationError(
           "TELEGRAM_BOT_TOKEN must be configured to use MESSAGING_PROVIDER=telegram",
@@ -49,6 +52,7 @@ export function createTelegramProvider(fetchImpl: typeof fetch = fetch): Messagi
 
       const response = await fetchImpl(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
         method: "POST",
+        signal: options?.signal,
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ chat_id: message.to, text: message.text }),
       });

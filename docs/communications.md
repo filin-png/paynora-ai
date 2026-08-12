@@ -51,7 +51,50 @@ it tightened what's already there: `customerInputSchema`
 `src/server/auth/email.ts#normalizeEmail`, reused rather than
 reimplemented). A customer with no email can be created and invoiced
 normally — Phase 4 only requires an email at the point a reminder is
-actually drafted (`MissingCustomerEmailError` if absent), not before.
+actually drafted, not before. As of Phase 8, a missing destination is
+reported through `CommunicationChannelBlockedError` (see
+[Channel model](#channel-model)), not the now-removed
+`MissingCustomerEmailError`.
+
+## Channel model (Phase 8)
+
+Phase 8 adds Telegram as a second communication channel, without building
+a generic omnichannel framework — `CommunicationChannel` gained one new
+enum value (`TELEGRAM`), and `Customer` gained two nullable columns:
+`telegramChatId` (a chat id or `@channelusername`, free-form since
+Telegram's id space isn't a fixed pattern worth second-guessing) and
+`preferredCommunicationChannel` (`EMAIL` | `TELEGRAM` | unset).
+
+`resolveCommunicationDestination` (`src/server/communications/channel.ts`)
+is the one place that decides, and it is deliberately never a heuristic:
+
+- An explicit `preferredCommunicationChannel` always wins, provided that
+  channel's destination is actually on file — otherwise `blocked: true`
+  with a reason naming the mismatch (preference set to a channel with no
+  destination configured).
+- With no preference set: exactly one destination configured auto-
+  resolves to it (there is nothing to choose between, so this isn't a
+  guess). **Both** configured with no preference is `blocked: true` — the
+  customer's own record is genuinely ambiguous, and PAYNORA will not
+  silently pick one.
+- Neither configured is `blocked: true`.
+
+There is no code path anywhere in this codebase that tries Email, sees it
+fail or be absent, and silently substitutes Telegram (or vice versa) —
+that was an explicit anti-pattern called out in this phase's brief and
+is the reason `resolveCommunicationDestination` returns a discriminated
+`blocked` result instead of `string | null`. `prepareReminderCommunication`
+throws `CommunicationChannelBlockedError` (with the resolver's own reason)
+when blocked, surfaced in the Action Center as a "No communication channel
+configured" state with a link to fix the customer record — never a silent
+failure. See `src/server/communications/channel.test.ts` for the full
+matrix (8 cases) and `draft.test.ts` for the drafting-level integration.
+
+`Communication.channel` and `Communication.recipient` are set exactly
+once, at draft time, from this resolution — never re-read from `Customer`
+at send time (consistent with the existing snapshot discipline described
+below), and never influenced by AI output (see
+[AI and email wording](#ai-and-email-wording)).
 
 ## Communication domain
 
@@ -66,10 +109,13 @@ actually drafted (`MissingCustomerEmailError` if absent), not before.
   `Customer` at send time. Once a communication leaves `DRAFT`, these
   fields are frozen — see [State machine](#state-machine) for how that's
   enforced, not just intended.
-- `channel`/`purpose` exist as enums with exactly one member each
-  (`EMAIL`, `PAYMENT_REMINDER`) — modeled as enums, not hardcoded, so a
-  later phase adding a second channel or purpose is additive, not a
-  breaking change to this table's shape.
+- `channel`/`purpose` exist as enums — `purpose` still has exactly one
+  member (`PAYMENT_REMINDER`); `channel` gained its second member
+  (`TELEGRAM`, alongside `EMAIL`) in Phase 8, additively — the original
+  Phase 4 design note ("modeled as enums so a later phase adding a second
+  channel is additive, not breaking") held up in practice: no migration
+  touched `recipient`/`subject`/`body`/the state machine/`DeliveryAttempt`
+  to add it. See [Channel model](#channel-model).
 
 `DeliveryAttempt` (one row per actual dispatch attempt — the initial send
 and every retry each get their own row, never overwritten):
@@ -384,9 +430,13 @@ provider credentials — only ids, counts, and short category labels.
 proposal's "Approved — review & send" link on the main Action Center
 list:
 
-- No `Communication` yet -> "Prepare reminder email" button.
-- `DRAFT` -> editable subject/body form ("Save changes") plus a "Send
-  email" button, with the recipient/invoice/outstanding amount shown
+- No `Communication` yet -> the resolved channel (Email/Telegram badge +
+  destination) and a "Prepare reminder" button, or — if
+  `resolveCommunicationDestination` is blocked — a "No communication
+  channel configured" alert with the reason and an "Edit customer" link.
+  See [Channel model](#channel-model).
+- `DRAFT` -> editable subject/body form ("Save changes") plus a "Send"
+  button, with the recipient/channel/invoice/outstanding amount shown
   above.
 - `FAILED` -> the failure reason, plus a "Retry" button.
 - `SENDING`/`UNCERTAIN` -> "Delivery status uncertain. Do not resend
@@ -403,12 +453,41 @@ terminal state.
 ## Explicitly out of scope in Phase 4
 
 - Telegram, SMS, WhatsApp — `CommunicationChannel` has one member
-  (`EMAIL`) on purpose.
+  (`EMAIL`) on purpose. **Telegram added in Phase 8** — see
+  [Channel model](#channel-model). SMS/WhatsApp remain out of scope; no
+  code path assumes only two channels will ever exist, but nothing beyond
+  Telegram was built speculatively.
 - Any scheduler, cron job, or background queue — "Send" is a synchronous,
   human-triggered Server Action, exactly like "Run Operator" in Phase 3.
   **Built in Phase 5** (`runAutomationTick`), which calls this exact
   `sendCommunication` function unchanged — see
   `docs/collections-automation.md#auto-send`.
+
+## Production hardening (Phase 8)
+
+- **Real request cancellation on timeout.** `sendCommunication`'s
+  underlying gateways (`dispatchEmail`/`dispatchMessage`) don't themselves
+  gain an `AbortController` for SMTP (a socket protocol, not
+  fetch-based) — see [Sender safety](#sender-safety) and
+  `src/server/email/providers/smtp.ts`'s `connectionTimeout`/
+  `greetingTimeout`/`socketTimeout`. The Messaging gateway (Telegram) does
+  gain one, mirroring `src/server/ai/gateway.ts`'s Phase 8 change exactly
+  — see `src/server/messaging/gateway.test.ts`.
+- **`actorSource` on the audit trail.** `sendCommunication` now accepts
+  `actorSource: "USER" | "AUTOMATION"` (default `"USER"`), recorded in
+  `COMMUNICATION_SEND_ATTEMPTED`/`COMMUNICATION_SENT`'s
+  `ActivityEvent.metadata.source`. Collections Automation's
+  `executeAutoSend` passes `"AUTOMATION"` explicitly — a real gap fixed
+  during this phase's audit, since it previously omitted the option
+  entirely and every automated send was indistinguishable from a manual
+  one in the audit trail.
+- **Telegram inherits every existing delivery guarantee**, not a parallel
+  implementation of them: `dispatchByChannel` branches on
+  `communication.channel` inside the same claim → dispatch → finalize
+  state machine — the same atomic conditional claim, the same
+  `UNCERTAIN`-never-FAILED-on-ambiguous-outcome rule, the same
+  `acknowledgeUncertainRisk` gate on resend. Proven, not just implied, by
+  a Telegram-specific concurrent double-send test in `send.test.ts`.
 - Scheduled/automatic reminder sequences (e.g. due date -> +3d -> +7d) —
   **built in Phase 5** as `CollectionPolicy`/`CollectionSequence`, see
   `docs/collections-automation.md`.

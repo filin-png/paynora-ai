@@ -27,11 +27,13 @@ export type OpenAiCompatibleChatConfig = {
 export async function callOpenAiCompatibleChat<T>(
   config: OpenAiCompatibleChatConfig,
   request: AIRequest<T>,
+  options: { signal?: AbortSignal } = {},
 ): Promise<AIResult<T>> {
   const fetchImpl = config.fetchImpl ?? fetch;
 
   const response = await fetchImpl(config.baseUrl, {
     method: "POST",
+    signal: options.signal,
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${config.apiKey}`,
@@ -60,8 +62,21 @@ export async function callOpenAiCompatibleChat<T>(
     // an error message from the vendor we don't control) or any request
     // header (would include the Authorization bearer) — only the status
     // code, which cannot leak a secret. See docs/integration-architecture.md
-    // #secrets.
-    throw new Error(`${config.name} request failed with HTTP ${response.status}`);
+    // #secrets. The status is classified for observability only — every
+    // classification here is caught identically by
+    // src/server/ai/service.ts's routing (any AIProviderError is
+    // fallback-eligible; see docs/ai-architecture.md#retry-policy for why
+    // there is no "retry the same provider" case for this codebase's
+    // bounded, different-vendor fallback model).
+    const classification =
+      response.status === 401 || response.status === 403
+        ? "authentication failed"
+        : response.status === 429
+          ? "rate limited"
+          : response.status >= 500
+            ? "provider error"
+            : "request rejected";
+    throw new Error(`${config.name} request failed with HTTP ${response.status} (${classification})`);
   }
 
   let payload: { choices?: { message?: { content?: string } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };

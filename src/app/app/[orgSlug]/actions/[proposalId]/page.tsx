@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { PageHeader, SectionHeader } from "@/components/ui/page-header";
 import { isResourceNotFoundError } from "@/lib/not-found";
+import { resolveCommunicationDestination } from "@/server/communications/channel";
 import { getCommunicationForProposal } from "@/server/communications/draft";
 import { listDeliveryAttempts } from "@/server/communications/send";
 import { getActionProposal } from "@/server/operator/approval";
@@ -78,26 +79,37 @@ export default async function ActionProposalPage({
 
       {proposal.status !== "APPROVED" && proposal.status !== "EXECUTED" ? (
         <Alert tone="neutral">This proposal isn&rsquo;t approved yet — nothing to review here.</Alert>
-      ) : !communication && proposal.invoice && !proposal.invoice.customer.email ? (
-        <Alert tone="warning" title="This customer has no email address on file">
-          <p>
-            Add an email address for {proposal.invoice.customer.name} before a reminder can be prepared.
-          </p>
-          <Link
-            href={`/app/${orgSlug}/customers/${proposal.invoice.customer.id}/edit`}
-            className="mt-2 inline-block text-sm font-medium text-primary hover:underline"
-          >
-            Edit customer
-          </Link>
-        </Alert>
-      ) : !communication ? (
-        <Card className="flex flex-col gap-4 p-6">
-          <p className="text-sm text-muted">{proposal.reasoning}</p>
-          <form action={boundPrepare}>
-            <Button type="submit">Prepare reminder email</Button>
-          </form>
-        </Card>
-      ) : (
+      ) : !communication && proposal.invoice ? (
+        (() => {
+          const destination = resolveCommunicationDestination(proposal.invoice.customer);
+          if (destination.blocked) {
+            return (
+              <Alert tone="warning" title="No communication channel configured">
+                <p>{destination.reason}</p>
+                <Link
+                  href={`/app/${orgSlug}/customers/${proposal.invoice!.customer.id}/edit`}
+                  className="mt-2 inline-block text-sm font-medium text-primary hover:underline"
+                >
+                  Edit customer
+                </Link>
+              </Alert>
+            );
+          }
+          return (
+            <Card className="flex flex-col gap-4 p-6">
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span>Channel:</span>
+                <Badge tone="info">{destination.channel === "EMAIL" ? "Email" : "Telegram"}</Badge>
+                <span className="font-medium text-foreground">{destination.destination}</span>
+              </div>
+              <p className="text-sm text-muted">{proposal.reasoning}</p>
+              <form action={boundPrepare}>
+                <Button type="submit">Prepare reminder</Button>
+              </form>
+            </Card>
+          );
+        })()
+      ) : !communication ? null : (
         <CommunicationReview
           orgSlug={orgSlug}
           proposalId={proposalId}

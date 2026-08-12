@@ -31,6 +31,36 @@ describe("dispatchMessage", () => {
     const provider = createFakeMessagingProvider({ kind: "hang" });
     await expect(dispatchMessage(provider, message, { timeoutMs: 20 })).rejects.toThrow(MessagingTimeoutError);
   });
+
+  it("actually cancels the in-flight request on timeout — not just a local promise race", async () => {
+    // A real HTTP adapter forwards this signal to fetch(); this proves the
+    // gateway hands the provider a signal that genuinely fires on timeout,
+    // not just abandons the promise while the underlying request keeps
+    // running server-side. See src/server/ai/gateway.ts's doc comment for
+    // the identical pattern this mirrors.
+    let capturedSignal: AbortSignal | undefined;
+    const provider = {
+      name: "capturing",
+      send: (_msg: unknown, options?: { signal?: AbortSignal }) => {
+        capturedSignal = options?.signal;
+        return new Promise(() => {
+          // never resolves — exercising timeout, same as the "hang" fake.
+        });
+      },
+    };
+
+    await expect(
+      dispatchMessage(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal inline test double, not a real MessagingProvider
+        provider as any,
+        message,
+        { timeoutMs: 20 },
+      ),
+    ).rejects.toThrow(MessagingTimeoutError);
+
+    expect(capturedSignal).toBeDefined();
+    expect(capturedSignal!.aborted).toBe(true);
+  });
 });
 
 describe("dispatchMessage — telemetry", () => {

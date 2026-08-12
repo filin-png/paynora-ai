@@ -6,6 +6,7 @@ import { recordPayment } from "@/server/ar/payments";
 import { prisma } from "@/server/db/client";
 import { resetDatabase } from "@/server/db/test-utils";
 import { createFakeEmailProvider } from "@/server/email/providers/fake";
+import { createFakeMessagingProvider } from "@/server/messaging/providers/fake";
 import { prepareReminderCommunication } from "@/server/communications/draft";
 import { findDueSteps, isAutoSendStillAuthorized, runAutomationTick } from "./engine";
 import {
@@ -471,6 +472,47 @@ describe("runAutomationTick — AUTO_SEND", () => {
     ]);
 
     expect(callCount).toBe(1);
+  });
+
+  it("sends via Telegram end-to-end when that's the customer's only configured destination", async () => {
+    const { organization, customer, policy, user } = await createAutomationReadyOrg();
+    await prisma.customer.update({
+      where: { id: customer.id },
+      data: { email: null, telegramChatId: "555444333" },
+    });
+    await setCollectionPolicyAutomationMode(organization.id, policy.id, user.id, "AUTO_SEND");
+    const invoice = await createTestInvoice(organization.id, customer.id, "2026-01-01");
+    const messagingProvider = createFakeMessagingProvider({ kind: "success", providerMessageId: "tg-auto-1" });
+
+    const summary = await runAutomationTick(new Date("2026-01-02T00:00:00.000Z"), {
+      organizationId: organization.id,
+      messagingProvider,
+    });
+
+    expect(summary.executed).toBe(1);
+    const communication = await prisma.communication.findFirstOrThrow({ where: { invoiceId: invoice.id } });
+    expect(communication.channel).toBe("TELEGRAM");
+    expect(communication.recipient).toBe("555444333");
+    expect(communication.status).toBe("SENT");
+  });
+
+  it("records actorSource=AUTOMATION on the audit trail for an AUTO_SEND dispatch", async () => {
+    const { organization, customer, policy, user } = await createAutomationReadyOrg();
+    await setCollectionPolicyAutomationMode(organization.id, policy.id, user.id, "AUTO_SEND");
+    const invoice = await createTestInvoice(organization.id, customer.id, "2026-01-01");
+    const provider = createFakeEmailProvider({ kind: "success", providerMessageId: "auto-actor-1" });
+
+    await runAutomationTick(new Date("2026-01-02T00:00:00.000Z"), {
+      organizationId: organization.id,
+      emailProvider: provider,
+    });
+
+    const communication = await prisma.communication.findFirstOrThrow({ where: { invoiceId: invoice.id } });
+    const sentEvent = await prisma.activityEvent.findFirstOrThrow({
+      where: { organizationId: organization.id, invoiceId: invoice.id, type: "COMMUNICATION_SENT" },
+    });
+    expect((sentEvent.metadata as { source?: string } | null)?.source).toBe("AUTOMATION");
+    void communication;
   });
 });
 
