@@ -1,3 +1,10 @@
+import Link from "next/link";
+import { ArrowLeft } from "lucide-react";
+
+import { buttonVariants } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { PageHeader } from "@/components/ui/page-header";
+import { cn } from "@/lib/utils";
 import { listCustomers } from "@/server/ar/customers";
 import { getBusinessToday } from "@/server/ar/dates";
 import { prisma } from "@/server/db/client";
@@ -26,29 +33,35 @@ export default async function NewInvoicePage({
   ]);
   const boundAction = createInvoiceAction.bind(null, orgSlug);
 
-  if (customers.length === 0) {
-    return (
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">New invoice</h1>
-        <p className="mt-4 text-sm text-muted">
-          You need a customer before you can create an invoice — create one first.
-        </p>
-      </div>
-    );
-  }
-
   return (
-    <div>
-      <h1 className="text-2xl font-semibold tracking-tight">New invoice</h1>
-      <div className="mt-8">
-        <InvoiceForm
-          action={boundAction}
-          customers={customers}
-          suggestedNumber={suggestedNumber}
-          defaultCustomerId={customerId}
-          today={getBusinessToday()}
-        />
-      </div>
+    <div className="flex flex-col gap-6">
+      <Link
+        href={`/app/${orgSlug}/invoices`}
+        className="inline-flex items-center gap-1.5 text-xs font-medium text-muted hover:text-foreground"
+      >
+        <ArrowLeft className="size-3.5" />
+        Invoices
+      </Link>
+      <PageHeader title="New invoice" />
+
+      {customers.length === 0 ? (
+        <Card className="p-6 text-sm text-muted">
+          You need a customer before you can create an invoice.{" "}
+          <Link href={`/app/${orgSlug}/customers/new`} className={cn(buttonVariants({ variant: "outline", size: "sm" }), "ml-2")}>
+            Add a customer
+          </Link>
+        </Card>
+      ) : (
+        <Card className="max-w-xl p-6">
+          <InvoiceForm
+            action={boundAction}
+            customers={customers}
+            suggestedNumber={suggestedNumber}
+            defaultCustomerId={customerId}
+            today={getBusinessToday()}
+          />
+        </Card>
+      )}
     </div>
   );
 }

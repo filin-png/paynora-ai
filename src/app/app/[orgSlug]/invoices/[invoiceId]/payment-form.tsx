@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -29,14 +30,10 @@ export function RecordPaymentForm({ action, today }: { action: BoundAction; toda
       </div>
       <div className="flex flex-col gap-2">
         <Label htmlFor="note">Note</Label>
-        <Input id="note" name="note" maxLength={500} />
+        <Input id="note" name="note" maxLength={500} placeholder="Optional" />
       </div>
 
-      {state?.error ? (
-        <p className="text-sm text-red-600" role="alert">
-          {state.error}
-        </p>
-      ) : null}
+      {state?.error ? <Alert tone="danger">{state.error}</Alert> : null}
 
       <Button type="submit" disabled={isPending} className="self-start">
         {isPending ? "Recording…" : "Record payment"}

@@ -1,3 +1,4 @@
+import { AuthLayout } from "@/components/auth/auth-layout";
 import { SignInForm } from "./sign-in-form";
 
 function safeCallbackUrl(rawCallbackUrl: string | string[] | undefined): string {
@@ -13,8 +14,8 @@ export default async function SignInPage({
   const { callbackUrl } = await searchParams;
 
   return (
-    <div className="flex flex-1 items-center justify-center px-6 py-16">
+    <AuthLayout>
       <SignInForm callbackUrl={safeCallbackUrl(callbackUrl)} />
-    </div>
+    </AuthLayout>
   );
 }

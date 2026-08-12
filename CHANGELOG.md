@@ -5,6 +5,81 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Phase 7: Premium Product Experience & Complete UI
+
+- `src/app/globals.css`: full design-token rewrite — a restrained
+  "premium financial control system" palette (neutral surfaces, navy
+  navigation, one indigo accent, semantic success/warning/danger reserved
+  for real financial meaning), light + dark variants via `@theme inline`,
+  and a global `prefers-reduced-motion` rule. `src/components/brand/
+  logo.tsx` and `app/icon.svg`: an original PAYNORA mark/wordmark, no
+  third-party asset.
+- `src/components/ui/`: a small hand-built design system (Button, Input,
+  Textarea, Select, Switch, Label, Badge, Card, MetricCard, Table,
+  EmptyState, Alert, Dialog, DropdownMenu, Tabs, Skeleton, Tooltip,
+  StatusIndicator, PageHeader/SectionHeader), variant-driven via `class-
+  variance-authority`. `dialog.tsx` wraps the native `<dialog>` element
+  instead of adding a modal dependency; `switch.tsx` is presentational
+  only, always wrapped in a real `<form action={serverAction}>` by its
+  callers. `lucide-react` is the one new dependency this phase adds.
+- `src/components/app-shell/`: full responsive authenticated shell —
+  fixed navy sidebar + header on desktop, header + slide-out drawer below
+  `lg`. Fixed a real React Server Component boundary violation
+  (`NavLink`'s `icon` prop changed from a `LucideIcon` component
+  reference, which cannot cross the server/client boundary, to a
+  pre-rendered `React.ReactNode`).
+- `src/app/app/(no-org)/`: pre-organization pages and their layout moved
+  into a route group (`git mv`, no URL change) to fix a real layout-
+  nesting bug — `/app/[orgSlug]`'s sidebar shell was being squeezed
+  inside `/app`'s minimal pre-org layout, since in Next.js every ancestor
+  layout applies to every descendant route.
+- Rebuilt every screen on the same underlying Phase 1–6 domain functions,
+  no business-logic changes: landing page (honest, non-overclaiming
+  integration-readiness section), split-panel auth pages, onboarding
+  (first-organization creation), dashboard, Invoices (list/detail/new),
+  Customers (list/detail/edit/new), Action Center (list + review, now
+  explicitly detect → recommend → review → approve/edit/reject/send),
+  Automation (policy/steps/sequences in plain language, `AUTO_SEND`
+  visually flagged as the risky OWNER-only setting it is), and Settings
+  (General/Members/Integrations/Billing/Security — Integrations now
+  renders the real Phase 6 `getProviderRegistrySnapshot()`, Billing
+  states plainly that it isn't built yet rather than faking a plan UI).
+- `src/server/ar/summary.ts`: new `getCustomerReceivablesSummaries` — one
+  batched, per-customer-grouped read (not a per-row query) for the
+  customer list page's outstanding-balance column.
+- `src/app/app/[orgSlug]/collections-badge.ts`: new
+  `getCollectionsBadgesForInvoices` — a batched version of the existing
+  per-invoice `getCollectionsBadgeForInvoice`, added so the invoices list
+  issues one query instead of one per row.
+- `src/lib/not-found.ts`: new `isResourceNotFoundError`, recognizing every
+  domain's resource-not-found error class
+  (`ArResourceNotFoundError`/`OperatorResourceNotFoundError`/
+  `CollectionsResourceNotFoundError`/`CommunicationResourceNotFoundError`)
+  by name, so detail pages render a real Next.js 404 instead of the
+  generic error boundary. New `loading.tsx`/`not-found.tsx`/`error.tsx`
+  at both the org-scoped and root level.
+- Fixed a real crash: preparing a reminder for a proposal whose customer
+  has no email address on file threw an uncaught
+  `MissingCustomerEmailError` through a plain (non-`useActionState`)
+  Server Action. The Action Center proposal page now shows a warning
+  `Alert` with a direct link to fix the customer record instead.
+- Fixed two real WCAG 2 AA violations found by an `@axe-core/playwright`
+  scan across ten pages: insufficient color contrast on light-mode
+  `--muted-foreground` (`#6b7386` → `#5a6278`), and the automation page's
+  master on/off switch having no accessible name (added a dynamic
+  `aria-label` + `aria-pressed`). Re-scanned afterward: zero violations.
+- 13 new targeted tests (391 total): `getCollectionsBadgeView`/
+  `getCollectionsBadgesForInvoices`, `getCustomerReceivablesSummaries`,
+  and `isResourceNotFoundError`, including cross-tenant isolation cases.
+- New `docs/product-ui.md` documenting the design system, page
+  architecture, responsive approach, accessibility fixes, the real-data-
+  only rule for the authenticated app, and known UI limitations (tables
+  scroll rather than convert to cards on mobile; no manual light/dark
+  toggle).
+- Zero Prisma schema changes — this phase is UI/presentation only; every
+  domain rule from Phase 1–6 is unchanged and re-verified by the existing
+  test suite plus the additions above.
+
 ### Added — Phase 6: Integration & Provider Foundation
 
 - `src/server/providers/`: new cross-cutting module, not owned by any one

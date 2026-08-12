@@ -5,7 +5,7 @@ employees) that helps them track accounts receivable, spot payment risk
 early, and automate collection follow-up — without replacing the accounting
 software they already use.
 
-**Project status: Phase 6 — Integration & Provider Foundation.**
+**Project status: Phase 7 — Premium Product Experience & Complete UI.**
 Authentication, organizations, tenant isolation, customers, invoices,
 payments, and a real AR dashboard are implemented (Phase 1–2). Phase 3
 added an event → insight → proposal → human-approval pipeline (an Action
@@ -29,7 +29,16 @@ Telegram adapter (no domain caller wired in yet), and a `BillingProvider`
 type/contract for PAYNORA's own future subscription billing — plus a
 cross-cutting provider registry, deployment-profile metadata, and a
 secret-free telemetry boundary, all with **no new Prisma schema and no
-new external credential required to run the app.** See
+new external credential required to run the app.** Phase 7 is a
+UI-only pass: every screen was redesigned around a small reusable
+design system and a restrained "premium financial control system"
+visual identity (navy/graphite navigation, one indigo accent, semantic
+color reserved for real financial meaning), with real empty/loading/
+error/not-found states, verified responsiveness (390–1440px, zero
+horizontal overflow), and a zero-violation accessibility pass — while
+every domain function underneath stayed exactly what Phase 1–6 already
+built and tested. See
+[docs/product-ui.md](./docs/product-ui.md),
 [docs/integration-architecture.md](./docs/integration-architecture.md),
 [docs/collections-automation.md](./docs/collections-automation.md),
 [docs/communications.md](./docs/communications.md),
@@ -39,7 +48,9 @@ new external credential required to run the app.** See
 ## Tech stack
 
 - **Frontend/Backend**: Next.js (App Router), React, TypeScript (strict mode)
-- **UI**: Tailwind CSS, shadcn/ui-compatible component architecture
+- **UI**: Tailwind CSS v4, a small hand-built design system
+  (`src/components/ui/`), `lucide-react` icons — no component-library
+  dependency; see [docs/product-ui.md](./docs/product-ui.md)
 - **Database**: PostgreSQL via Prisma — User, Organization, OrganizationMember,
   Customer, Invoice, Payment, ActivityEvent, BusinessEvent, OperatorInsight,
   ActionProposal, Communication, DeliveryAttempt, CollectionPolicy,
@@ -129,4 +140,5 @@ locally, including the separate test database integration tests use.
 - [docs/ai-architecture.md](./docs/ai-architecture.md) — AI provider abstraction
 - [docs/provider-strategy.md](./docs/provider-strategy.md) — external provider boundaries
 - [docs/integration-architecture.md](./docs/integration-architecture.md) — Phase 6 cross-cutting provider registry, AI routing, Messaging, Billing
+- [docs/product-ui.md](./docs/product-ui.md) — Phase 7 design system, page architecture, responsive/accessibility approach
 - [docs/exit-readiness.md](./docs/exit-readiness.md) — commercial/due-diligence tracking

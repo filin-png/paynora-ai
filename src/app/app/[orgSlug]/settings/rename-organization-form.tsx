@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,8 +19,8 @@ export function RenameOrganizationForm({
   const [state, formAction, isPending] = useActionState(boundAction, null);
 
   return (
-    <form action={formAction} className="mt-3 flex max-w-sm items-end gap-3">
-      <div className="flex flex-1 flex-col gap-2">
+    <form action={formAction} className="mt-4 flex flex-col gap-3">
+      <div className="flex flex-col gap-2">
         <Label htmlFor="name">Name</Label>
         <Input
           id="name"
@@ -29,16 +30,13 @@ export function RenameOrganizationForm({
           required
           minLength={2}
           maxLength={100}
+          aria-invalid={state?.error ? true : undefined}
         />
       </div>
-      <Button type="submit" variant="outline" disabled={isPending}>
+      {state?.error ? <Alert tone="danger">{state.error}</Alert> : null}
+      <Button type="submit" variant="outline" disabled={isPending} className="self-start">
         {isPending ? "Saving…" : "Save"}
       </Button>
-      {state?.error ? (
-        <p className="text-sm text-red-600" role="alert">
-          {state.error}
-        </p>
-      ) : null}
     </form>
   );
 }

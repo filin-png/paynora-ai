@@ -1,7 +1,11 @@
 import Link from "next/link";
+import { RefreshCw, Sparkles } from "lucide-react";
 
 import { Badge, type BadgeProps } from "@/components/ui/badge";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageHeader, SectionHeader } from "@/components/ui/page-header";
 import { cn } from "@/lib/utils";
 import { listPendingActionProposals, listRecentlyDecidedActionProposals } from "@/server/operator/approval";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
@@ -33,108 +37,112 @@ export default async function ActionCenterPage({
 
   return (
     <div className="flex flex-col gap-10">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Action Center</h1>
-          <p className="mt-1 text-sm text-muted">
-            Proposed actions from deterministic checks (and, where available, AI-assisted wording) —
-            nothing here is sent automatically. Every action needs your approval, and approving does not
-            send anything by itself either — review and send is a separate, explicit step.
-          </p>
-        </div>
-        <form action={boundRunOperator}>
-          <button type="submit" className={cn(buttonVariants({ variant: "outline" }))}>
-            Run Operator
-          </button>
-        </form>
-      </div>
+      <PageHeader
+        title="Action Center"
+        description="Every action here needs your approval, and approving doesn't send anything by itself — review and send is a separate, explicit step."
+        actions={
+          <form action={boundRunOperator}>
+            <Button type="submit" variant="outline">
+              <RefreshCw className="size-4" />
+              Check for new actions
+            </Button>
+          </form>
+        }
+      />
 
       <div>
-        <h2 className="text-sm font-semibold">Pending your review</h2>
+        <SectionHeader title="Pending your review" description={pending.length > 0 ? `${pending.length} awaiting a decision` : undefined} />
         {pending.length > 0 ? (
-          <ul className="mt-3 flex flex-col divide-y divide-border rounded-md border border-border">
+          <ul className="mt-3 flex flex-col gap-3">
             {pending.map((proposal) => {
               const boundApprove = approveProposalAction.bind(null, orgSlug, proposal.id);
               const boundDismiss = dismissProposalAction.bind(null, orgSlug, proposal.id);
               return (
-                <li key={proposal.id} className="flex flex-col gap-3 px-4 py-4 text-sm sm:flex-row sm:items-start sm:justify-between">
-                  <div className="flex flex-col gap-1">
-                    <div className="flex items-center gap-2">
-                      <Badge tone={PRIORITY_TONE[proposal.insight.priority] ?? "neutral"}>
-                        {proposal.insight.priority}
-                      </Badge>
-                      <span className="font-medium">
-                        {ACTION_TYPE_LABEL[proposal.type] ?? proposal.type}
-                      </span>
-                      {proposal.suggestedTone ? (
-                        <span className="text-xs text-muted">({proposal.suggestedTone} tone)</span>
-                      ) : null}
+                <li key={proposal.id}>
+                  <Card className="flex flex-col gap-3 p-5 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="flex flex-col gap-1.5">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge tone={PRIORITY_TONE[proposal.insight.priority] ?? "neutral"}>
+                          {proposal.insight.priority.charAt(0) + proposal.insight.priority.slice(1).toLowerCase()} priority
+                        </Badge>
+                        <span className="text-sm font-medium text-foreground">
+                          {ACTION_TYPE_LABEL[proposal.type] ?? proposal.type}
+                        </span>
+                        {proposal.suggestedTone ? (
+                          <span className="text-xs text-muted-foreground">({proposal.suggestedTone.toLowerCase()} tone)</span>
+                        ) : null}
+                      </div>
+                      <p className="text-sm text-muted">{proposal.reasoning}</p>
+                      {proposal.invoice ? (
+                        <Link
+                          href={`/app/${orgSlug}/invoices/${proposal.invoice.id}`}
+                          className="text-xs font-medium text-primary hover:underline"
+                        >
+                          {proposal.invoice.number} — {proposal.invoice.customer.name}
+                        </Link>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">Invoice no longer available</span>
+                      )}
                     </div>
-                    <p className="text-muted">{proposal.reasoning}</p>
-                    {proposal.invoice ? (
-                      <Link
-                        href={`/app/${orgSlug}/invoices/${proposal.invoice.id}`}
-                        className="text-xs text-muted hover:underline"
-                      >
-                        View invoice {proposal.invoice.number} — {proposal.invoice.customer.name}
-                      </Link>
-                    ) : (
-                      <span className="text-xs text-muted">Invoice no longer available</span>
-                    )}
-                  </div>
-                  <div className="flex shrink-0 gap-2">
-                    <form action={boundDismiss}>
-                      <button type="submit" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
-                        Dismiss
-                      </button>
-                    </form>
-                    <form action={boundApprove}>
-                      <button type="submit" className={cn(buttonVariants({ variant: "primary", size: "sm" }))}>
-                        Approve
-                      </button>
-                    </form>
-                  </div>
+                    <div className="flex shrink-0 gap-2">
+                      <form action={boundDismiss}>
+                        <button type="submit" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
+                          Dismiss
+                        </button>
+                      </form>
+                      <form action={boundApprove}>
+                        <button type="submit" className={cn(buttonVariants({ size: "sm" }))}>
+                          Approve
+                        </button>
+                      </form>
+                    </div>
+                  </Card>
                 </li>
               );
             })}
           </ul>
         ) : (
-          <p className="mt-3 text-sm text-muted">
-            Nothing pending. Click &ldquo;Run Operator&rdquo; to check for newly overdue invoices.
-          </p>
+          <EmptyState
+            className="mt-3"
+            icon={Sparkles}
+            title="Nothing needs your attention"
+            description="Click “Check for new actions” to look for newly overdue invoices."
+          />
         )}
       </div>
 
       <div>
-        <h2 className="text-sm font-semibold">Recently decided</h2>
+        <SectionHeader title="Recently decided" />
         {decided.length > 0 ? (
-          <ul className="mt-3 flex flex-col divide-y divide-border rounded-md border border-border">
-            {decided.map((proposal) => (
-              <li key={proposal.id} className="flex items-center justify-between gap-4 px-4 py-3 text-sm">
-                <div className="flex flex-col gap-1">
-                  <span>{ACTION_TYPE_LABEL[proposal.type] ?? proposal.type}</span>
-                  {proposal.invoice ? (
-                    <span className="text-xs text-muted">
-                      {proposal.invoice.number} — {proposal.invoice.customer.name}
-                    </span>
-                  ) : null}
-                </div>
-                {proposal.status === "DISMISSED" ? (
-                  <Badge tone="neutral">Dismissed</Badge>
-                ) : proposal.status === "EXECUTED" ? (
-                  <Link href={`/app/${orgSlug}/actions/${proposal.id}`}>
-                    <Badge tone="success">Sent</Badge>
-                  </Link>
-                ) : (
-                  <Link href={`/app/${orgSlug}/actions/${proposal.id}`} className="hover:underline">
-                    <Badge tone="warning">Approved — review &amp; send</Badge>
-                  </Link>
-                )}
-              </li>
-            ))}
-          </ul>
+          <Card className="mt-3 overflow-hidden">
+            <ul className="divide-y divide-border">
+              {decided.map((proposal) => (
+                <li key={proposal.id} className="flex items-center justify-between gap-4 px-5 py-3.5 text-sm">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-foreground">{ACTION_TYPE_LABEL[proposal.type] ?? proposal.type}</span>
+                    {proposal.invoice ? (
+                      <span className="text-xs text-muted">
+                        {proposal.invoice.number} — {proposal.invoice.customer.name}
+                      </span>
+                    ) : null}
+                  </div>
+                  {proposal.status === "DISMISSED" ? (
+                    <Badge tone="neutral">Dismissed</Badge>
+                  ) : proposal.status === "EXECUTED" ? (
+                    <Link href={`/app/${orgSlug}/actions/${proposal.id}`}>
+                      <Badge tone="success">Sent</Badge>
+                    </Link>
+                  ) : (
+                    <Link href={`/app/${orgSlug}/actions/${proposal.id}`} className="hover:underline">
+                      <Badge tone="warning">Approved — review &amp; send</Badge>
+                    </Link>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </Card>
         ) : (
-          <p className="mt-3 text-sm text-muted">No decisions made yet.</p>
+          <EmptyState className="mt-3 py-10" title="No decisions made yet" />
         )}
       </div>
     </div>

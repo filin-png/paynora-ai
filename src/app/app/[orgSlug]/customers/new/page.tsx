@@ -1,3 +1,8 @@
+import Link from "next/link";
+import { ArrowLeft } from "lucide-react";
+
+import { Card } from "@/components/ui/card";
+import { PageHeader } from "@/components/ui/page-header";
 import { CustomerForm } from "../customer-form";
 import { createCustomerAction } from "./actions";
 
@@ -10,11 +15,18 @@ export default async function NewCustomerPage({
   const boundAction = createCustomerAction.bind(null, orgSlug);
 
   return (
-    <div>
-      <h1 className="text-2xl font-semibold tracking-tight">New customer</h1>
-      <div className="mt-8">
+    <div className="flex flex-col gap-6">
+      <Link
+        href={`/app/${orgSlug}/customers`}
+        className="inline-flex items-center gap-1.5 text-xs font-medium text-muted hover:text-foreground"
+      >
+        <ArrowLeft className="size-3.5" />
+        Customers
+      </Link>
+      <PageHeader title="New customer" />
+      <Card className="max-w-xl p-6">
         <CustomerForm action={boundAction} submitLabel="Create customer" />
-      </div>
+      </Card>
     </div>
   );
 }

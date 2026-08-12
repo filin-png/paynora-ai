@@ -1,16 +1,25 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
+import { ArrowLeft, CalendarClock, PauseCircle, PlayCircle } from "lucide-react";
 
+import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Dialog, DialogCancelButton } from "@/components/ui/dialog";
+import { EmptyState } from "@/components/ui/empty-state";
+import { SectionHeader } from "@/components/ui/page-header";
 import { cn } from "@/lib/utils";
+import { isResourceNotFoundError } from "@/lib/not-found";
 import { listInvoiceActivity } from "@/server/ar/activity";
 import type { Currency } from "@/server/ar/currency";
-import { getBusinessToday } from "@/server/ar/dates";
+import { daysBetween, getBusinessToday, toDateOnlyString } from "@/server/ar/dates";
 import { getInvoiceWithFinancials } from "@/server/ar/invoices";
 import { formatMoney } from "@/server/ar/money";
 import { listPaymentsForInvoice } from "@/server/ar/payments";
 import { getCollectionStatusForInvoice, type CollectionStatusView } from "@/server/collections/sequences";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
+import { getCollectionsBadgeView } from "../../collections-badge";
 import { getInvoiceStatusDisplay } from "../status";
 import {
   cancelInvoiceAction,
@@ -27,7 +36,12 @@ export default async function InvoiceDetailPage({
 }) {
   const { orgSlug, invoiceId } = await params;
   const context = await requireOrganizationMembershipForPage(orgSlug);
-  const { invoice, financials } = await getInvoiceWithFinancials(context.organization.id, invoiceId);
+  const { invoice, financials } = await getInvoiceWithFinancials(context.organization.id, invoiceId).catch(
+    (error: unknown) => {
+      if (isResourceNotFoundError(error)) notFound();
+      throw error;
+    },
+  );
   const [payments, activity, collectionsStatus] = await Promise.all([
     listPaymentsForInvoice(context.organization.id, invoiceId),
     listInvoiceActivity(context.organization.id, invoiceId),
@@ -38,53 +52,81 @@ export default async function InvoiceDetailPage({
   const status = getInvoiceStatusDisplay(invoice, financials);
   const canRecordPayment = invoice.status === "OPEN" && financials.outstandingMinor > 0n;
   const canCancel = invoice.status === "OPEN" && financials.paidMinor === 0n;
+  const overdueDays = financials.isOverdue ? daysBetween(toDateOnlyString(invoice.dueDate), getBusinessToday()) : 0;
 
   const boundRecordPayment = recordPaymentAction.bind(null, orgSlug, invoiceId);
   const boundCancel = cancelInvoiceAction.bind(null, orgSlug, invoiceId);
 
   return (
     <div className="flex flex-col gap-10">
-      <div className="flex items-start justify-between">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-semibold tracking-tight">{invoice.number}</h1>
-            <Badge tone={status.tone}>{status.label}</Badge>
+      <div>
+        <Link
+          href={`/app/${orgSlug}/invoices`}
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-muted hover:text-foreground"
+        >
+          <ArrowLeft className="size-3.5" />
+          Invoices
+        </Link>
+
+        <div className="mt-3 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex flex-col gap-2">
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-2xl font-semibold tracking-tight text-foreground">{invoice.number}</h1>
+              <Badge tone={status.tone}>{status.label}</Badge>
+              {financials.isOverdue ? (
+                <span className="inline-flex items-center gap-1 text-xs font-medium text-danger">
+                  <CalendarClock className="size-3.5" />
+                  Overdue {overdueDays} day{overdueDays === 1 ? "" : "s"}
+                </span>
+              ) : null}
+            </div>
+            <p className="text-sm text-muted">
+              <Link href={`/app/${orgSlug}/customers/${invoice.customerId}`} className="hover:text-primary hover:underline">
+                {invoice.customer.name}
+              </Link>
+            </p>
           </div>
-          <p className="mt-1 text-sm text-muted">
-            <Link href={`/app/${orgSlug}/customers/${invoice.customerId}`} className="hover:underline">
-              {invoice.customer.name}
-            </Link>
-          </p>
-        </div>
-        {canCancel ? (
-          <form action={boundCancel}>
-            <button type="submit" className={cn(buttonVariants({ variant: "outline" }))}>
-              Cancel invoice
-            </button>
-          </form>
-        ) : null}
-      </div>
 
-      <div className="grid grid-cols-2 gap-6 rounded-md border border-border p-6 sm:grid-cols-4">
-        <div>
-          <p className="text-xs text-muted">Original amount</p>
-          <p className="mt-1 text-lg font-semibold">{formatMoney(financials.amountMinor, currency)}</p>
-        </div>
-        <div>
-          <p className="text-xs text-muted">Paid</p>
-          <p className="mt-1 text-lg font-semibold">{formatMoney(financials.paidMinor, currency)}</p>
-        </div>
-        <div>
-          <p className="text-xs text-muted">Outstanding</p>
-          <p className="mt-1 text-lg font-semibold">{formatMoney(financials.outstandingMinor, currency)}</p>
-        </div>
-        <div>
-          <p className="text-xs text-muted">Due date</p>
-          <p className="mt-1 text-lg font-semibold">{invoice.dueDate.toISOString().slice(0, 10)}</p>
+          <div className="flex items-center gap-3">
+            <p className="text-3xl font-semibold tabular-nums tracking-tight text-foreground">
+              {formatMoney(financials.outstandingMinor, currency)}
+            </p>
+          </div>
         </div>
       </div>
 
-      {invoice.notes ? <p className="whitespace-pre-wrap text-sm text-muted">{invoice.notes}</p> : null}
+      {canCancel ? (
+        <div className="flex justify-end">
+          <Dialog
+            trigger={<Button type="button" variant="outline">Cancel invoice</Button>}
+            title="Cancel this invoice?"
+            description={`${invoice.number} for ${invoice.customer.name} will be marked cancelled. This cannot be undone.`}
+          >
+            <div className="flex justify-end gap-2">
+              <DialogCancelButton className={cn(buttonVariants({ variant: "outline", size: "sm" }))} />
+              <form action={boundCancel}>
+                <button type="submit" className={cn(buttonVariants({ variant: "destructive", size: "sm" }))}>
+                  Cancel invoice
+                </button>
+              </form>
+            </div>
+          </Dialog>
+        </div>
+      ) : null}
+
+      <Card className="grid grid-cols-2 gap-6 p-6 sm:grid-cols-4">
+        <Stat label="Original amount" value={formatMoney(financials.amountMinor, currency)} />
+        <Stat label="Paid" value={formatMoney(financials.paidMinor, currency)} tone="success" />
+        <Stat label="Outstanding" value={formatMoney(financials.outstandingMinor, currency)} />
+        <Stat label="Due date" value={invoice.dueDate.toISOString().slice(0, 10)} />
+      </Card>
+
+      {invoice.notes ? (
+        <Card className="p-5">
+          <p className="text-xs font-medium text-muted-foreground">Notes</p>
+          <p className="mt-1.5 whitespace-pre-wrap text-sm text-foreground">{invoice.notes}</p>
+        </Card>
+      ) : null}
 
       <CollectionsStatusBlock
         orgSlug={orgSlug}
@@ -95,38 +137,46 @@ export default async function InvoiceDetailPage({
 
       {canRecordPayment ? (
         <div>
-          <h2 className="text-sm font-semibold">Record a payment</h2>
-          <div className="mt-3 max-w-md">
+          <SectionHeader title="Record a payment" />
+          <Card className="mt-3 max-w-md p-5">
             <RecordPaymentForm action={boundRecordPayment} today={getBusinessToday()} />
-          </div>
+          </Card>
         </div>
       ) : null}
 
       <div>
-        <h2 className="text-sm font-semibold">Payments</h2>
+        <SectionHeader title="Payment history" />
         {payments.length > 0 ? (
-          <ul className="mt-3 flex flex-col divide-y divide-border rounded-md border border-border">
-            {payments.map((payment) => (
-              <li key={payment.id} className="flex items-center justify-between px-4 py-3 text-sm">
-                <span>{payment.paidAt.toISOString().slice(0, 10)}</span>
-                {payment.note ? <span className="text-muted">{payment.note}</span> : null}
-                <span className="font-medium">{formatMoney(payment.amountMinor, currency)}</span>
-              </li>
-            ))}
-          </ul>
+          <Card className="mt-3 overflow-hidden">
+            <ul className="divide-y divide-border">
+              {payments.map((payment) => (
+                <li key={payment.id} className="flex items-center justify-between gap-4 px-5 py-3.5 text-sm">
+                  <div className="flex flex-col">
+                    <span className="text-foreground">{payment.paidAt.toISOString().slice(0, 10)}</span>
+                    {payment.note ? <span className="text-xs text-muted">{payment.note}</span> : null}
+                  </div>
+                  <span className="font-medium tabular-nums text-success">
+                    +{formatMoney(payment.amountMinor, currency)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </Card>
         ) : (
-          <p className="mt-3 text-sm text-muted">No payments recorded yet.</p>
+          <EmptyState className="mt-3 py-10" title="No payments recorded yet" />
         )}
       </div>
 
       <div>
-        <h2 className="text-sm font-semibold">Activity</h2>
+        <SectionHeader title="Activity" />
         {activity.length > 0 ? (
-          <ul className="mt-3 flex flex-col gap-2 text-sm">
+          <ul className="mt-3 flex flex-col gap-2.5 text-sm">
             {activity.map((event) => (
-              <li key={event.id} className="flex justify-between gap-4 text-muted">
-                <span>{event.summary}</span>
-                <span className="shrink-0">{event.createdAt.toISOString().slice(0, 10)}</span>
+              <li key={event.id} className="flex items-baseline justify-between gap-4">
+                <span className="text-foreground">{event.summary}</span>
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  {event.createdAt.toISOString().slice(0, 10)}
+                </span>
               </li>
             ))}
           </ul>
@@ -138,11 +188,24 @@ export default async function InvoiceDetailPage({
   );
 }
 
+function Stat({ label, value, tone }: { label: string; value: string; tone?: "success" }) {
+  return (
+    <div>
+      <p className="text-xs font-medium text-muted-foreground">{label}</p>
+      <p className={cn("mt-1 text-lg font-semibold tabular-nums", tone === "success" ? "text-success" : "text-foreground")}>
+        {value}
+      </p>
+    </div>
+  );
+}
+
 /**
  * Honest, per-state collections display — never claims collections are
  * "in progress" for a paid invoice, and explicitly says when a previous
  * email's delivery status is unresolved rather than silently doing
- * nothing. See docs/collections-automation.md#ui.
+ * nothing. Labels come from the shared collections-badge mapping so the
+ * word "Active"/"Paused"/"Blocked" here always matches the Automation
+ * page and the invoice list. See docs/collections-automation.md#ui.
  */
 function CollectionsStatusBlock({
   orgSlug,
@@ -156,75 +219,85 @@ function CollectionsStatusBlock({
   isOwner: boolean;
 }) {
   if (status.kind === "not_enrolled") return null;
+  const badge = getCollectionsBadgeView(status);
 
   if (status.kind === "completed") {
     return (
-      <div className="rounded-md border border-emerald-600/30 bg-emerald-600/10 p-4 text-sm text-emerald-700 dark:text-emerald-400">
-        Collections completed — invoice paid.
-      </div>
+      <Alert tone="success" title="Collections completed">
+        This invoice was paid — no further follow-up is scheduled.
+      </Alert>
     );
   }
 
   if (status.kind === "stopped") {
     return (
-      <div className="rounded-md border border-border p-4 text-sm text-muted">
-        Collections stopped ({status.stopReason ?? "unknown reason"}).
-      </div>
+      <Alert tone="neutral" title="Collections stopped">
+        {status.stopReason ? `Reason: ${formatStopReason(status.stopReason)}.` : "No further follow-up is scheduled."}
+      </Alert>
     );
   }
 
   if (status.kind === "blocked_uncertain") {
     return (
-      <div className="flex flex-col gap-2 rounded-md border border-amber-600/30 bg-amber-600/10 p-4 text-sm">
-        <p className="font-medium text-amber-700 dark:text-amber-400">Automation paused</p>
-        <p className="text-muted">
-          Previous email delivery status is uncertain — manual review required before another reminder can be
-          scheduled automatically.
-        </p>
+      <Alert tone="warning" title="Automation paused — delivery status uncertain">
+        <p>A previous reminder&rsquo;s delivery status couldn&rsquo;t be confirmed. Manual review is required before another reminder can be scheduled automatically.</p>
         {isOwner ? (
-          <form action={pauseInvoiceCollectionsAction.bind(null, orgSlug, invoiceId, status.sequenceId)} className="mt-1">
+          <form action={pauseInvoiceCollectionsAction.bind(null, orgSlug, invoiceId, status.sequenceId)} className="mt-3">
             <button type="submit" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
+              <PauseCircle className="size-4" />
               Pause collections
             </button>
           </form>
         ) : null}
-      </div>
+      </Alert>
     );
   }
 
   if (status.kind === "paused") {
     return (
-      <div className="flex items-center justify-between gap-4 rounded-md border border-border p-4 text-sm">
-        <span className="text-muted">Collections: paused</span>
+      <Card className="flex items-center justify-between gap-4 p-5">
+        <div className="flex items-center gap-2.5">
+          {badge ? <Badge tone={badge.tone}>{badge.label}</Badge> : null}
+          <span className="text-sm text-muted">Collections follow-up is paused for this invoice.</span>
+        </div>
         {isOwner ? (
           <form action={resumeInvoiceCollectionsAction.bind(null, orgSlug, invoiceId, status.sequenceId)}>
             <button type="submit" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
+              <PlayCircle className="size-4" />
               Resume
             </button>
           </form>
         ) : null}
-      </div>
+      </Card>
     );
   }
 
   return (
-    <div className="flex items-center justify-between gap-4 rounded-md border border-border p-4 text-sm">
-      <div>
-        <p className="font-medium">Collections: active</p>
-        <p className="mt-1 text-xs text-muted">
-          Step {status.stepsCompleted} of {status.stepCount}
-          {status.nextStepDaysAfterDue !== undefined
-            ? ` — next reminder at day +${status.nextStepDaysAfterDue} overdue`
-            : " — all configured steps have run"}
-        </p>
+    <Card className="flex items-center justify-between gap-4 p-5">
+      <div className="flex items-center gap-2.5">
+        {badge ? <Badge tone={badge.tone}>{badge.label}</Badge> : null}
+        <div className="text-sm">
+          <span className="font-medium text-foreground">Collections in progress</span>{" "}
+          <span className="text-muted">
+            — step {status.stepsCompleted} of {status.stepCount}
+            {status.nextStepDaysAfterDue !== undefined
+              ? `, next reminder at day +${status.nextStepDaysAfterDue} overdue`
+              : ", all configured steps have run"}
+          </span>
+        </div>
       </div>
       {isOwner ? (
         <form action={pauseInvoiceCollectionsAction.bind(null, orgSlug, invoiceId, status.sequenceId)}>
           <button type="submit" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
+            <PauseCircle className="size-4" />
             Pause
           </button>
         </form>
       ) : null}
-    </div>
+    </Card>
   );
+}
+
+function formatStopReason(reason: string): string {
+  return reason.toLowerCase().replaceAll("_", " ");
 }

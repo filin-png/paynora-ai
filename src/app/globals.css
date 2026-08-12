@@ -1,21 +1,91 @@
 @import "tailwindcss";
 
+/**
+ * PAYNORA design tokens — premium financial control system, not a generic
+ * admin template. See docs/product-ui.md#design-system for the rationale
+ * behind every choice here (palette restraint, navy/graphite for
+ * navigation and strong accents, semantic color reserved for real
+ * financial meaning).
+ */
 :root {
-  --background: #f8fafc;
-  --foreground: #0f172a;
-  --muted: #64748b;
-  --border: #e2e8f0;
-  --primary: #1d4ed8;
+  /* Neutral surfaces — soft, warm-white, never stark #fff-on-#fff */
+  --background: #f6f7f9;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --foreground: #10162a;
+  --muted: #5b6478;
+  --muted-foreground: #5a6278;
+  --border: #e4e7ee;
+  --border-strong: #d3d8e4;
+
+  /* Navy — navigation, strong brand accents, auth/landing depth */
+  --navy-950: #070b18;
+  --navy-900: #0b1122;
+  --navy-800: #10182e;
+  --navy-700: #172142;
+  --navy-600: #223159;
+  --navy-foreground: #e7eaf6;
+  --navy-muted: #8b93b8;
+
+  /* Restrained indigo — the one accent color, used for primary actions and focus */
+  --primary: #3730a3;
+  --primary-hover: #2f2789;
   --primary-foreground: #f8fafc;
+  --accent-soft: #eef0fc;
+
+  /* Semantic financial colors — reserved for real meaning, never decoration */
+  --success: #047857;
+  --success-soft: #e7f5ef;
+  --warning: #b45309;
+  --warning-soft: #fdf3e3;
+  --danger: #b91c1c;
+  --danger-soft: #fbeaea;
+
+  --ring: var(--primary);
+  --radius: 0.625rem;
+
+  --shadow-sm: 0 1px 2px 0 rgb(16 22 42 / 0.04);
+  --shadow-md: 0 4px 12px -2px rgb(16 22 42 / 0.08), 0 2px 4px -2px rgb(16 22 42 / 0.04);
+  --shadow-lg: 0 12px 32px -8px rgb(16 22 42 / 0.16), 0 4px 8px -4px rgb(16 22 42 / 0.06);
 }
 
 @theme inline {
   --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
   --color-foreground: var(--foreground);
   --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
   --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+
+  --color-navy-950: var(--navy-950);
+  --color-navy-900: var(--navy-900);
+  --color-navy-800: var(--navy-800);
+  --color-navy-700: var(--navy-700);
+  --color-navy-600: var(--navy-600);
+  --color-navy-foreground: var(--navy-foreground);
+  --color-navy-muted: var(--navy-muted);
+
   --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
   --color-primary-foreground: var(--primary-foreground);
+  --color-accent-soft: var(--accent-soft);
+
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+
+  --color-ring: var(--ring);
+  --radius-DEFAULT: var(--radius);
+
+  --shadow-card-sm: var(--shadow-sm);
+  --shadow-card-md: var(--shadow-md);
+  --shadow-card-lg: var(--shadow-lg);
+
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
     Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -23,14 +93,48 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0b1220;
-    --foreground: #f1f5f9;
-    --muted: #94a3b8;
-    --border: #1e293b;
+    --background: #0a0e1a;
+    --surface: #10162a;
+    --surface-raised: #141c34;
+    --foreground: #eef1fa;
+    --muted: #98a1bd;
+    --muted-foreground: #8890ad;
+    --border: #232c48;
+    --border-strong: #2c3656;
+
+    --navy-950: #05070f;
+    --navy-900: #080b16;
+
+    --primary: #6a63e0;
+    --primary-hover: #7d76ea;
+    --primary-foreground: #f8fafc;
+    --accent-soft: #1a1a3d;
+
+    --success: #34d399;
+    --success-soft: #0d2b23;
+    --warning: #fbbf24;
+    --warning-soft: #2e2308;
+    --danger: #f87171;
+    --danger-soft: #341414;
+
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+    --shadow-md: 0 4px 12px -2px rgb(0 0 0 / 0.45);
+    --shadow-lg: 0 12px 32px -8px rgb(0 0 0 / 0.6);
   }
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

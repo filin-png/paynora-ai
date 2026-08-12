@@ -1,9 +1,15 @@
 import Link from "next/link";
+import { AlertTriangle, FlaskConical, PauseCircle, PlayCircle, Square, Zap } from "lucide-react";
 
+import { Alert } from "@/components/ui/alert";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageHeader, SectionHeader } from "@/components/ui/page-header";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
-import { listCollectionPolicies } from "@/server/collections/policy";
+import { getCollectionPolicySteps, listCollectionPolicies } from "@/server/collections/policy";
 import { getCollectionStatusForInvoice, listActiveCollectionSequences } from "@/server/collections/sequences";
 import { prisma } from "@/server/db/client";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
@@ -25,6 +31,17 @@ const SEQUENCE_STATUS_TONE: Record<string, NonNullable<BadgeProps["tone"]>> = {
   paused: "neutral",
 };
 
+const STEP_ACTION_LABEL: Record<string, string> = {
+  SEND_PAYMENT_REMINDER: "Send a payment reminder",
+  NOTIFY_OWNER: "Notify the owner",
+};
+
+const STEP_TONE_LABEL: Record<string, string> = {
+  SOFT: "friendly",
+  STANDARD: "standard",
+  FIRM: "firm",
+};
+
 export default async function AutomationPage({
   params,
 }: {
@@ -41,9 +58,10 @@ export default async function AutomationPage({
     listActiveCollectionSequences(organizationId),
   ]);
 
-  const sequenceStatuses = await Promise.all(
-    activeSequences.map((sequence) => getCollectionStatusForInvoice(organizationId, sequence.invoiceId)),
-  );
+  const [sequenceStatuses, policyStepsByPolicy] = await Promise.all([
+    Promise.all(activeSequences.map((sequence) => getCollectionStatusForInvoice(organizationId, sequence.invoiceId))),
+    Promise.all(policies.map((policy) => getCollectionPolicySteps(policy.id, policy.currentVersion))),
+  ]);
 
   const blockedCount = sequenceStatuses.filter((s) => s.kind === "blocked_uncertain").length;
   const upcomingCount = sequenceStatuses.filter((s) => s.kind === "active").length;
@@ -57,186 +75,248 @@ export default async function AutomationPage({
 
   return (
     <div className="flex flex-col gap-10">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Automation</h1>
-        <p className="mt-1 text-sm text-muted">
-          Collections automation re-checks your overdue invoices on a schedule and prepares (or, if you&rsquo;ve
-          explicitly enabled it, sends) payment reminders — see docs/collections-automation.md for exactly how.
-        </p>
-      </div>
+      <PageHeader title="Automation" description="Define how PAYNORA follows up on overdue invoices." />
 
-      <div className="rounded-md border border-border p-6">
+      <Card className="p-6">
         <div className="flex items-center justify-between gap-4">
           <div>
-            <p className="text-sm font-medium">
-              Organization automation: <Badge tone={organization.automationEnabled ? "success" : "neutral"}>
+            <div className="flex items-center gap-2.5">
+              <p className="text-sm font-medium text-foreground">Collections automation</p>
+              <Badge tone={organization.automationEnabled ? "success" : "neutral"}>
                 {organization.automationEnabled ? "Enabled" : "Disabled"}
               </Badge>
-            </p>
-            <p className="mt-1 text-xs text-muted">
-              The kill switch. When disabled, the scheduler tick does nothing for this organization — manual AR,
-              Action Center, and Communications flows are unaffected either way.
+            </div>
+            <p className="mt-1 max-w-lg text-xs text-muted">
+              The master switch. When disabled, nothing runs for this organization on a schedule — the AR
+              dashboard, Action Center, and manual sends are unaffected either way.
             </p>
           </div>
           {isOwner ? (
             <form action={setAutomationEnabledAction.bind(null, orgSlug, !organization.automationEnabled)}>
-              <button type="submit" className={cn(buttonVariants({ variant: "outline" }))}>
-                {organization.automationEnabled ? "Disable" : "Enable"}
+              <button
+                type="submit"
+                aria-pressed={organization.automationEnabled}
+                aria-label={organization.automationEnabled ? "Disable collections automation" : "Enable collections automation"}
+                className="flex items-center gap-2"
+              >
+                <Switch checked={organization.automationEnabled} />
               </button>
             </form>
           ) : null}
         </div>
 
-        <div className="mt-6 grid grid-cols-2 gap-6 sm:grid-cols-4">
-          <div>
-            <p className="text-xs text-muted">Active sequences</p>
-            <p className="mt-1 text-lg font-semibold">{activeSequences.length}</p>
-          </div>
-          <div>
-            <p className="text-xs text-muted">Upcoming actions</p>
-            <p className="mt-1 text-lg font-semibold">{upcomingCount}</p>
-          </div>
-          <div>
-            <p className="text-xs text-muted">Blocked (uncertain delivery)</p>
-            <p className="mt-1 text-lg font-semibold">{blockedCount}</p>
-          </div>
+        <div className="mt-6 grid grid-cols-3 gap-6 border-t border-border pt-6">
+          <Stat label="Active sequences" value={activeSequences.length} />
+          <Stat label="Upcoming reminders" value={upcomingCount} />
+          <Stat label="Blocked (uncertain delivery)" value={blockedCount} tone={blockedCount > 0 ? "warning" : undefined} />
         </div>
 
         {isDev && isOwner ? (
-          <form action={runManualAutomationTickAction.bind(null, orgSlug)} className="mt-6">
-            <p className="mb-2 text-xs text-muted">
-              Development only — no scheduler is configured to call this automatically in this environment. See
-              docs/collections-automation.md#scheduler-deployment for how a real deployment wires up
-              POST /internal/automation/tick.
+          <div className="mt-6 rounded-lg border border-dashed border-border-strong p-4">
+            <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+              <FlaskConical className="size-3.5" />
+              Developer tool — not part of the product
+            </div>
+            <p className="mt-1.5 text-xs text-muted">
+              No scheduler is configured to call this automatically in this environment — see
+              docs/collections-automation.md#scheduler-deployment for how a real deployment wires up the tick
+              endpoint.
             </p>
-            <button type="submit" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
-              Run automation tick now (dev only)
-            </button>
-          </form>
-        ) : null}
-      </div>
-
-      <div>
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold">Policies</h2>
-          {isOwner && policies.length === 0 ? (
-            <form action={createDefaultPolicyAction.bind(null, orgSlug)}>
-              <button type="submit" className={cn(buttonVariants({ variant: "primary", size: "sm" }))}>
-                Create default policy
+            <form action={runManualAutomationTickAction.bind(null, orgSlug)} className="mt-3">
+              <button type="submit" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
+                Run automation tick now
               </button>
             </form>
-          ) : null}
-        </div>
+          </div>
+        ) : null}
+      </Card>
+
+      <div className="flex flex-col gap-4">
+        <SectionHeader
+          title="Policies"
+          description="How overdue invoices get followed up"
+          actions={
+            isOwner && policies.length === 0 ? (
+              <form action={createDefaultPolicyAction.bind(null, orgSlug)}>
+                <button type="submit" className={cn(buttonVariants({ size: "sm" }))}>
+                  Create default policy
+                </button>
+              </form>
+            ) : undefined
+          }
+        />
 
         {policies.length > 0 ? (
-          <ul className="mt-3 flex flex-col divide-y divide-border rounded-md border border-border">
-            {policies.map((policy) => (
-              <li key={policy.id} className="flex flex-col gap-3 px-4 py-4 text-sm sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex flex-col gap-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium">{policy.name}</span>
-                    {policy.isDefault ? <Badge tone="neutral">Default</Badge> : null}
-                    <Badge tone={policy.enabled ? "success" : "neutral"}>{policy.enabled ? "Enabled" : "Disabled"}</Badge>
-                    <Badge tone={policy.automationMode === "AUTO_SEND" ? "warning" : "neutral"}>
-                      {policy.automationMode === "AUTO_SEND" ? "Auto-send" : "Approval required"}
-                    </Badge>
-                  </div>
-                  <p className="text-xs text-muted">version {policy.currentVersion}</p>
-                </div>
-                {isOwner ? (
-                  <div className="flex flex-wrap gap-2">
-                    {!policy.isDefault ? (
-                      <form action={setDefaultPolicyAction.bind(null, orgSlug, policy.id)}>
-                        <button type="submit" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
-                          Make default
-                        </button>
-                      </form>
-                    ) : null}
-                    <form action={setPolicyEnabledAction.bind(null, orgSlug, policy.id, !policy.enabled)}>
-                      <button type="submit" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
-                        {policy.enabled ? "Disable" : "Enable"}
-                      </button>
-                    </form>
-                    <form
-                      action={setPolicyAutomationModeAction.bind(
-                        null,
-                        orgSlug,
-                        policy.id,
-                        policy.automationMode === "AUTO_SEND" ? "APPROVAL_REQUIRED" : "AUTO_SEND",
-                      )}
-                    >
-                      <button type="submit" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
-                        {policy.automationMode === "AUTO_SEND" ? "Switch to approval required" : "Switch to auto-send"}
-                      </button>
-                    </form>
-                  </div>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="mt-3 text-sm text-muted">
-            No collection policy yet. {isOwner ? "Create one to start enrolling overdue invoices." : "Ask an organization owner to create one."}
-          </p>
-        )}
-      </div>
-
-      <div>
-        <h2 className="text-sm font-semibold">Active sequences</h2>
-        {activeSequences.length > 0 ? (
-          <ul className="mt-3 flex flex-col divide-y divide-border rounded-md border border-border">
-            {activeSequences.map((sequence, index) => {
-              const status = sequenceStatuses[index]!;
-              const tone = SEQUENCE_STATUS_TONE[sequence.status === "PAUSED" ? "paused" : status.kind] ?? "neutral";
-              const label =
-                sequence.status === "PAUSED"
-                  ? "Paused"
-                  : status.kind === "blocked_uncertain"
-                    ? "Blocked — delivery uncertain"
-                    : status.kind === "active"
-                      ? `Step ${status.stepsCompleted} of ${status.stepCount}`
-                      : "Active";
+          <div className="flex flex-col gap-4">
+            {policies.map((policy, index) => {
+              const steps = policyStepsByPolicy[index]!;
+              const isAutoSend = policy.automationMode === "AUTO_SEND";
               return (
-                <li key={sequence.id} className="flex items-center justify-between gap-4 px-4 py-3 text-sm">
-                  <div className="flex flex-col gap-1">
-                    <Link href={`/app/${orgSlug}/invoices/${sequence.invoiceId}`} className="font-medium hover:underline">
-                      {sequence.invoice.number}
-                    </Link>
-                    <span className="text-xs text-muted">{sequence.customer.name}</span>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <Badge tone={tone}>{label}</Badge>
+                <Card key={policy.id} className="p-6">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-semibold text-foreground">{policy.name}</span>
+                        {policy.isDefault ? <Badge tone="info">Default</Badge> : null}
+                        <Badge tone={policy.enabled ? "success" : "neutral"}>{policy.enabled ? "Enabled" : "Disabled"}</Badge>
+                        <Badge tone={isAutoSend ? "warning" : "neutral"}>
+                          {isAutoSend ? "Auto-send" : "Approval required"}
+                        </Badge>
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Version {policy.currentVersion} · {steps.length} step{steps.length === 1 ? "" : "s"}
+                      </p>
+                    </div>
                     {isOwner ? (
-                      <div className="flex gap-2">
-                        {sequence.status === "ACTIVE" ? (
-                          <form action={pauseSequenceAction.bind(null, orgSlug, sequence.id)}>
+                      <div className="flex flex-wrap gap-2">
+                        {!policy.isDefault ? (
+                          <form action={setDefaultPolicyAction.bind(null, orgSlug, policy.id)}>
                             <button type="submit" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
-                              Pause
+                              Make default
                             </button>
                           </form>
-                        ) : (
-                          <form action={resumeSequenceAction.bind(null, orgSlug, sequence.id)}>
-                            <button type="submit" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
-                              Resume
-                            </button>
-                          </form>
-                        )}
-                        <form action={stopSequenceAction.bind(null, orgSlug, sequence.id)}>
+                        ) : null}
+                        <form action={setPolicyEnabledAction.bind(null, orgSlug, policy.id, !policy.enabled)}>
                           <button type="submit" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
-                            Stop
+                            {policy.enabled ? "Disable" : "Enable"}
                           </button>
                         </form>
                       </div>
                     ) : null}
                   </div>
-                </li>
+
+                  {steps.length > 0 ? (
+                    <ol className="relative mt-6 flex flex-col gap-5 pl-6">
+                      <span aria-hidden="true" className="absolute top-1 bottom-1 left-[7px] w-px bg-border-strong" />
+                      {steps.map((step) => (
+                        <li key={step.id} className="relative flex items-baseline gap-4 text-sm">
+                          <span aria-hidden="true" className="absolute -left-6 top-1.5 size-2.5 rounded-full border-2 border-primary bg-surface" />
+                          <span className="w-20 shrink-0 text-xs font-medium text-muted-foreground">
+                            +{step.daysAfterDue}d overdue
+                          </span>
+                          <span className="text-foreground">
+                            {STEP_ACTION_LABEL[step.action] ?? step.action}{" "}
+                            <span className="text-muted-foreground">({STEP_TONE_LABEL[step.tone] ?? step.tone.toLowerCase()})</span>
+                          </span>
+                        </li>
+                      ))}
+                    </ol>
+                  ) : null}
+
+                  {isOwner ? (
+                    <div className="mt-6 border-t border-border pt-4">
+                      {isAutoSend ? (
+                        <Alert tone="warning" className="mb-3">
+                          Auto-send is on: approved reminders on this policy go out without a manual review step.
+                          A fresh financial check still happens immediately before every send.
+                        </Alert>
+                      ) : null}
+                      <form
+                        action={setPolicyAutomationModeAction.bind(
+                          null,
+                          orgSlug,
+                          policy.id,
+                          isAutoSend ? "APPROVAL_REQUIRED" : "AUTO_SEND",
+                        )}
+                      >
+                        <button
+                          type="submit"
+                          className={cn(buttonVariants({ variant: isAutoSend ? "outline" : "destructive", size: "sm" }))}
+                        >
+                          {isAutoSend ? (
+                            "Switch to approval required"
+                          ) : (
+                            <>
+                              <AlertTriangle className="size-4" />
+                              Switch to auto-send
+                            </>
+                          )}
+                        </button>
+                      </form>
+                    </div>
+                  ) : null}
+                </Card>
               );
             })}
-          </ul>
+          </div>
         ) : (
-          <p className="mt-3 text-sm text-muted">No active collection sequences.</p>
+          <EmptyState
+            icon={Zap}
+            title="No collection policy configured"
+            description={isOwner ? "Create one to start enrolling overdue invoices in a follow-up sequence." : "Ask an organization owner to create one."}
+          />
         )}
       </div>
+
+      <div>
+        <SectionHeader title="Active sequences" />
+        {activeSequences.length > 0 ? (
+          <Card className="mt-3 overflow-hidden">
+            <ul className="divide-y divide-border">
+              {activeSequences.map((sequence, index) => {
+                const status = sequenceStatuses[index]!;
+                const tone = SEQUENCE_STATUS_TONE[sequence.status === "PAUSED" ? "paused" : status.kind] ?? "neutral";
+                const label =
+                  sequence.status === "PAUSED"
+                    ? "Paused"
+                    : status.kind === "blocked_uncertain"
+                      ? "Blocked — delivery uncertain"
+                      : status.kind === "active"
+                        ? `Step ${status.stepsCompleted} of ${status.stepCount}`
+                        : "Active";
+                return (
+                  <li key={sequence.id} className="flex flex-col gap-3 px-5 py-3.5 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex flex-col gap-0.5 text-sm">
+                      <Link href={`/app/${orgSlug}/invoices/${sequence.invoiceId}`} className="font-medium text-foreground hover:text-primary hover:underline">
+                        {sequence.invoice.number}
+                      </Link>
+                      <span className="text-xs text-muted">{sequence.customer.name}</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <Badge tone={tone}>{label}</Badge>
+                      {isOwner ? (
+                        <div className="flex gap-2">
+                          {sequence.status === "ACTIVE" ? (
+                            <form action={pauseSequenceAction.bind(null, orgSlug, sequence.id)}>
+                              <button type="submit" className={cn(buttonVariants({ variant: "outline", size: "sm" }))} aria-label="Pause sequence">
+                                <PauseCircle className="size-4" />
+                              </button>
+                            </form>
+                          ) : (
+                            <form action={resumeSequenceAction.bind(null, orgSlug, sequence.id)}>
+                              <button type="submit" className={cn(buttonVariants({ variant: "outline", size: "sm" }))} aria-label="Resume sequence">
+                                <PlayCircle className="size-4" />
+                              </button>
+                            </form>
+                          )}
+                          <form action={stopSequenceAction.bind(null, orgSlug, sequence.id)}>
+                            <button type="submit" className={cn(buttonVariants({ variant: "outline", size: "sm" }))} aria-label="Stop sequence">
+                              <Square className="size-4" />
+                            </button>
+                          </form>
+                        </div>
+                      ) : null}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </Card>
+        ) : (
+          <EmptyState className="mt-3 py-10" title="No active collection sequences" />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Stat({ label, value, tone }: { label: string; value: number; tone?: "warning" }) {
+  return (
+    <div>
+      <p className="text-xs font-medium text-muted-foreground">{label}</p>
+      <p className={cn("mt-1 text-lg font-semibold tabular-nums", tone === "warning" ? "text-warning" : "text-foreground")}>
+        {value}
+      </p>
     </div>
   );
 }
