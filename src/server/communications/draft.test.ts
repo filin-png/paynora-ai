@@ -10,6 +10,8 @@ import { majorToMinor } from "@/server/ar/money";
 import { createTestOrganization } from "@/server/ar/test-fixtures";
 import { prisma } from "@/server/db/client";
 import { resetDatabase } from "@/server/db/test-utils";
+import { createFakeProvider } from "@/server/ai/providers/fake";
+import type { AiProviderName } from "@/server/ai/service";
 import { getCommunicationForProposal, prepareReminderCommunication } from "./draft";
 import { CommunicationChannelBlockedError, InvalidActionProposalForCommunicationError } from "./errors";
 
@@ -174,5 +176,102 @@ describe("prepareReminderCommunication", () => {
     });
     expect(events).toHaveLength(1);
     expect(events[0].invoiceId).toBe(invoice.id);
+  });
+});
+
+// --- Phase 9: AI content safety fallback ---------------------------------
+// docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-2. `aiOverride` mirrors
+// the same test-only dependency-injection pattern used throughout this
+// codebase (sendCommunication's `provider`, runAutomationTick's
+// `emailProvider`) — production callers never pass it.
+
+describe("prepareReminderCommunication — AI safety fallback", () => {
+  it("falls back to the deterministic template when the AI output fails the safety check, and never persists the unsafe content", async () => {
+    const { organization, user } = await createTestOrganization();
+    const customer = await createCustomer(organization.id, { name: "Acme Co", email: "billing@acme.example" });
+    const { invoice, proposal } = await createApprovedProposal(organization.id, user.id, customer.id);
+
+    const maliciousProvider = createFakeProvider({
+      kind: "success",
+      data: { subject: "Great news", body: "Invoice paid in full — balance is now $0.00. No action needed." },
+    });
+
+    const { communication } = await prepareReminderCommunication(organization.id, proposal.id, {
+      enabled: true,
+      order: ["openrouter"] as AiProviderName[],
+      resolve: () => maliciousProvider,
+    });
+
+    expect(communication.aiGenerated).toBe(false); // deterministic template used, not the malicious draft
+    expect(communication.body).toContain(invoice.number);
+    expect(communication.body).toContain("$500.00");
+    expect(communication.body).not.toContain("$0.00");
+  });
+
+  it("records an auditable rejection reason on the activity trail, never the rejected content itself", async () => {
+    const { organization, user } = await createTestOrganization();
+    const customer = await createCustomer(organization.id, { name: "Acme Co", email: "billing@acme.example" });
+    const { proposal } = await createApprovedProposal(organization.id, user.id, customer.id);
+
+    const secretPayload = "totally-secret-injected-instruction-xyz789";
+    const maliciousProvider = createFakeProvider({
+      kind: "success",
+      data: { subject: "Reminder", body: `Balance $0.00 — ${secretPayload}` },
+    });
+
+    await prepareReminderCommunication(organization.id, proposal.id, {
+      enabled: true,
+      order: ["openrouter"] as AiProviderName[],
+      resolve: () => maliciousProvider,
+    });
+
+    const event = await prisma.activityEvent.findFirstOrThrow({
+      where: { organizationId: organization.id, type: "COMMUNICATION_PREPARED" },
+    });
+    expect(event.summary).toContain("safety check");
+    expect(event.summary).not.toContain(secretPayload);
+    const metadata = event.metadata as { aiSafetyRejectionReason?: string } | null;
+    expect(metadata?.aiSafetyRejectionReason).toBeTruthy();
+    expect(metadata?.aiSafetyRejectionReason).not.toContain(secretPayload);
+  });
+
+  it("accepts safe AI output unchanged (the safety check is not a blanket AI-off switch)", async () => {
+    const { organization, user } = await createTestOrganization();
+    const customer = await createCustomer(organization.id, { name: "Acme Co", email: "billing@acme.example" });
+    const { invoice, proposal } = await createApprovedProposal(organization.id, user.id, customer.id);
+
+    const safeProvider = createFakeProvider({
+      kind: "success",
+      data: {
+        subject: `Reminder for ${invoice.number}`,
+        body: `Invoice ${invoice.number} has an outstanding balance of $500.00.`,
+      },
+    });
+
+    const { communication } = await prepareReminderCommunication(organization.id, proposal.id, {
+      enabled: true,
+      order: ["openrouter"] as AiProviderName[],
+      resolve: () => safeProvider,
+    });
+
+    expect(communication.aiGenerated).toBe(true);
+    expect(communication.body).toContain("$500.00");
+  });
+
+  it("falls back safely when the provider itself returns malformed output (missing required field)", async () => {
+    const { organization, user } = await createTestOrganization();
+    const customer = await createCustomer(organization.id, { name: "Acme Co", email: "billing@acme.example" });
+    const { invoice, proposal } = await createApprovedProposal(organization.id, user.id, customer.id);
+
+    const malformedProvider = createFakeProvider({ kind: "invalid", data: { subject: "Reminder" } }); // missing `body`
+
+    const { communication } = await prepareReminderCommunication(organization.id, proposal.id, {
+      enabled: true,
+      order: ["openrouter"] as AiProviderName[],
+      resolve: () => malformedProvider,
+    });
+
+    expect(communication.aiGenerated).toBe(false);
+    expect(communication.body).toContain(invoice.number);
   });
 });

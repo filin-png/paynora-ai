@@ -1,11 +1,14 @@
 import { Prisma, type ActionProposal, type Communication } from "@prisma/client";
 
+import type { AiProviderName } from "@/server/ai/service";
 import { tryGenerateStructured } from "@/server/ai/service";
+import type { AIProvider } from "@/server/ai/types";
 import { recordActivityEvent } from "@/server/ar/activity";
 import { getCustomer } from "@/server/ar/customers";
 import { buildDeterministicInvoiceContext } from "@/server/ar/reminder-context";
 import { prisma } from "@/server/db/client";
 import { buildReminderEmailRequest } from "./ai-context";
+import { checkGeneratedReminderSafety } from "./ai-safety";
 import { resolveCommunicationDestination } from "./channel";
 import {
   CommunicationChannelBlockedError,
@@ -27,10 +30,35 @@ async function getTenantActionProposal(
   return proposal;
 }
 
-async function generateReminderEmail(context: ReminderEmailContext) {
-  const aiResult = await tryGenerateStructured(buildReminderEmailRequest(context));
+/**
+ * Phase 9 (docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-2/P1-3): AI
+ * output is validated against the same deterministic facts it was given
+ * — checkGeneratedReminderSafety — before it is ever accepted. A failed
+ * check degrades to the existing deterministic template, exactly like a
+ * disabled/errored/timed-out AI call already did; this is not a new
+ * fallback path, it is the same one with one more condition that reaches
+ * it. `aiSafetyRejectionReason` is returned (never the rejected content
+ * itself) purely so the caller can record an auditable, secret-free trail
+ * of *that* a rejection happened — see prepareReminderCommunication.
+ */
+export type AiOverride = {
+  enabled?: boolean;
+  order?: AiProviderName[];
+  resolve?: (name: AiProviderName) => AIProvider;
+};
+
+async function generateReminderEmail(context: ReminderEmailContext, aiOverride?: AiOverride) {
+  const aiResult = await tryGenerateStructured(buildReminderEmailRequest(context), aiOverride);
   if (!aiResult) {
     return { ...buildDeterministicReminderEmail(context), aiGenerated: false as const };
+  }
+  const safety = checkGeneratedReminderSafety(aiResult.data, context);
+  if (!safety.safe) {
+    return {
+      ...buildDeterministicReminderEmail(context),
+      aiGenerated: false as const,
+      aiSafetyRejectionReason: safety.reason,
+    };
   }
   return { subject: aiResult.data.subject, body: aiResult.data.body, aiGenerated: true as const, aiProvider: aiResult.provider };
 }
@@ -48,10 +76,18 @@ export type EnsuredCommunication = { communication: Communication; created: bool
  * the proposal's current status (including EXECUTED) — preparing is a
  * read-through-or-create operation, not a status check on every call.
  * See docs/communications.md.
+ *
+ * `aiOverride` is a test-only dependency-injection point (mirrors
+ * `sendCommunication`'s `provider` option, `runAutomationTick`'s
+ * `emailProvider` option — the same pattern used throughout this
+ * codebase) — see draft.test.ts and engine.test.ts for how it's used to
+ * exercise the AI-safety-rejection fallback deterministically, without a
+ * real AI credential. Production callers never pass it.
  */
 export async function prepareReminderCommunication(
   organizationId: string,
   actionProposalId: string,
+  aiOverride?: AiOverride,
 ): Promise<EnsuredCommunication> {
   const proposal = await getTenantActionProposal(organizationId, actionProposalId);
 
@@ -86,7 +122,7 @@ export async function prepareReminderCommunication(
   if (destination.blocked) throw new CommunicationChannelBlockedError(destination.reason);
 
   const emailContext: ReminderEmailContext = { ...invoiceContext, organizationName: organization.name };
-  const content = await generateReminderEmail(emailContext);
+  const content = await generateReminderEmail(emailContext, aiOverride);
   const channelLabel = destination.channel === "EMAIL" ? "email" : "Telegram message";
 
   try {
@@ -109,9 +145,20 @@ export async function prepareReminderCommunication(
       await recordActivityEvent(tx, {
         organizationId,
         type: "COMMUNICATION_PREPARED",
-        summary: `Payment reminder ${channelLabel} drafted for invoice ${proposal.invoiceId}`,
+        summary:
+          "aiSafetyRejectionReason" in content
+            ? `Payment reminder ${channelLabel} drafted for invoice ${proposal.invoiceId} (AI draft rejected by safety check, deterministic template used instead)`
+            : `Payment reminder ${channelLabel} drafted for invoice ${proposal.invoiceId}`,
         customerId: proposal.customerId ?? undefined,
         invoiceId: proposal.invoiceId ?? undefined,
+        // Never the rejected AI content itself — only the deterministic
+        // category name (e.g. "body mentions an amount other than the
+        // actual outstanding amount") — see
+        // docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-2.
+        metadata:
+          "aiSafetyRejectionReason" in content
+            ? { aiSafetyRejectionReason: content.aiSafetyRejectionReason }
+            : undefined,
       });
       return created;
     });
