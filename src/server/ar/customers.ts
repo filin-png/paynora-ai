@@ -82,16 +82,30 @@ export async function getCustomer(organizationId: string, customerId: string) {
   return customer;
 }
 
+/**
+ * Applied whenever a caller doesn't explicitly request a page size —
+ * bounds worst-case query cost for callers that don't paginate (e.g. the
+ * invoice-form customer picker) without changing their return shape. See
+ * docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-6. The customers list
+ * page passes its own `take`/`cursor` for real pagination.
+ */
+const CUSTOMER_LIST_DEFAULT_TAKE = 100;
+
 export async function listCustomers(
   organizationId: string,
-  options: { includeArchived?: boolean } = {},
+  options: { includeArchived?: boolean; cursor?: string; take?: number } = {},
 ) {
   return prisma.customer.findMany({
     where: {
       organizationId,
       ...(options.includeArchived ? {} : { archivedAt: null }),
     },
-    orderBy: { name: "asc" },
+    // `id` is a stable tiebreak for `name` (not unique on its own) — required
+    // for cursor pagination to never skip or repeat a row when two customers
+    // share a name.
+    orderBy: [{ name: "asc" }, { id: "asc" }],
+    take: options.take ?? CUSTOMER_LIST_DEFAULT_TAKE,
+    ...(options.cursor ? { cursor: { id: options.cursor }, skip: 1 } : {}),
   });
 }
 

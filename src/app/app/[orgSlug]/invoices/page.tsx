@@ -22,30 +22,54 @@ const FILTERS: { value: InvoiceListFilter; label: string }[] = [
   { value: "paid", label: "Paid" },
 ];
 
+// Bounds the invoices list page's query cost regardless of organization
+// size — see docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-6. `+1` is
+// the standard "peek ahead" trick: fetching one extra row reveals whether
+// another page exists without a separate COUNT query.
+const INVOICE_PAGE_SIZE = 50;
+
 export default async function InvoicesPage({
   params,
   searchParams,
 }: {
   params: Promise<{ orgSlug: string }>;
-  searchParams: Promise<{ filter?: string }>;
+  searchParams: Promise<{ filter?: string; cursor?: string }>;
 }) {
   const { orgSlug } = await params;
-  const { filter: rawFilter } = await searchParams;
+  const { filter: rawFilter, cursor } = await searchParams;
   const filter: InvoiceListFilter = FILTERS.some((f) => f.value === rawFilter)
     ? (rawFilter as InvoiceListFilter)
     : "all";
   const context = await requireOrganizationMembershipForPage(orgSlug);
-  const invoices = await listInvoicesWithFinancials(context.organization.id, filter);
+  const page = await listInvoicesWithFinancials(context.organization.id, filter, {
+    cursor,
+    take: INVOICE_PAGE_SIZE + 1,
+  });
+  const hasMore = page.length > INVOICE_PAGE_SIZE;
+  const invoices = hasMore ? page.slice(0, INVOICE_PAGE_SIZE) : page;
+  const nextCursor = hasMore ? invoices.at(-1)!.invoice.id : null;
   const collectionsBadges = await getCollectionsBadgesForInvoices(
     context.organization.id,
     invoices.map(({ invoice }) => invoice.id),
   );
 
+  function pageHref(nextPageCursor: string | null): string {
+    const query = new URLSearchParams();
+    if (filter !== "all") query.set("filter", filter);
+    if (nextPageCursor) query.set("cursor", nextPageCursor);
+    const queryString = query.toString();
+    return `/app/${orgSlug}/invoices${queryString ? `?${queryString}` : ""}`;
+  }
+
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Invoices"
-        description={invoices.length === 0 ? "No invoices to show." : `${invoices.length} invoice${invoices.length === 1 ? "" : "s"}.`}
+        description={
+          invoices.length === 0
+            ? "No invoices to show."
+            : `${invoices.length}${hasMore ? "+" : ""} invoice${invoices.length === 1 && !hasMore ? "" : "s"}.`
+        }
         actions={
           <Link href={`/app/${orgSlug}/invoices/new`} className={cn(buttonVariants())}>
             <Plus className="size-4" />
@@ -119,6 +143,12 @@ export default async function InvoicesPage({
           }
         />
       )}
+
+      {hasMore ? (
+        <Link href={pageHref(nextCursor)} className={cn(buttonVariants({ variant: "outline" }), "self-center")}>
+          Next page
+        </Link>
+      ) : null}
     </div>
   );
 }

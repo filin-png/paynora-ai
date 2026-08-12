@@ -128,3 +128,33 @@ describe("tenant isolation", () => {
     expect(result[0]?.name).toBe("Org A Customer");
   });
 });
+
+describe("listCustomers — pagination", () => {
+  it("`take` bounds the result and returns exact-count pages via cursor, in stable name-asc order", async () => {
+    const { organization } = await createTestOrganization();
+    for (const name of ["Alpha", "Bravo", "Charlie", "Delta", "Echo"]) {
+      await createCustomer(organization.id, { name });
+    }
+
+    const firstPage = await listCustomers(organization.id, { take: 2 });
+    expect(firstPage.map((c) => c.name)).toEqual(["Alpha", "Bravo"]);
+
+    const secondPage = await listCustomers(organization.id, { take: 2, cursor: firstPage[1]!.id });
+    expect(secondPage.map((c) => c.name)).toEqual(["Charlie", "Delta"]);
+
+    const thirdPage = await listCustomers(organization.id, { take: 2, cursor: secondPage[1]!.id });
+    expect(thirdPage.map((c) => c.name)).toEqual(["Echo"]); // exactly the remainder — no duplicates, no gaps
+  });
+
+  it("omitting take applies a generous default cap rather than returning truly unbounded results", async () => {
+    const { organization } = await createTestOrganization();
+    await createCustomer(organization.id, { name: "Only Customer" });
+
+    const result = await listCustomers(organization.id);
+
+    // Confirms the default-cap code path runs without behavior change for
+    // the common (well under the cap) case — see
+    // docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-6.
+    expect(result).toHaveLength(1);
+  });
+});

@@ -148,6 +148,68 @@ describe("tenant isolation", () => {
   });
 });
 
+describe("listInvoicesWithFinancials — pagination", () => {
+  it("omitting take/cursor keeps the previous unbounded behavior (automation/enrollment/events rely on this)", async () => {
+    const { organization, customer } = await setupOrgWithCustomer();
+    for (let i = 0; i < 5; i += 1) {
+      await createInvoice(organization.id, { ...validInvoice, number: `INV-000${i}`, customerId: customer.id });
+    }
+
+    const result = await listInvoicesWithFinancials(organization.id);
+
+    expect(result).toHaveLength(5);
+  });
+
+  it("`take` bounds the result and returns exact-count pages via cursor, in stable issueDate-desc order", async () => {
+    const { organization, customer } = await setupOrgWithCustomer();
+    // Distinct issueDates so ordering is unambiguous before the id tiebreak.
+    for (let i = 0; i < 5; i += 1) {
+      await createInvoice(organization.id, {
+        ...validInvoice,
+        number: `INV-000${i}`,
+        customerId: customer.id,
+        issueDate: `2026-08-0${i + 1}`,
+      });
+    }
+
+    const firstPage = await listInvoicesWithFinancials(organization.id, "all", { take: 2 });
+    expect(firstPage).toHaveLength(2);
+    expect(firstPage[0]!.invoice.number).toBe("INV-0004"); // most recently issued first
+    expect(firstPage[1]!.invoice.number).toBe("INV-0003");
+
+    const secondPage = await listInvoicesWithFinancials(organization.id, "all", {
+      take: 2,
+      cursor: firstPage[1]!.invoice.id,
+    });
+    expect(secondPage).toHaveLength(2);
+    expect(secondPage[0]!.invoice.number).toBe("INV-0002");
+    expect(secondPage[1]!.invoice.number).toBe("INV-0001");
+
+    const thirdPage = await listInvoicesWithFinancials(organization.id, "all", {
+      take: 2,
+      cursor: secondPage[1]!.invoice.id,
+    });
+    expect(thirdPage).toHaveLength(1); // exactly the remainder — no duplicates, no gaps
+    expect(thirdPage[0]!.invoice.number).toBe("INV-0000");
+  });
+
+  it("paginates correctly together with the customerId filter", async () => {
+    const { organization, customer: customerA } = await setupOrgWithCustomer("Org");
+    const customerB = await createCustomer(organization.id, { name: "Other Customer" });
+    await createInvoice(organization.id, { ...validInvoice, number: "A-1", customerId: customerA.id });
+    await createInvoice(organization.id, { ...validInvoice, number: "A-2", customerId: customerA.id });
+    await createInvoice(organization.id, { ...validInvoice, number: "B-1", customerId: customerB.id });
+
+    const page = await listInvoicesWithFinancials(organization.id, "all", {
+      customerId: customerA.id,
+      take: 10,
+    });
+
+    expect(page).toHaveLength(2);
+    expect(page.every(({ invoice }) => invoice.customerId === customerA.id)).toBe(true);
+  });
+});
+
 describe("cancelInvoice", () => {
   it("cancels an open invoice with no payments", async () => {
     const { organization, customer } = await setupOrgWithCustomer();

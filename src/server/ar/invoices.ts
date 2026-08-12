@@ -181,15 +181,37 @@ export async function getInvoiceWithFinancials(organizationId: string, invoiceId
 
 export type InvoiceListFilter = "all" | "open" | "overdue" | "paid";
 
+/**
+ * `cursor`/`take` are opt-in — every existing caller that omits them
+ * (the collections automation engine, sequence enrollment, overdue-event
+ * detection, and the customer-detail page's per-customer invoice list)
+ * keeps its exact previous unbounded behavior, which those callers
+ * genuinely need (they must see every open/overdue invoice for the
+ * organization, not one page of them). Only the main invoices list page
+ * passes them, to bound that specific unbounded-growth risk — see
+ * docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-6.
+ *
+ * Because `filter` is evaluated in-memory (open/overdue/paid all depend
+ * on computed financials, not a stored column — see computeInvoiceFinancials
+ * below), pagination happens on the *unfiltered* window: a page may return
+ * fewer than `take` items when a narrow filter is active, exactly like any
+ * "load more" list whose filter is applied after fetching a bounded page.
+ * The cursor itself is still exact and gap-free — clicking "load more"
+ * enough times always reaches every matching invoice.
+ */
 export async function listInvoicesWithFinancials(
   organizationId: string,
   filter: InvoiceListFilter = "all",
-  options: { customerId?: string; today?: string } = {},
+  options: { customerId?: string; today?: string; cursor?: string; take?: number } = {},
 ) {
   const invoices = await prisma.invoice.findMany({
     where: { organizationId, ...(options.customerId ? { customerId: options.customerId } : {}) },
     include: { customer: true },
-    orderBy: { issueDate: "desc" },
+    // `id` is a stable tiebreak — required for cursor pagination to never
+    // skip or repeat a row when two invoices share an issueDate.
+    orderBy: [{ issueDate: "desc" }, { id: "desc" }],
+    ...(options.take != null ? { take: options.take } : {}),
+    ...(options.cursor ? { cursor: { id: options.cursor }, skip: 1 } : {}),
   });
 
   const sums = await prisma.payment.groupBy({

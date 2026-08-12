@@ -82,3 +82,77 @@ describe("activity timeline", () => {
     expect(allEvents.every((e) => e.organizationId === orgB.id)).toBe(true);
   });
 });
+
+describe("listInvoiceActivity / listCustomerActivity — pagination", () => {
+  it("bounds and paginates an invoice's activity via cursor, with no duplicates or gaps across pages", async () => {
+    const { organization } = await createTestOrganization();
+    const customer = await createCustomer(organization.id, { name: "Acme" });
+    const invoice = await createInvoice(organization.id, {
+      customerId: customer.id,
+      number: "INV-0001",
+      currency: "USD",
+      amountMinor: majorToMinor(1000),
+      issueDate: "2026-08-01",
+      dueDate: "2026-08-15",
+    });
+    // createInvoice already recorded one INVOICE_CREATED event — add 4 more
+    // with distinct, explicit timestamps so cursor ordering is deterministic.
+    const base = Date.now();
+    for (let i = 0; i < 4; i += 1) {
+      await prisma.activityEvent.create({
+        data: {
+          organizationId: organization.id,
+          invoiceId: invoice.id,
+          type: "PAYMENT_RECORDED",
+          summary: `Manual event ${i}`,
+          createdAt: new Date(base + (i + 1) * 1000),
+        },
+      });
+    }
+
+    const firstPage = await listInvoiceActivity(organization.id, invoice.id, { take: 2 });
+    expect(firstPage).toHaveLength(2);
+    const secondPage = await listInvoiceActivity(organization.id, invoice.id, {
+      take: 2,
+      cursor: firstPage[1]!.id,
+    });
+    expect(secondPage).toHaveLength(2);
+    const thirdPage = await listInvoiceActivity(organization.id, invoice.id, {
+      take: 2,
+      cursor: secondPage[1]!.id,
+    });
+    expect(thirdPage).toHaveLength(1); // exactly the remainder of 5 total events
+
+    const ids = [...firstPage, ...secondPage, ...thirdPage].map((e) => e.id);
+    expect(new Set(ids).size).toBe(5); // no duplicates across pages
+  });
+
+  it("bounds and paginates a customer's activity via cursor the same way", async () => {
+    const { organization } = await createTestOrganization();
+    const customer = await createCustomer(organization.id, { name: "Acme" });
+    const base = Date.now();
+    for (let i = 0; i < 3; i += 1) {
+      await prisma.activityEvent.create({
+        data: {
+          organizationId: organization.id,
+          customerId: customer.id,
+          type: "CUSTOMER_UPDATED",
+          summary: `Manual event ${i}`,
+          createdAt: new Date(base + (i + 1) * 1000),
+        },
+      });
+    }
+
+    const firstPage = await listCustomerActivity(organization.id, customer.id, { take: 2 });
+    expect(firstPage).toHaveLength(2);
+    const secondPage = await listCustomerActivity(organization.id, customer.id, {
+      take: 2,
+      cursor: firstPage[1]!.id,
+    });
+    // 1 CUSTOMER_CREATED (from createCustomer) + 3 manual = 4 total, so the
+    // second page holds exactly the remaining 2.
+    expect(secondPage).toHaveLength(2);
+    const ids = [...firstPage, ...secondPage].map((e) => e.id);
+    expect(new Set(ids).size).toBe(4);
+  });
+});

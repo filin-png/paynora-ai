@@ -29,12 +29,19 @@ import {
 } from "./actions";
 import { RecordPaymentForm } from "./payment-form";
 
+// See docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-6 — bounds a
+// long-lived invoice's activity timeline.
+const ACTIVITY_PAGE_SIZE = 25;
+
 export default async function InvoiceDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ orgSlug: string; invoiceId: string }>;
+  searchParams: Promise<{ activityCursor?: string }>;
 }) {
   const { orgSlug, invoiceId } = await params;
+  const { activityCursor } = await searchParams;
   const context = await requireOrganizationMembershipForPage(orgSlug);
   const { invoice, financials } = await getInvoiceWithFinancials(context.organization.id, invoiceId).catch(
     (error: unknown) => {
@@ -42,11 +49,17 @@ export default async function InvoiceDetailPage({
       throw error;
     },
   );
-  const [payments, activity, collectionsStatus] = await Promise.all([
+  const [payments, activityPage, collectionsStatus] = await Promise.all([
     listPaymentsForInvoice(context.organization.id, invoiceId),
-    listInvoiceActivity(context.organization.id, invoiceId),
+    listInvoiceActivity(context.organization.id, invoiceId, {
+      cursor: activityCursor,
+      take: ACTIVITY_PAGE_SIZE + 1,
+    }),
     getCollectionStatusForInvoice(context.organization.id, invoiceId),
   ]);
+  const activityHasMore = activityPage.length > ACTIVITY_PAGE_SIZE;
+  const activity = activityHasMore ? activityPage.slice(0, ACTIVITY_PAGE_SIZE) : activityPage;
+  const nextActivityCursor = activityHasMore ? activity.at(-1)!.id : null;
 
   const currency = invoice.currency as Currency;
   const status = getInvoiceStatusDisplay(invoice, financials);
@@ -183,6 +196,14 @@ export default async function InvoiceDetailPage({
         ) : (
           <p className="mt-3 text-sm text-muted">No activity yet.</p>
         )}
+        {activityHasMore ? (
+          <Link
+            href={`/app/${orgSlug}/invoices/${invoiceId}?activityCursor=${nextActivityCursor}`}
+            className="mt-3 inline-block text-xs font-medium text-primary hover:underline"
+          >
+            Older activity
+          </Link>
+        ) : null}
       </div>
     </div>
   );
