@@ -1,12 +1,18 @@
 "use server";
 
+import { headers } from "next/headers";
 import { AuthError } from "next-auth";
 import { z } from "zod";
 
+import { extractClientIp } from "@/server/auth/request-ip";
 import { signIn } from "@/server/auth/config";
 import { EmailAlreadyRegisteredError, registerUser } from "@/server/auth/users";
+import { checkRateLimit } from "@/server/rate-limit/service";
+import { SIGNUP_IP_POLICY } from "@/server/rate-limit/policies";
 
 export type SignUpFormState = { error: string } | null;
+
+const SIGNUP_IP_SCOPE = "auth:signup:ip";
 
 export async function signUpAction(
   _prevState: SignUpFormState,
@@ -15,6 +21,22 @@ export async function signUpAction(
   const email = String(formData.get("email") ?? "");
   const password = String(formData.get("password") ?? "");
   const name = String(formData.get("name") ?? "");
+
+  // Phase 9 (docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P0-1/P2-1): bounds
+  // automated mass account creation / enumeration-by-signup from one
+  // source. Fails closed the same way authorize() does — an unexpected
+  // error here blocks the signup rather than silently skipping the check.
+  try {
+    const ip = extractClientIp(await headers());
+    const ipCheck = await checkRateLimit(SIGNUP_IP_SCOPE, ip, SIGNUP_IP_POLICY);
+    if (!ipCheck.allowed) {
+      return { error: "Too many sign-up attempts from this network. Please try again later." };
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[auth] sign-up rate limit check failed — failing closed: ${message}`);
+    return { error: "Something went wrong. Please try again." };
+  }
 
   try {
     await registerUser({ email, password, name: name || undefined });
