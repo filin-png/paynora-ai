@@ -16,6 +16,9 @@ import { MessagingProviderRejectedError } from "@/server/messaging/errors";
 import { dispatchMessage } from "@/server/messaging/gateway";
 import { resolveMessagingProvider } from "@/server/messaging/service";
 import type { MessagingProvider } from "@/server/messaging/types";
+import { RateLimitExceededError } from "@/server/rate-limit/errors";
+import { communicationSendPolicy } from "@/server/rate-limit/policies";
+import { checkRateLimit } from "@/server/rate-limit/service";
 import { CommunicationResourceNotFoundError, InvalidCommunicationTransitionError } from "./errors";
 
 /** Who actually triggered this send — encoded in the ActivityEvent's metadata, not a schema change. See docs/communications.md#audit-trail. */
@@ -278,6 +281,35 @@ export async function sendCommunication(
   const messagingProvider =
     channelLookup.channel === "TELEGRAM" ? (options.messagingProvider ?? resolveMessagingProvider()) : null;
   const providerName = (channelLookup.channel === "EMAIL" ? emailProvider?.name : messagingProvider?.name)!;
+
+  // Bounds real provider dispatch volume/cost per organization per hour —
+  // see docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-7. Checked here,
+  // before any state change, for the same reason provider resolution is:
+  // a blocked send must never create a DeliveryAttempt or move the
+  // communication into SENDING. Applies uniformly to USER and AUTOMATION
+  // sends — the point is a total-cost ceiling for the organization
+  // regardless of what triggered the send. Fails closed (throws) on an
+  // unexpected rate-limiter error, consistent with every other rate limit
+  // in this codebase.
+  //
+  // A genuine retry (after FAILED, or UNCERTAIN with acknowledgement) is
+  // a new real dispatch and correctly consumes a new slot each time. The
+  // one case this doesn't perfectly account for is two truly concurrent
+  // duplicate requests (e.g. a double-click) that both reach this check
+  // before either wins the claim below — the loser still consumes a slot
+  // even though it never dispatches anything. That's an accepted,
+  // documented imprecision (at most one wasted slot per genuine race, not
+  // a correctness bug) rather than moving this check after the claim,
+  // which would require inventing a new terminal DeliveryAttempt outcome
+  // for "claimed but blocked before dispatch" — not justified by an edge
+  // case this narrow.
+  const sendLimit = await checkRateLimit("communication:send", organizationId, communicationSendPolicy());
+  if (!sendLimit.allowed) {
+    throw new RateLimitExceededError(
+      sendLimit.resetAt,
+      "This organization has reached its hourly limit for sending reminders. Please try again later.",
+    );
+  }
 
   const allowedFrom = options.acknowledgeUncertainRisk ? UNCERTAIN_SENDABLE_FROM : ALWAYS_SENDABLE_FROM;
   const actorSource: CommunicationActorSource = options.actorSource ?? "USER";

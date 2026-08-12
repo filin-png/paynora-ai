@@ -16,6 +16,9 @@ import { createFakeMessagingProvider } from "@/server/messaging/providers/fake";
 import type { MessagingMessage, MessagingProvider } from "@/server/messaging/types";
 import { prisma } from "@/server/db/client";
 import { resetDatabase } from "@/server/db/test-utils";
+import { RateLimitExceededError } from "@/server/rate-limit/errors";
+import { communicationSendPolicy } from "@/server/rate-limit/policies";
+import { checkRateLimit } from "@/server/rate-limit/service";
 import { prepareReminderCommunication } from "./draft";
 import { updateCommunicationDraft } from "./editing";
 import { CommunicationResourceNotFoundError, InvalidCommunicationTransitionError } from "./errors";
@@ -672,4 +675,64 @@ describe("reconcileStaleSendingCommunication", () => {
     const reloadedFailed = await prisma.deliveryAttempt.findUniqueOrThrow({ where: { id: failed.id } });
     expect(reloadedFailed.status).toBe("FAILED"); // untouched
   });
+});
+
+describe("sendCommunication — provider abuse control / send rate limit (P1-7)", () => {
+  // The loop below performs `policy.maxAttempts` (100 by default) real
+  // sequential DB round trips before the actual assertion — needs more
+  // than vitest's default 5000ms, same as src/server/auth/authenticate.test.ts.
+  it("refuses to send once the organization's hourly send budget is exhausted, making no state changes", async () => {
+    const { organization, user, communication } = await setup();
+
+    const policy = communicationSendPolicy();
+    for (let i = 0; i < policy.maxAttempts; i += 1) {
+      await checkRateLimit("communication:send", organization.id, policy);
+    }
+
+    await expect(
+      sendCommunication(organization.id, communication.id, user.id, {
+        provider: createFakeEmailProvider({ kind: "success" }),
+      }),
+    ).rejects.toThrow(RateLimitExceededError);
+
+    const reloaded = await prisma.communication.findUniqueOrThrow({ where: { id: communication.id } });
+    expect(reloaded.status).toBe("DRAFT"); // no claim, no DeliveryAttempt — blocked before any state change
+    const attempts = await prisma.deliveryAttempt.count({ where: { communicationId: communication.id } });
+    expect(attempts).toBe(0);
+  }, 20000);
+
+  it("applies uniformly to AUTOMATION-sourced sends, not just USER ones (the point is a total org cost ceiling)", async () => {
+    const { organization, user, communication } = await setup();
+
+    const policy = communicationSendPolicy();
+    for (let i = 0; i < policy.maxAttempts; i += 1) {
+      await checkRateLimit("communication:send", organization.id, policy);
+    }
+
+    await expect(
+      sendCommunication(organization.id, communication.id, user.id, {
+        provider: createFakeEmailProvider({ kind: "success" }),
+        actorSource: "AUTOMATION",
+      }),
+    ).rejects.toThrow(RateLimitExceededError);
+  }, 20000);
+
+  it("a different organization's send budget is unaffected by another organization's exhausted limit", async () => {
+    const { organization: orgA, user: userA, communication: commA } = await setup();
+    const { organization: orgB, user: userB, communication: commB } = await setup();
+
+    const policy = communicationSendPolicy();
+    for (let i = 0; i < policy.maxAttempts; i += 1) {
+      await checkRateLimit("communication:send", orgA.id, policy);
+    }
+
+    await expect(
+      sendCommunication(orgA.id, commA.id, userA.id, { provider: createFakeEmailProvider({ kind: "success" }) }),
+    ).rejects.toThrow(RateLimitExceededError);
+
+    const resultB = await sendCommunication(orgB.id, commB.id, userB.id, {
+      provider: createFakeEmailProvider({ kind: "success" }),
+    });
+    expect(resultB.communication.status).toBe("SENT"); // org B's budget is untouched
+  }, 20000);
 });

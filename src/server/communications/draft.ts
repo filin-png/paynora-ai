@@ -7,6 +7,8 @@ import { recordActivityEvent } from "@/server/ar/activity";
 import { getCustomer } from "@/server/ar/customers";
 import { buildDeterministicInvoiceContext } from "@/server/ar/reminder-context";
 import { prisma } from "@/server/db/client";
+import { aiGenerationPolicy } from "@/server/rate-limit/policies";
+import { checkRateLimit } from "@/server/rate-limit/service";
 import { buildReminderEmailRequest } from "./ai-context";
 import { checkGeneratedReminderSafety } from "./ai-safety";
 import { resolveCommunicationDestination } from "./channel";
@@ -47,7 +49,35 @@ export type AiOverride = {
   resolve?: (name: AiProviderName) => AIProvider;
 };
 
-async function generateReminderEmail(context: ReminderEmailContext, aiOverride?: AiOverride) {
+/**
+ * Phase 9 (docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-7): bounds AI
+ * provider spend/abuse per organization per hour. A rate-limited (or
+ * otherwise-erroring) check degrades to the deterministic template
+ * exactly like a disabled/unreachable AI provider already does — never
+ * blocks preparing a reminder, only whether AI is attempted for it. This
+ * makes "fail closed" and "fail safe" the same behavior here: refusing to
+ * spend more AI budget is itself the safe fallback, so there is nothing
+ * to distinguish between an over-limit result and a checker error.
+ */
+async function aiGenerationAllowed(organizationId: string): Promise<boolean> {
+  try {
+    const result = await checkRateLimit("ai:generation", organizationId, aiGenerationPolicy());
+    return result.allowed;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[communications] AI generation rate limit check failed — degrading to deterministic template: ${message}`);
+    return false;
+  }
+}
+
+async function generateReminderEmail(
+  organizationId: string,
+  context: ReminderEmailContext,
+  aiOverride?: AiOverride,
+) {
+  if (!(await aiGenerationAllowed(organizationId))) {
+    return { ...buildDeterministicReminderEmail(context), aiGenerated: false as const };
+  }
   const aiResult = await tryGenerateStructured(buildReminderEmailRequest(context), aiOverride);
   if (!aiResult) {
     return { ...buildDeterministicReminderEmail(context), aiGenerated: false as const };
@@ -122,7 +152,7 @@ export async function prepareReminderCommunication(
   if (destination.blocked) throw new CommunicationChannelBlockedError(destination.reason);
 
   const emailContext: ReminderEmailContext = { ...invoiceContext, organizationName: organization.name };
-  const content = await generateReminderEmail(emailContext, aiOverride);
+  const content = await generateReminderEmail(organizationId, emailContext, aiOverride);
   const channelLabel = destination.channel === "EMAIL" ? "email" : "Telegram message";
 
   try {

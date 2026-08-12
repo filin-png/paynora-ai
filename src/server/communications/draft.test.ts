@@ -12,6 +12,8 @@ import { prisma } from "@/server/db/client";
 import { resetDatabase } from "@/server/db/test-utils";
 import { createFakeProvider } from "@/server/ai/providers/fake";
 import type { AiProviderName } from "@/server/ai/service";
+import { checkRateLimit } from "@/server/rate-limit/service";
+import { aiGenerationPolicy } from "@/server/rate-limit/policies";
 import { getCommunicationForProposal, prepareReminderCommunication } from "./draft";
 import { CommunicationChannelBlockedError, InvalidActionProposalForCommunicationError } from "./errors";
 
@@ -274,4 +276,73 @@ describe("prepareReminderCommunication — AI safety fallback", () => {
     expect(communication.aiGenerated).toBe(false);
     expect(communication.body).toContain(invoice.number);
   });
+});
+
+describe("prepareReminderCommunication — AI generation rate limit (P1-7)", () => {
+  // The loop below performs `policy.maxAttempts` (50 by default) real
+  // sequential DB round trips before the actual assertion — needs more
+  // than vitest's default 5000ms, same as src/server/auth/authenticate.test.ts.
+  it("degrades to the deterministic template (never throws) once the organization's hourly AI budget is exhausted", async () => {
+    const { organization, user } = await createTestOrganization();
+    const customer = await createCustomer(organization.id, { name: "Acme Co", email: "billing@acme.example" });
+    const { invoice, proposal } = await createApprovedProposal(organization.id, user.id, customer.id);
+
+    const policy = aiGenerationPolicy();
+    for (let i = 0; i < policy.maxAttempts; i += 1) {
+      await checkRateLimit("ai:generation", organization.id, policy);
+    }
+
+    // Would produce AI content if the rate limit didn't intervene first —
+    // proves the fallback is actually the rate limit, not some other cause.
+    const wouldSucceedProvider = createFakeProvider({
+      kind: "success",
+      data: { subject: `Reminder for ${invoice.number}`, body: `Invoice ${invoice.number}: $500.00 due.` },
+    });
+
+    const { communication } = await prepareReminderCommunication(organization.id, proposal.id, {
+      enabled: true,
+      order: ["openrouter"] as AiProviderName[],
+      resolve: () => wouldSucceedProvider,
+    });
+
+    expect(communication.aiGenerated).toBe(false);
+    expect(communication.body).toContain(invoice.number);
+    expect(communication.body).toContain("$500.00"); // still correct — the deterministic template, not a broken draft
+  }, 20000);
+
+  it("a different organization's AI budget is unaffected by another organization's exhausted limit", async () => {
+    const { organization: orgA, user: userA } = await createTestOrganization("Org A");
+    const { organization: orgB, user: userB } = await createTestOrganization("Org B");
+    const customerA = await createCustomer(orgA.id, { name: "A Customer", email: "a@example.com" });
+    const customerB = await createCustomer(orgB.id, { name: "B Customer", email: "b@example.com" });
+    const { proposal: proposalA } = await createApprovedProposal(orgA.id, userA.id, customerA.id);
+    const { invoice: invoiceB, proposal: proposalB } = await createApprovedProposal(orgB.id, userB.id, customerB.id);
+
+    const policy = aiGenerationPolicy();
+    for (let i = 0; i < policy.maxAttempts; i += 1) {
+      await checkRateLimit("ai:generation", orgA.id, policy);
+    }
+
+    const provider = createFakeProvider({
+      kind: "success",
+      // Must pass checkGeneratedReminderSafety (exact invoice number/amount
+      // present) for org B's assertion to actually prove the rate limit
+      // (not the safety check) is what's different between the two orgs.
+      data: { subject: "Reminder", body: `Invoice ${invoiceB.number} has an outstanding balance of $500.00.` },
+    });
+
+    const { communication: fromOrgA } = await prepareReminderCommunication(orgA.id, proposalA.id, {
+      enabled: true,
+      order: ["openrouter"] as AiProviderName[],
+      resolve: () => provider,
+    });
+    const { communication: fromOrgB } = await prepareReminderCommunication(orgB.id, proposalB.id, {
+      enabled: true,
+      order: ["openrouter"] as AiProviderName[],
+      resolve: () => provider,
+    });
+
+    expect(fromOrgA.aiGenerated).toBe(false); // org A exhausted its own budget
+    expect(fromOrgB.aiGenerated).toBe(true); // org B's budget is untouched
+  }, 20000);
 });
