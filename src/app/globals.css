@@ -138,3 +138,70 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+/**
+ * Landing page only (src/app/page.tsx, src/components/marketing/**) — no
+ * other component references these class/keyframe names, so this is
+ * additive and does not change any existing rule or the authenticated
+ * app. Pure CSS, no JS: `.reveal-on-scroll` has no transform by default
+ * (safe for browsers without scroll-driven-animation support) and only
+ * animates in browsers that both support `animation-timeline: view()`
+ * AND have no reduced-motion preference. Scroll-driven animations
+ * progress with scroll position, not wall-clock time, so the generic
+ * `animation-duration: 0.01ms` override above does NOT neutralize them —
+ * this must be gated by its own `prefers-reduced-motion: no-preference`
+ * media query, not left to the generic rule.
+ *
+ * Deliberately transform-only, never opacity: an opacity-based reveal
+ * leaves text at a fractional, sub-4.5:1-contrast opacity for however
+ * long it hasn't yet scrolled into its animation range — a real WCAG
+ * concern (confirmed via axe-core), not just a static-scan artifact,
+ * since any tool or user agent reading computed style before scroll
+ * would see genuinely low-contrast text. A translateY-only reveal keeps
+ * text at full contrast at all times and only adds motion.
+ */
+.reveal-on-scroll {
+  transform: translateY(0);
+}
+@media (prefers-reduced-motion: no-preference) {
+  @supports (animation-timeline: view()) {
+    .reveal-on-scroll {
+      transform: translateY(18px);
+      animation: paynora-reveal linear both;
+      animation-timeline: view();
+      animation-range: entry 0% cover 25%;
+    }
+  }
+}
+@keyframes paynora-reveal {
+  to {
+    transform: translateY(0);
+  }
+}
+@keyframes paynora-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+@keyframes paynora-float-slow {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-14px);
+  }
+}
+@keyframes paynora-ambient-drift {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(2%, -3%) scale(1.04);
+  }
+}

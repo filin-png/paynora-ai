@@ -3,41 +3,19 @@ import {
   ArrowRight,
   BadgeCheck,
   CircleCheck,
-  Landmark,
   Layers,
+  Lock,
   ShieldCheck,
-  Sparkles,
-  Users,
-  Workflow,
-  Zap,
+  TriangleAlert,
 } from "lucide-react";
 
 import { PaynoraLogo } from "@/components/brand/logo";
 import { buttonVariants } from "@/components/ui/button";
+import { bodyFont, displayFont, monoFont } from "@/components/marketing/fonts";
+import { HeroVisual } from "@/components/marketing/hero-visual";
+import { WorkflowStory } from "@/components/marketing/workflow-story";
+import { ActionCenterMockup, DashboardMockup } from "@/components/marketing/feature-mockups";
 import { cn } from "@/lib/utils";
-
-const workflowSteps = [
-  {
-    icon: Landmark,
-    title: "Track receivables",
-    description: "Every invoice, its outstanding balance, and how overdue it is — computed live, in one place.",
-  },
-  {
-    icon: Sparkles,
-    title: "PAYNORA detects & recommends",
-    description: "Overdue invoices generate a suggested action — a reminder, with context, not a guess.",
-  },
-  {
-    icon: Users,
-    title: "A human reviews",
-    description: "Every suggestion is editable and requires explicit approval — nothing is decided for you.",
-  },
-  {
-    icon: Workflow,
-    title: "Send, or automate follow-up",
-    description: "Approve and send once, or opt in to a collection policy that follows up on a schedule.",
-  },
-];
 
 const trustPoints = [
   {
@@ -51,6 +29,11 @@ const trustPoints = [
     description: "Every action is verified against your organization membership — never trusted from the browser.",
   },
   {
+    icon: Lock,
+    title: "Organization isolation",
+    description: "Every query is scoped to your organization at the data layer — tested so one tenant can never read another's.",
+  },
+  {
     icon: CircleCheck,
     title: "Honest delivery status",
     description: "If we can't confirm an email was delivered, we say so — never a false \"sent\" or silent retry.",
@@ -59,31 +42,43 @@ const trustPoints = [
 
 const providers = [
   { name: "AI", detail: "OpenRouter, Mistral — provider-ready" },
-  { name: "Email", detail: "SMTP, works with any provider" },
+  { name: "Email", detail: "SMTP — works with any provider" },
   { name: "Messaging", detail: "Telegram — integration foundation" },
   { name: "Billing", detail: "Stripe, YooKassa — coming" },
 ];
 
 export default function LandingPage() {
   return (
-    <div className="flex flex-1 flex-col bg-background">
-      <SiteHeader />
-      <Hero />
-      <ProblemSection />
-      <WorkflowSection />
-      <CollectionsSection />
-      <ProvidersSection />
-      <TrustSection />
-      <FinalCta />
+    <div
+      className={cn(
+        "flex flex-1 flex-col bg-background",
+        displayFont.variable,
+        bodyFont.variable,
+        monoFont.variable,
+      )}
+      style={{ fontFamily: "var(--font-landing-body), var(--font-sans)" }}
+    >
+      <SiteNav />
+      <main className="flex flex-1 flex-col">
+        <Hero />
+        <ProblemSection />
+        <WorkflowSection />
+        <ActionCenterSection />
+        <CollectionsSection />
+        <VisibilitySection />
+        <ProvidersSection />
+        <TrustSection />
+        <FinalCta />
+      </main>
       <SiteFooter />
     </div>
   );
 }
 
-function SiteHeader() {
+function SiteNav() {
   return (
-    <header className="sticky top-0 z-30 border-b border-border/70 bg-background/85 backdrop-blur">
-      <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-5 py-4 sm:px-6">
+    <header className="sticky top-3 z-30 px-4 sm:top-4 sm:px-6">
+      <div className="mx-auto flex w-full max-w-6xl items-center justify-between rounded-2xl border border-border/70 bg-surface/90 px-4 py-2.5 shadow-card-md backdrop-blur-md sm:px-5">
         <PaynoraLogo size={24} />
         <nav className="flex items-center gap-2 sm:gap-4">
           <Link
@@ -106,35 +101,52 @@ function Hero() {
     <section className="relative overflow-hidden bg-navy-950">
       <div
         aria-hidden="true"
-        className="absolute inset-0 bg-[radial-gradient(ellipse_80%_60%_at_50%_-10%,rgba(106,99,224,0.25),transparent)]"
+        className="absolute inset-0 bg-[radial-gradient(ellipse_80%_60%_at_50%_-10%,rgba(106,99,224,0.28),transparent)]"
       />
-      <div className="relative mx-auto grid w-full max-w-6xl gap-12 px-5 py-20 sm:px-6 sm:py-28 lg:grid-cols-2 lg:items-center lg:py-32">
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 opacity-[0.06]"
+        style={{
+          backgroundImage:
+            "linear-gradient(rgba(255,255,255,0.6) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.6) 1px, transparent 1px)",
+          backgroundSize: "56px 56px",
+        }}
+      />
+      <div className="relative mx-auto grid w-full max-w-6xl gap-14 px-5 pt-16 pb-20 sm:px-6 sm:pt-20 sm:pb-28 lg:grid-cols-[1.05fr_1fr] lg:items-center lg:gap-10 lg:py-32">
         <div className="flex flex-col gap-6">
           <span className="inline-flex w-fit items-center gap-2 rounded-full border border-white/15 bg-white/5 px-3 py-1 text-xs font-medium text-navy-muted">
-            <Zap className="size-3.5" />
+            <span className="size-1.5 rounded-full bg-success motion-safe:animate-pulse" />
             Accounts receivable, under control
           </span>
-          <h1 className="max-w-xl text-4xl font-semibold tracking-tight text-balance text-white sm:text-5xl">
+          <h1 className="max-w-xl font-[family-name:var(--font-landing-display)] text-4xl font-medium tracking-tight text-balance text-white sm:text-5xl lg:text-[3.25rem] lg:leading-[1.08]">
             Get paid faster.
             <br />
             Chase invoices less.
           </h1>
           <p className="max-w-lg text-lg leading-8 text-navy-muted">
-            PAYNORA helps B2B companies stay on top of accounts receivable, automate
-            follow-ups on overdue invoices, and keep a human in the loop exactly where
-            it matters — without replacing the accounting software you already use.
+            PAYNORA gives B2B companies one place to see what&rsquo;s outstanding, catch what&rsquo;s
+            overdue, and know exactly what to do next — with a human approving every follow-up
+            PAYNORA recommends, or automating it on your terms.
           </p>
           <div className="flex flex-wrap items-center gap-3 pt-2">
             <Link href="/sign-up" className={cn(buttonVariants({ size: "lg" }))}>
-              Start free
+              Get started
               <ArrowRight className="size-4" />
             </Link>
             <Link
               href="#how-it-works"
-              className={cn(buttonVariants({ variant: "outline", size: "lg" }), "border-white/20 bg-transparent text-white hover:bg-white/10")}
+              className={cn(
+                buttonVariants({ variant: "outline", size: "lg" }),
+                "border-white/20 bg-transparent text-white hover:bg-white/10",
+              )}
             >
               See how it works
             </Link>
+          </div>
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 pt-4 text-xs text-navy-muted">
+            <span>No credit card required</span>
+            <span className="hidden size-1 rounded-full bg-navy-muted/60 sm:inline-block" />
+            <span>Your accounting software stays the system of record</span>
           </div>
         </div>
 
@@ -144,69 +156,26 @@ function Hero() {
   );
 }
 
-/**
- * Illustrative marketing visual — deliberately built from generic sample
- * values, not real user data (this renders on the public, unauthenticated
- * landing page). Pure CSS transforms/layered cards, no 3D engine — see
- * docs/product-ui.md#marketing-illustrations-vs-real-data.
- */
-function HeroVisual() {
-  return (
-    <div className="relative mx-auto hidden h-96 w-full max-w-md [perspective:1400px] lg:block" aria-hidden="true">
-      <div className="absolute inset-0 [transform-style:preserve-3d] [transform:rotateY(-10deg)_rotateX(6deg)]">
-        <div className="absolute left-6 top-16 w-64 rounded-xl border border-white/10 bg-navy-800/90 p-4 shadow-card-lg backdrop-blur [transform:translateZ(0px)]">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-navy-muted">INV-1048</span>
-            <span className="rounded-full bg-danger-soft px-2 py-0.5 text-[10px] font-medium text-danger">Overdue 12d</span>
-          </div>
-          <p className="mt-3 text-lg font-semibold text-white">$12,450.00</p>
-          <p className="mt-1 text-xs text-navy-muted">Acme Manufacturing Ltd</p>
-        </div>
-
-        <div className="absolute right-2 top-0 w-56 rounded-xl border border-white/10 bg-navy-700/90 p-4 shadow-card-lg backdrop-blur [transform:translateZ(60px)]">
-          <div className="flex items-center gap-2">
-            <Sparkles className="size-3.5 text-primary-hover" />
-            <span className="text-xs font-medium text-white">Suggested action</span>
-          </div>
-          <p className="mt-2 text-xs leading-5 text-navy-muted">
-            Send a firm reminder — 3rd follow-up, invoice 12 days overdue.
-          </p>
-          <div className="mt-3 flex gap-2">
-            <span className="rounded-md bg-primary px-2 py-1 text-[10px] font-medium text-white">Approve</span>
-            <span className="rounded-md border border-white/15 px-2 py-1 text-[10px] font-medium text-navy-muted">Edit</span>
-          </div>
-        </div>
-
-        <div className="absolute bottom-4 left-16 w-52 rounded-xl border border-white/10 bg-navy-800/90 p-4 shadow-card-lg backdrop-blur [transform:translateZ(110px)]">
-          <span className="text-xs font-medium text-navy-muted">Collected this month</span>
-          <p className="mt-2 text-2xl font-semibold text-white">$84,200</p>
-          <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-white/10">
-            <div className="h-full w-4/5 rounded-full bg-success" />
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function ProblemSection() {
   return (
-    <section className="mx-auto w-full max-w-6xl px-5 py-20 sm:px-6">
+    <section className="mx-auto w-full max-w-6xl px-5 py-20 sm:px-6 sm:py-24">
       <div className="grid gap-10 sm:grid-cols-3">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-primary">The problem</p>
-          <h2 className="mt-3 text-2xl font-semibold tracking-tight text-foreground">
+        <div className="reveal-on-scroll">
+          <p className="font-[family-name:var(--font-landing-mono)] text-xs font-medium tracking-wide text-primary uppercase">
+            The problem
+          </p>
+          <h2 className="mt-3 font-[family-name:var(--font-landing-display)] text-2xl font-medium tracking-tight text-foreground sm:text-3xl">
             Manual receivables tracking doesn&rsquo;t scale.
           </h2>
         </div>
-        <div className="flex flex-col gap-2 sm:col-span-2 sm:grid sm:grid-cols-2 sm:gap-8">
-          <div>
+        <div className="flex flex-col gap-8 sm:col-span-2 sm:grid sm:grid-cols-2 sm:gap-8">
+          <div className="reveal-on-scroll" style={{ animationDelay: "80ms" }}>
             <h3 className="text-sm font-semibold text-foreground">Spreadsheets fall behind</h3>
             <p className="mt-1.5 text-sm leading-6 text-muted">
               By the time you notice an invoice is overdue, it&rsquo;s already been ignored twice.
             </p>
           </div>
-          <div>
+          <div className="reveal-on-scroll" style={{ animationDelay: "160ms" }}>
             <h3 className="text-sm font-semibold text-foreground">Follow-up is inconsistent</h3>
             <p className="mt-1.5 text-sm leading-6 text-muted">
               Some customers get chased immediately, others get forgotten — with no record of why.
@@ -220,31 +189,49 @@ function ProblemSection() {
 
 function WorkflowSection() {
   return (
-    <section id="how-it-works" className="border-y border-border bg-surface py-20">
+    <section id="how-it-works" className="border-y border-border bg-surface py-20 sm:py-24">
       <div className="mx-auto w-full max-w-6xl px-5 sm:px-6">
-        <div className="max-w-xl">
-          <p className="text-xs font-semibold uppercase tracking-wide text-primary">How it works</p>
-          <h2 className="mt-3 text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
-            Detection, recommendation, human approval — in that order.
+        <div className="reveal-on-scroll max-w-xl">
+          <p className="font-[family-name:var(--font-landing-mono)] text-xs font-medium tracking-wide text-primary uppercase">
+            How it works
+          </p>
+          <h2 className="mt-3 font-[family-name:var(--font-landing-display)] text-2xl font-medium tracking-tight text-foreground sm:text-3xl">
+            From overdue invoice to controlled outcome.
           </h2>
           <p className="mt-3 text-sm leading-6 text-muted">
-            PAYNORA never sends anything on its own. It surfaces what needs attention and
-            drafts the follow-up — you decide what actually goes out.
+            PAYNORA never sends anything on its own. It watches, recommends, and — once a
+            human decides — carries the decision through. Every stage below is a real part
+            of the product, not a roadmap slide.
           </p>
         </div>
 
-        <ol className="mt-12 grid gap-8 sm:grid-cols-2 lg:grid-cols-4">
-          {workflowSteps.map((step, index) => (
-            <li key={step.title} className="relative flex flex-col gap-3 rounded-xl border border-border bg-background p-5">
-              <span className="flex size-9 items-center justify-center rounded-lg bg-accent-soft text-primary">
-                <step.icon className="size-4.5" />
-              </span>
-              <span className="text-xs font-medium text-muted-foreground">Step {index + 1}</span>
-              <h3 className="text-sm font-semibold text-foreground">{step.title}</h3>
-              <p className="text-sm leading-6 text-muted">{step.description}</p>
-            </li>
-          ))}
-        </ol>
+        <WorkflowStory />
+      </div>
+    </section>
+  );
+}
+
+function ActionCenterSection() {
+  return (
+    <section className="mx-auto w-full max-w-6xl px-5 py-20 sm:px-6 sm:py-24">
+      <div className="grid gap-12 lg:grid-cols-2 lg:items-center">
+        <div className="reveal-on-scroll order-2 lg:order-1">
+          <ActionCenterMockup />
+        </div>
+        <div className="order-1 lg:order-2">
+          <p className="font-[family-name:var(--font-landing-mono)] text-xs font-medium tracking-wide text-primary uppercase">
+            Action Center
+          </p>
+          <h2 className="mt-3 font-[family-name:var(--font-landing-display)] text-2xl font-medium tracking-tight text-foreground sm:text-3xl">
+            Human-in-the-loop, not human-instead-of.
+          </h2>
+          <p className="mt-4 text-sm leading-7 text-muted">
+            Every recommendation PAYNORA makes lands in one place, with the reasoning behind
+            it. Approve it as written, edit the wording first, or dismiss it — approving
+            never sends anything by itself; sending is a separate, explicit step you take
+            after reviewing the actual message.
+          </p>
+        </div>
       </div>
     </section>
   );
@@ -252,37 +239,74 @@ function WorkflowSection() {
 
 function CollectionsSection() {
   return (
-    <section className="mx-auto w-full max-w-6xl px-5 py-20 sm:px-6">
+    <section className="border-y border-border bg-surface py-20 sm:py-24">
+      <div className="mx-auto w-full max-w-6xl px-5 sm:px-6">
+        <div className="grid gap-12 lg:grid-cols-2 lg:items-center">
+          <div>
+            <p className="font-[family-name:var(--font-landing-mono)] text-xs font-medium tracking-wide text-primary uppercase">
+              Collections automation
+            </p>
+            <h2 className="mt-3 font-[family-name:var(--font-landing-display)] text-2xl font-medium tracking-tight text-foreground sm:text-3xl">
+              Define the follow-up. PAYNORA keeps it running.
+            </h2>
+            <p className="mt-4 text-sm leading-7 text-muted">
+              Set a policy for how overdue invoices should be followed up — a friendly
+              reminder, then a follow-up, then a firmer one. Every step still requires
+              approval by default, and every run re-checks the invoice is still actually
+              overdue before doing anything.
+            </p>
+            <div className="mt-5 flex items-start gap-2.5 rounded-xl border border-warning/30 bg-warning-soft px-4 py-3">
+              <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" />
+              <p className="text-xs leading-5 text-warning">
+                Auto-send is a separate, explicit opt-in — off by default, owner-only, and
+                reversible at any time. Turning it on is a deliberate decision, never a default.
+              </p>
+            </div>
+          </div>
+          <div className="reveal-on-scroll rounded-2xl border border-border bg-background p-6 shadow-card-md">
+            <ol className="relative flex flex-col gap-6 pl-6">
+              <span aria-hidden="true" className="absolute top-1 bottom-1 left-[7px] w-px bg-border-strong" />
+              {[
+                { day: "Due date", label: "Invoice becomes due" },
+                { day: "+1 day", label: "Friendly reminder" },
+                { day: "+3 days", label: "Follow-up" },
+                { day: "+7 days", label: "Firm reminder" },
+              ].map((step) => (
+                <li key={step.day} className="relative flex items-baseline gap-4">
+                  <span aria-hidden="true" className="absolute -left-6 top-1.5 size-2.5 rounded-full border-2 border-primary bg-surface" />
+                  <span className="w-20 shrink-0 font-[family-name:var(--font-landing-mono)] text-xs font-medium text-muted-foreground">
+                    {step.day}
+                  </span>
+                  <span className="text-sm font-medium text-foreground">{step.label}</span>
+                </li>
+              ))}
+            </ol>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function VisibilitySection() {
+  return (
+    <section className="mx-auto w-full max-w-6xl px-5 py-20 sm:px-6 sm:py-24">
       <div className="grid gap-12 lg:grid-cols-2 lg:items-center">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-primary">Collections automation</p>
-          <h2 className="mt-3 text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
-            Define the follow-up. PAYNORA keeps it running.
+          <p className="font-[family-name:var(--font-landing-mono)] text-xs font-medium tracking-wide text-primary uppercase">
+            Financial visibility
+          </p>
+          <h2 className="mt-3 font-[family-name:var(--font-landing-display)] text-2xl font-medium tracking-tight text-foreground sm:text-3xl">
+            One current picture of what you&rsquo;re owed.
           </h2>
           <p className="mt-4 text-sm leading-7 text-muted">
-            Set a policy for how overdue invoices should be followed up — a friendly
-            reminder, then a follow-up, then a firmer one. Every step still requires
-            approval by default; automatic sending is an explicit, reversible opt-in per
-            policy, and every run re-checks the invoice is still actually overdue before
-            doing anything.
+            Outstanding and overdue totals, grouped by currency and computed live — never a
+            stale export. See what needs attention now, what&rsquo;s coming due, and what
+            you&rsquo;ve actually recovered.
           </p>
         </div>
-        <div className="rounded-xl border border-border bg-surface p-6 shadow-card-md">
-          <ol className="relative flex flex-col gap-6 pl-6">
-            <span aria-hidden="true" className="absolute top-1 bottom-1 left-[7px] w-px bg-border-strong" />
-            {[
-              { day: "Due date", label: "Invoice becomes due" },
-              { day: "+1 day", label: "Friendly reminder" },
-              { day: "+3 days", label: "Follow-up" },
-              { day: "+7 days", label: "Firm reminder" },
-            ].map((step) => (
-              <li key={step.day} className="relative flex items-baseline gap-4">
-                <span aria-hidden="true" className="absolute -left-6 top-1.5 size-2.5 rounded-full border-2 border-primary bg-background" />
-                <span className="w-20 shrink-0 text-xs font-medium text-muted-foreground">{step.day}</span>
-                <span className="text-sm font-medium text-foreground">{step.label}</span>
-              </li>
-            ))}
-          </ol>
+        <div className="reveal-on-scroll">
+          <DashboardMockup />
         </div>
       </div>
     </section>
@@ -291,12 +315,14 @@ function CollectionsSection() {
 
 function ProvidersSection() {
   return (
-    <section className="border-y border-border bg-surface py-20">
+    <section className="border-y border-border bg-surface py-20 sm:py-24">
       <div className="mx-auto w-full max-w-6xl px-5 sm:px-6">
         <div className="flex items-end justify-between gap-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-primary">Built to integrate</p>
-            <h2 className="mt-3 text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
+          <div className="reveal-on-scroll">
+            <p className="font-[family-name:var(--font-landing-mono)] text-xs font-medium tracking-wide text-primary uppercase">
+              Built to integrate
+            </p>
+            <h2 className="mt-3 font-[family-name:var(--font-landing-display)] text-2xl font-medium tracking-tight text-foreground sm:text-3xl">
               An integration-ready foundation.
             </h2>
           </div>
@@ -308,8 +334,12 @@ function ProvidersSection() {
           ready to be connected — we&rsquo;re explicit about which is which.
         </p>
         <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {providers.map((provider) => (
-            <div key={provider.name} className="rounded-xl border border-border bg-background p-5">
+          {providers.map((provider, index) => (
+            <div
+              key={provider.name}
+              className="reveal-on-scroll rounded-xl border border-border bg-background p-5"
+              style={{ animationDelay: `${index * 60}ms` }}
+            >
               <p className="text-sm font-semibold text-foreground">{provider.name}</p>
               <p className="mt-1.5 text-xs leading-5 text-muted">{provider.detail}</p>
             </div>
@@ -322,14 +352,20 @@ function ProvidersSection() {
 
 function TrustSection() {
   return (
-    <section className="mx-auto w-full max-w-6xl px-5 py-20 sm:px-6">
-      <p className="text-xs font-semibold uppercase tracking-wide text-primary">Security &amp; trust</p>
-      <h2 className="mt-3 max-w-xl text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
+    <section className="mx-auto w-full max-w-6xl px-5 py-20 sm:px-6 sm:py-24">
+      <p className="font-[family-name:var(--font-landing-mono)] text-xs font-medium tracking-wide text-primary uppercase">
+        Security &amp; control
+      </p>
+      <h2 className="mt-3 max-w-xl font-[family-name:var(--font-landing-display)] text-2xl font-medium tracking-tight text-foreground sm:text-3xl">
         Financial data deserves a serious security posture.
       </h2>
-      <div className="mt-10 grid gap-8 sm:grid-cols-3">
-        {trustPoints.map((point) => (
-          <div key={point.title} className="flex flex-col gap-3">
+      <div className="mt-10 grid gap-8 sm:grid-cols-2 lg:grid-cols-4">
+        {trustPoints.map((point, index) => (
+          <div
+            key={point.title}
+            className="reveal-on-scroll flex flex-col gap-3"
+            style={{ animationDelay: `${index * 60}ms` }}
+          >
             <span className="flex size-9 items-center justify-center rounded-lg bg-success-soft text-success">
               <point.icon className="size-4.5" />
             </span>
@@ -344,9 +380,13 @@ function TrustSection() {
 
 function FinalCta() {
   return (
-    <section className="bg-navy-950">
-      <div className="mx-auto flex w-full max-w-6xl flex-col items-center gap-6 px-5 py-20 text-center sm:px-6">
-        <h2 className="max-w-xl text-3xl font-semibold tracking-tight text-white">
+    <section className="relative overflow-hidden bg-navy-950">
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 bg-[radial-gradient(ellipse_60%_50%_at_50%_100%,rgba(106,99,224,0.22),transparent)]"
+      />
+      <div className="relative mx-auto flex w-full max-w-6xl flex-col items-center gap-6 px-5 py-20 text-center sm:px-6 sm:py-24">
+        <h2 className="max-w-xl font-[family-name:var(--font-landing-display)] text-3xl font-medium tracking-tight text-white">
           Take control of your receivables.
         </h2>
         <p className="max-w-md text-sm leading-6 text-navy-muted">
