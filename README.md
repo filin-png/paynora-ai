@@ -5,7 +5,10 @@ employees) that helps them track accounts receivable, spot payment risk
 early, and automate collection follow-up — without replacing the accounting
 software they already use.
 
-**Project status: Phase 8 — Production Communications & AI.**
+**Project status: Production Hardening (post-Phase-8 audit remediation) —
+beta candidate, not launched.** See
+`docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md` for the honest readiness
+assessment before treating this as production-ready.
 Authentication, organizations, tenant isolation, customers, invoices,
 payments, and a real AR dashboard are implemented (Phase 1–2). Phase 3
 added an event → insight → proposal → human-approval pipeline (an Action
