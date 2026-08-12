@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 
 import { prisma } from "@/server/db/client";
@@ -6,6 +7,8 @@ import { dateOnlySchema, parseDateOnly } from "./dates";
 import { InvoiceCancelledError, OverpaymentError } from "./errors";
 import { lockInvoiceForUpdate } from "./invoices";
 import { amountMinorSchema, formatMoney } from "./money";
+
+const UNIQUE_CONSTRAINT_VIOLATION = "P2002";
 
 export const paymentInputSchema = z.object({
   amountMinor: amountMinorSchema,
@@ -16,6 +19,23 @@ export const paymentInputSchema = z.object({
     .max(500)
     .optional()
     .transform((value) => (value ? value : undefined)),
+  // Phase 9: client-generated (e.g. crypto.randomUUID()) once per logical
+  // submission and resubmitted unchanged on a retry — see
+  // src/app/app/[orgSlug]/invoices/[invoiceId]/payment-form.tsx and
+  // docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-1. This is purely a
+  // dedup token, never trusted as a financial fact: it decides whether to
+  // return an existing Payment instead of creating a new one, never what
+  // amount/date gets recorded. Optional with a random fallback so that
+  // every *other* caller in this codebase (tests unrelated to idempotency,
+  // any future non-interactive caller) doesn't need to invent one just to
+  // record a payment — real deduplication only ever happens when a caller
+  // deliberately reuses the same key, exactly as intended.
+  idempotencyKey: z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .default(() => crypto.randomUUID()),
 });
 
 export type PaymentInput = z.input<typeof paymentInputSchema>;
@@ -35,6 +55,20 @@ export type PaymentInput = z.input<typeof paymentInputSchema>;
  * what prevents a payment from landing on an invoice that's being
  * cancelled concurrently — see src/server/ar/invoices.test.ts for that
  * race.
+ *
+ * Idempotent by `idempotencyKey` (Phase 9,
+ * docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-1): the existing-payment
+ * check happens *after* acquiring the invoice lock, so two concurrent
+ * calls with the same key serialize through that same lock — the second
+ * one blocks, then finds the first one's committed row and returns it
+ * rather than creating a duplicate. `Payment.@@unique([invoiceId,
+ * idempotencyKey])` is the actual database-level guarantee this relies
+ * on; the lock-then-check above is what makes the expected case never
+ * even attempt a conflicting insert. The `create` below is additionally
+ * wrapped in a P2002 catch as defense-in-depth — the row lock should make
+ * that branch unreachable in practice, but the unique constraint (not the
+ * lock) is the thing actually guaranteeing correctness if that assumption
+ * is ever wrong.
  */
 export async function recordPayment(
   organizationId: string,
@@ -45,6 +79,12 @@ export async function recordPayment(
 
   return prisma.$transaction(async (tx) => {
     const invoice = await lockInvoiceForUpdate(tx, organizationId, invoiceId);
+
+    const existing = await tx.payment.findUnique({
+      where: { invoiceId_idempotencyKey: { invoiceId: invoice.id, idempotencyKey: input.idempotencyKey } },
+    });
+    if (existing) return existing;
+
     if (invoice.status === "CANCELLED") throw new InvoiceCancelledError();
 
     const paidAgg = await tx.payment.aggregate({
@@ -58,15 +98,27 @@ export async function recordPayment(
       throw new OverpaymentError(outstandingMinor);
     }
 
-    const payment = await tx.payment.create({
-      data: {
-        organizationId,
-        invoiceId: invoice.id,
-        amountMinor: input.amountMinor,
-        paidAt: parseDateOnly(input.paidAt),
-        note: input.note,
-      },
-    });
+    let payment;
+    try {
+      payment = await tx.payment.create({
+        data: {
+          organizationId,
+          invoiceId: invoice.id,
+          amountMinor: input.amountMinor,
+          paidAt: parseDateOnly(input.paidAt),
+          note: input.note,
+          idempotencyKey: input.idempotencyKey,
+        },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === UNIQUE_CONSTRAINT_VIOLATION) {
+        const raced = await tx.payment.findUniqueOrThrow({
+          where: { invoiceId_idempotencyKey: { invoiceId: invoice.id, idempotencyKey: input.idempotencyKey } },
+        });
+        return raced;
+      }
+      throw error;
+    }
 
     const currency = invoice.currency as Parameters<typeof formatMoney>[1];
     await recordActivityEvent(tx, {

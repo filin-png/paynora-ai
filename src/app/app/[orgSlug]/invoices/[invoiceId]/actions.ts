@@ -31,6 +31,7 @@ export async function recordPaymentAction(
       amountMinor,
       paidAt: String(formData.get("paidAt") ?? ""),
       note: String(formData.get("note") ?? ""),
+      idempotencyKey: formData.get("idempotencyKey") ? String(formData.get("idempotencyKey")) : undefined,
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
