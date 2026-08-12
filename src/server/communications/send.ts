@@ -1,9 +1,10 @@
-import type {
-  ActionProposal,
-  Communication,
-  CommunicationStatus,
-  DeliveryAttempt,
-  DeliveryFailureCategory,
+import {
+  Prisma,
+  type ActionProposal,
+  type Communication,
+  type CommunicationStatus,
+  type DeliveryAttempt,
+  type DeliveryFailureCategory,
 } from "@prisma/client";
 
 import { recordActivityEvent } from "@/server/ar/activity";
@@ -404,6 +405,37 @@ export async function sendCommunication(
   }
 }
 
+/**
+ * `finalizeSuccess`/`finalizeTerminal` record the outcome of *one specific*
+ * dispatch attempt that started at claim time — but the provider call they
+ * are awaiting is not itself cancellable, so it can still resolve after
+ * that same attempt was independently reconciled (see
+ * `reconcileStaleSendingCommunication` above) by a stale-SENDING recovery
+ * that ran while this call was still genuinely in flight. Both finalize
+ * functions gate their `DeliveryAttempt` update on the attempt still being
+ * `PENDING` (a compare-and-swap, exactly like the claim step) — a
+ * late-arriving outcome for an attempt that was already finalized some
+ * other way is discarded rather than silently overwriting whatever the
+ * authoritative, already-recorded outcome was. Found and fixed during this
+ * phase's adversarial self-review; see
+ * docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-3.
+ */
+async function staleDispatchOutcome(
+  tx: Prisma.TransactionClient,
+  communicationId: string,
+  deliveryAttemptId: string,
+  discardedOutcome: string,
+): Promise<SendCommunicationResult> {
+  const [communication, deliveryAttempt] = await Promise.all([
+    tx.communication.findUniqueOrThrow({ where: { id: communicationId } }),
+    tx.deliveryAttempt.findUniqueOrThrow({ where: { id: deliveryAttemptId } }),
+  ]);
+  console.warn(
+    `[communications] discarded a late-arriving ${discardedOutcome} outcome for delivery attempt ${deliveryAttemptId} — it was already finalized (current status: ${deliveryAttempt.status})`,
+  );
+  return { communication, deliveryAttempt, actionProposal: null };
+}
+
 async function finalizeSuccess(
   organizationId: string,
   communication: Communication,
@@ -414,14 +446,23 @@ async function finalizeSuccess(
 ): Promise<SendCommunicationResult> {
   const channelLabel = communication.channel === "EMAIL" ? "email" : "Telegram message";
   return prisma.$transaction(async (tx) => {
-    const updatedAttempt = await tx.deliveryAttempt.update({
-      where: { id: deliveryAttempt.id },
+    const attemptClaim = await tx.deliveryAttempt.updateMany({
+      where: { id: deliveryAttempt.id, status: "PENDING" },
       data: { status: "SUCCESS", providerMessageId, completedAt: new Date() },
     });
-    const updatedCommunication = await tx.communication.update({
-      where: { id: communication.id },
+    if (attemptClaim.count !== 1) {
+      return staleDispatchOutcome(tx, communication.id, deliveryAttempt.id, "SUCCESS");
+    }
+    const updatedAttempt = await tx.deliveryAttempt.findUniqueOrThrow({ where: { id: deliveryAttempt.id } });
+    // Guards Communication.status too — always true in practice (this
+    // attempt and its Communication only ever move together, including in
+    // reconcileStaleSendingCommunication), but never claim SENT purely
+    // because the DeliveryAttempt CAS above succeeded.
+    await tx.communication.updateMany({
+      where: { id: communication.id, status: "SENDING" },
       data: { status: "SENT", sentAt: new Date() },
     });
+    const updatedCommunication = await tx.communication.findUniqueOrThrow({ where: { id: communication.id } });
     await recordActivityEvent(tx, {
       organizationId,
       type: "COMMUNICATION_SENT",
@@ -476,8 +517,8 @@ async function finalizeTerminal(
   },
 ): Promise<SendCommunicationResult> {
   return prisma.$transaction(async (tx) => {
-    const updatedAttempt = await tx.deliveryAttempt.update({
-      where: { id: deliveryAttempt.id },
+    const attemptClaim = await tx.deliveryAttempt.updateMany({
+      where: { id: deliveryAttempt.id, status: "PENDING" },
       data: {
         status: outcome.deliveryStatus,
         failureCategory: outcome.failureCategory,
@@ -485,10 +526,17 @@ async function finalizeTerminal(
         completedAt: new Date(),
       },
     });
-    const updatedCommunication = await tx.communication.update({
-      where: { id: communication.id },
+    if (attemptClaim.count !== 1) {
+      return staleDispatchOutcome(tx, communication.id, deliveryAttempt.id, outcome.outcome);
+    }
+    const updatedAttempt = await tx.deliveryAttempt.findUniqueOrThrow({ where: { id: deliveryAttempt.id } });
+    // See finalizeSuccess's identical guard above for why this is a CAS
+    // rather than an unconditional update.
+    await tx.communication.updateMany({
+      where: { id: communication.id, status: "SENDING" },
       data: { status: outcome.communicationStatus },
     });
+    const updatedCommunication = await tx.communication.findUniqueOrThrow({ where: { id: communication.id } });
     const channelLabel = communication.channel === "EMAIL" ? "email" : "Telegram message";
     await recordActivityEvent(tx, {
       organizationId,

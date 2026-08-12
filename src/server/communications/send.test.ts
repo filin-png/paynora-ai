@@ -8,7 +8,7 @@ import { createCustomer } from "@/server/ar/customers";
 import { createInvoice } from "@/server/ar/invoices";
 import { majorToMinor } from "@/server/ar/money";
 import { createTestOrganization } from "@/server/ar/test-fixtures";
-import { EmailDisabledError } from "@/server/email/errors";
+import { EmailDisabledError, EmailProviderRejectedError } from "@/server/email/errors";
 import { createFakeEmailProvider } from "@/server/email/providers/fake";
 import type { EmailMessage, EmailProvider } from "@/server/email/types";
 import { MessagingDisabledError } from "@/server/messaging/errors";
@@ -735,4 +735,78 @@ describe("sendCommunication — provider abuse control / send rate limit (P1-7)"
     });
     expect(resultB.communication.status).toBe("SENT"); // org B's budget is untouched
   }, 20000);
+});
+
+describe("sendCommunication vs reconcileStaleSendingCommunication — late-arriving outcome race (adversarial self-review finding)", () => {
+  it("a late-arriving SUCCESS for an attempt that was already reconciled never overwrites the reconciled state", async () => {
+    const { organization, user, communication } = await setup();
+    let releaseProvider: (() => void) | null = null;
+    const stuckProvider: EmailProvider = {
+      name: "stuck",
+      send: () =>
+        new Promise((resolve) => {
+          releaseProvider = () => resolve({ provider: "stuck", providerMessageId: "late-msg" });
+        }),
+    };
+
+    // Claim the communication and start a dispatch that never resolves on
+    // its own — simulating a provider call that outlives its own gateway
+    // timeout (the only realistic way a claimed attempt is still PENDING
+    // once it becomes eligible for stale-SENDING reconciliation).
+    const inFlightSend = sendCommunication(organization.id, communication.id, user.id, { provider: stuckProvider });
+    await new Promise((resolve) => setTimeout(resolve, 100)); // let the claim transaction commit
+
+    // Reconcile it as stale (using `now` far enough ahead — no real wait).
+    const farFuture = new Date(Date.now() + 11 * 60 * 1000);
+    const reconciled = await reconcileStaleSendingCommunication(organization.id, communication.id, farFuture);
+    expect(reconciled.communication.status).toBe("UNCERTAIN");
+    expect(reconciled.deliveryAttempt.status).toBe("UNKNOWN");
+
+    // NOW the original, still-in-flight provider call finally resolves —
+    // finalizeSuccess runs against a Communication/DeliveryAttempt that
+    // have since moved on.
+    releaseProvider!();
+    const staleResult = await inFlightSend;
+
+    // The late result must reflect the *current, authoritative* state —
+    // never silently claim SENT.
+    expect(staleResult.communication.status).toBe("UNCERTAIN");
+    expect(staleResult.deliveryAttempt.status).toBe("UNKNOWN");
+    expect(staleResult.actionProposal).toBeNull();
+
+    // And the persisted rows must genuinely be untouched by the late success.
+    const reloadedCommunication = await prisma.communication.findUniqueOrThrow({ where: { id: communication.id } });
+    expect(reloadedCommunication.status).toBe("UNCERTAIN");
+    expect(reloadedCommunication.sentAt).toBeNull();
+    const reloadedAttempt = await prisma.deliveryAttempt.findUniqueOrThrow({
+      where: { id: reconciled.deliveryAttempt.id },
+    });
+    expect(reloadedAttempt.status).toBe("UNKNOWN");
+    expect(reloadedAttempt.providerMessageId).toBeNull(); // never backfilled by the discarded late success
+  });
+
+  it("a late-arriving definite FAILURE for an attempt that was already reconciled never overwrites the reconciled state", async () => {
+    const { organization, user, communication } = await setup();
+    let rejectProvider: (() => void) | null = null;
+    const stuckProvider: EmailProvider = {
+      name: "stuck",
+      send: () =>
+        new Promise((_resolve, reject) => {
+          rejectProvider = () => reject(new EmailProviderRejectedError("stuck", "mailbox does not exist"));
+        }),
+    };
+
+    const inFlightSend = sendCommunication(organization.id, communication.id, user.id, { provider: stuckProvider });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const farFuture = new Date(Date.now() + 11 * 60 * 1000);
+    await reconcileStaleSendingCommunication(organization.id, communication.id, farFuture);
+
+    rejectProvider!();
+    const staleResult = await inFlightSend;
+
+    expect(staleResult.communication.status).toBe("UNCERTAIN"); // never flipped to FAILED by the late rejection
+    const reloadedCommunication = await prisma.communication.findUniqueOrThrow({ where: { id: communication.id } });
+    expect(reloadedCommunication.status).toBe("UNCERTAIN");
+  });
 });
