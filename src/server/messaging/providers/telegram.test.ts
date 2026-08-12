@@ -70,6 +70,23 @@ describe("Telegram adapter (mocked fetch — no real network, no real bot token)
     await expect(provider.send(message)).rejects.toThrow(MessagingProviderRejectedError);
   });
 
+  it("treats Telegram's real-world failure shape — HTTP 200 with ok:false in the body — as a rejection, not a false success", async () => {
+    // Telegram's Bot API almost always responds HTTP 200 even for a
+    // logical failure (see the type comment in telegram.ts) — every other
+    // test in this file happens to also set a matching non-2xx HTTP
+    // status, which would mask a bug where the adapter only checked
+    // `response.ok` and never inspected `payload.ok`. This test pins down
+    // the actual documented Telegram behavior directly.
+    (env as { TELEGRAM_BOT_TOKEN?: string }).TELEGRAM_BOT_TOKEN = "test-bot-token";
+
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ ok: false, error_code: 400, description: "Bad Request: chat not found" }, 200));
+    const provider = createTelegramProvider(fetchImpl);
+
+    await expect(provider.send(message)).rejects.toThrow(MessagingProviderRejectedError);
+  });
+
   it("treats error_code 429 (rate limited) as an unknown outcome, not a rejection", async () => {
     (env as { TELEGRAM_BOT_TOKEN?: string }).TELEGRAM_BOT_TOKEN = "test-bot-token";
 

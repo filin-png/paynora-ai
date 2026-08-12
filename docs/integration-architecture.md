@@ -126,6 +126,30 @@ fallback attempt.
   every failure degrades to `null`, and every caller already has a
   deterministic fallback for "no AI result."
 
+**Fallback-safe error classes, and why every one of them is safe here.**
+`tryGenerateStructured`'s catch treats all four `AIProvider` error classes
+(`AITimeoutError`, `AIProviderError`, `AIValidationError`, and a resolution
+failure like `gigachat`/`yandex`'s "not implemented") as fallback-eligible
+— including `AITimeoutError`, which is a genuinely *uncertain* outcome: the
+vendor may have actually received and processed the request server-side
+even though the client gave up waiting. This is a deliberate, bounded
+tradeoff, not an oversight: AI generation is explicitly the one category
+where a fallback-after-uncertain-outcome is acceptable (contrast
+[Billing](#billing) and Email's `sendCommunication`, where the same
+uncertainty requires an explicit human
+`acknowledgeUncertainRisk` before any retry — see
+`docs/communications.md#unknown-outcomes`). The accepted cost of falling
+back after an uncertain AI outcome is at most one duplicate vendor call —
+never a duplicate customer-visible side effect, since only the *first
+confirmed schema-valid result* is ever returned to the caller and
+persisted; a redundant background response, if the timed-out request later
+completes anyway, is simply discarded. This is the same underlying
+un-aborted-background-request behavior `withTimeout` has had since Phase
+4's Email gateway (no `AbortController` wiring in any gateway in this
+codebase) — carried forward here, not newly introduced, and bounded to
+exactly one extra attempt by the routing logic above, never a longer
+chain.
+
 **Vendor adapters implemented**: OpenRouter and Mistral
 (`src/server/ai/providers/openrouter.ts`, `mistral.ts`), both real HTTP
 adapters against each vendor's OpenAI-compatible `/chat/completions`
