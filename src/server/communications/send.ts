@@ -98,6 +98,124 @@ export async function listDeliveryAttempts(organizationId: string, communication
   });
 }
 
+/**
+ * How long a `Communication` can sit at `SENDING` with its most recent
+ * `DeliveryAttempt` still `PENDING` before it's treated as genuinely
+ * stuck (a process crash between claim and finalize — see the module doc
+ * comment above) rather than a request that might still be in flight.
+ * Comfortably larger than the longest real provider timeout in this
+ * codebase (Email/Messaging: 15s) — see docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md
+ * P1-3.
+ */
+export const STALE_SENDING_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
+
+export type ReconcileStaleSendingResult = {
+  communication: Communication;
+  deliveryAttempt: DeliveryAttempt;
+};
+
+/**
+ * The recovery path for a `Communication` genuinely stuck at `SENDING` —
+ * see docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-3 for the finding
+ * this closes: previously, `SENDING` was excluded from every
+ * `allowedFrom` list in `sendCommunication` *forever*, with no way back
+ * in, and the Action Center UI offered a "Resend anyway" button for that
+ * exact state that was guaranteed to fail.
+ *
+ * This does NOT resend anything and does NOT decide whether the original
+ * attempt actually reached the customer — a provider may well have
+ * accepted the message before the process died. It only moves the
+ * communication from the permanently-stuck `SENDING` state to the
+ * already-well-understood `UNCERTAIN` state, which — exactly like any
+ * other `UNCERTAIN` outcome — still requires an explicit
+ * `acknowledgeUncertainRisk: true` from a human before `sendCommunication`
+ * will attempt anything further. This function is the "admit we don't
+ * know" step; resending (accepting the duplicate-send risk) remains a
+ * deliberate, separate, already-existing, already-tested step.
+ *
+ * Refuses to act on a `SENDING` communication whose most recent attempt
+ * is still within `STALE_SENDING_THRESHOLD_MS` — a fresh `SENDING` might
+ * genuinely still be in flight, and reconciling it early would be an
+ * unsafe, premature judgment call.
+ *
+ * Concurrency-safe via the same atomic compare-and-swap technique used
+ * throughout this codebase: the `SENDING -> UNCERTAIN` transition only
+ * commits if the row is still `SENDING` at that instant, so two
+ * concurrent reconcile attempts (or a reconcile racing the original
+ * attempt actually completing) can never both "win", and can never
+ * silently overwrite a `SENT`/`FAILED` outcome that landed in between.
+ */
+export async function reconcileStaleSendingCommunication(
+  organizationId: string,
+  communicationId: string,
+  now: Date = new Date(),
+): Promise<ReconcileStaleSendingResult> {
+  const communication = await prisma.communication.findFirst({ where: { id: communicationId, organizationId } });
+  if (!communication) throw new CommunicationResourceNotFoundError("Communication");
+  if (communication.status !== "SENDING") {
+    throw new InvalidCommunicationTransitionError(
+      communication.status,
+      "only a communication currently stuck at SENDING can be reconciled",
+    );
+  }
+
+  const pendingAttempt = await prisma.deliveryAttempt.findFirst({
+    where: { communicationId, organizationId, status: "PENDING" },
+    orderBy: { attemptNumber: "desc" },
+  });
+  if (!pendingAttempt) {
+    throw new InvalidCommunicationTransitionError(
+      communication.status,
+      "no pending delivery attempt was found to reconcile",
+    );
+  }
+
+  const ageMs = now.getTime() - pendingAttempt.startedAt.getTime();
+  if (ageMs < STALE_SENDING_THRESHOLD_MS) {
+    throw new InvalidCommunicationTransitionError(
+      communication.status,
+      `this send attempt started only ${Math.round(ageMs / 1000)}s ago and may still be genuinely in flight — wait before reconciling`,
+    );
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const claim = await tx.communication.updateMany({
+      where: { id: communicationId, organizationId, status: "SENDING" },
+      data: { status: "UNCERTAIN" },
+    });
+    if (claim.count !== 1) {
+      const current = await tx.communication.findFirst({ where: { id: communicationId, organizationId } });
+      if (!current) throw new CommunicationResourceNotFoundError("Communication");
+      throw new InvalidCommunicationTransitionError(
+        current.status,
+        "this communication is no longer stuck at SENDING — it may have just been reconciled or resolved concurrently",
+      );
+    }
+
+    const updatedAttempt = await tx.deliveryAttempt.update({
+      where: { id: pendingAttempt.id },
+      data: {
+        status: "UNKNOWN",
+        failureCategory: "TIMEOUT_OR_UNKNOWN",
+        failureMessage: `No delivery confirmation was observed within ${Math.round(STALE_SENDING_THRESHOLD_MS / 60000)} minutes of this attempt starting — the provider may or may not have received it. Reconciled to allow manual review; never auto-retried.`,
+        completedAt: now,
+      },
+    });
+    const updatedCommunication = await tx.communication.findUniqueOrThrow({ where: { id: communicationId } });
+
+    await recordActivityEvent(tx, {
+      organizationId,
+      type: "COMMUNICATION_SEND_FAILED",
+      summary: `Payment reminder delivery status reconciled to uncertain for invoice ${updatedCommunication.invoiceId} (stuck at SENDING with no resolution)`,
+      customerId: updatedCommunication.customerId,
+      invoiceId: updatedCommunication.invoiceId,
+      metadata: { outcome: "UNCERTAIN", failureCategory: "TIMEOUT_OR_UNKNOWN", reconciledFromStaleSending: true },
+    });
+
+    return { communication: updatedCommunication, deliveryAttempt: updatedAttempt };
+  });
+}
+
 const ALWAYS_SENDABLE_FROM: CommunicationStatus[] = ["DRAFT", "FAILED"];
 const UNCERTAIN_SENDABLE_FROM: CommunicationStatus[] = ["DRAFT", "FAILED", "UNCERTAIN"];
 

@@ -16,23 +16,32 @@ type BoundAction = (
 /**
  * A single explicit-action button. `confirmMessage`, when set, requires
  * the user to confirm in a real dialog before the Server Action fires —
- * used only for "resend after an uncertain outcome," which may send a
- * duplicate email (see docs/communications.md#unknown-outcomes). Every
- * other send/retry here is already safe to click without a second
- * confirmation — the safety comes from sendCommunication's own atomic
- * claim, not from the UI.
+ * used for the two genuinely hard-to-undo sends here: the first manual
+ * send of a DRAFT reminder (a real message to a real customer) and
+ * "resend after an uncertain outcome," which may send a duplicate (see
+ * docs/communications.md#unknown-outcomes and
+ * docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1/P2). Retrying after a
+ * definite FAILED is deliberately left without a second confirmation —
+ * it's the same already-decided send, not a new decision, and a dialog on
+ * every retry would just be noise.
  */
 export function SendCommunicationForm({
   action,
   label,
   pendingLabel,
   confirmMessage,
+  confirmTitle = "Are you sure?",
+  confirmLabel,
+  confirmVariant = "destructive",
   variant = "primary",
 }: {
   action: BoundAction;
   label: string;
   pendingLabel: string;
   confirmMessage?: string;
+  confirmTitle?: string;
+  confirmLabel?: string;
+  confirmVariant?: ButtonProps["variant"];
   variant?: ButtonProps["variant"];
 }) {
   const [state, formAction, isPending] = useActionState(action, null);
@@ -55,7 +64,7 @@ export function SendCommunicationForm({
           {label}
         </button>
       }
-      title="Resend this email?"
+      title={confirmTitle}
       description={confirmMessage}
     >
       <div className="flex flex-col gap-3">
@@ -63,8 +72,12 @@ export function SendCommunicationForm({
         <div className="flex justify-end gap-2">
           <DialogCancelButton className={cn(buttonVariants({ variant: "outline", size: "sm" }))} />
           <form action={formAction}>
-            <button type="submit" disabled={isPending} className={cn(buttonVariants({ variant: "destructive", size: "sm" }))}>
-              {isPending ? pendingLabel : "Resend"}
+            <button
+              type="submit"
+              disabled={isPending}
+              className={cn(buttonVariants({ variant: confirmVariant, size: "sm" }))}
+            >
+              {isPending ? pendingLabel : (confirmLabel ?? label)}
             </button>
           </form>
         </div>

@@ -18,8 +18,8 @@ import { prisma } from "@/server/db/client";
 import { resetDatabase } from "@/server/db/test-utils";
 import { prepareReminderCommunication } from "./draft";
 import { updateCommunicationDraft } from "./editing";
-import { InvalidCommunicationTransitionError } from "./errors";
-import { sendCommunication } from "./send";
+import { CommunicationResourceNotFoundError, InvalidCommunicationTransitionError } from "./errors";
+import { reconcileStaleSendingCommunication, sendCommunication, STALE_SENDING_THRESHOLD_MS } from "./send";
 
 beforeEach(async () => {
   await resetDatabase();
@@ -510,5 +510,166 @@ describe("sendCommunication — concurrency", () => {
     // what got sent — never a stale read, never a silently different body.
     expect(received!.subject).toBe(finalCommunication.subject);
     expect(received!.text).toBe(finalCommunication.body);
+  });
+});
+
+/**
+ * Directly simulates the crash scenario reconciliation exists for: a
+ * `Communication` claimed to `SENDING` whose process died before
+ * `finalizeSuccess`/`finalizeTerminal` ever ran, leaving a `PENDING`
+ * `DeliveryAttempt` with no terminal outcome. Bypasses `sendCommunication`
+ * entirely (rather than racing a controlled provider promise) so the
+ * attempt's `startedAt` can be set precisely, independent of wall-clock
+ * timing — see docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-3.
+ */
+async function simulateStuckSending(organizationId: string, communicationId: string, startedAt: Date) {
+  await prisma.communication.update({ where: { id: communicationId }, data: { status: "SENDING" } });
+  return prisma.deliveryAttempt.create({
+    data: {
+      organizationId,
+      communicationId,
+      attemptNumber: 1,
+      provider: "test",
+      idempotencyKey: `${communicationId}:stuck`,
+      status: "PENDING",
+      startedAt,
+    },
+  });
+}
+
+describe("reconcileStaleSendingCommunication", () => {
+  it("refuses a SENDING communication whose attempt is still within the stale threshold", async () => {
+    const { organization, communication } = await setup();
+    await simulateStuckSending(organization.id, communication.id, new Date());
+
+    await expect(reconcileStaleSendingCommunication(organization.id, communication.id)).rejects.toThrow(
+      InvalidCommunicationTransitionError,
+    );
+
+    const reloaded = await prisma.communication.findUniqueOrThrow({ where: { id: communication.id } });
+    expect(reloaded.status).toBe("SENDING");
+    const attempt = await prisma.deliveryAttempt.findFirstOrThrow({ where: { communicationId: communication.id } });
+    expect(attempt.status).toBe("PENDING");
+  });
+
+  it("reconciles a genuinely stale SENDING communication to UNCERTAIN", async () => {
+    const { organization, communication } = await setup();
+    const startedAt = new Date(Date.now() - STALE_SENDING_THRESHOLD_MS - 1000);
+    await simulateStuckSending(organization.id, communication.id, startedAt);
+
+    const result = await reconcileStaleSendingCommunication(organization.id, communication.id);
+
+    expect(result.communication.status).toBe("UNCERTAIN");
+    expect(result.deliveryAttempt.status).toBe("UNKNOWN");
+    expect(result.deliveryAttempt.failureCategory).toBe("TIMEOUT_OR_UNKNOWN");
+    expect(result.deliveryAttempt.completedAt).not.toBeNull();
+
+    const events = await prisma.activityEvent.findMany({
+      where: { organizationId: organization.id, type: "COMMUNICATION_SEND_FAILED" },
+    });
+    expect(events).toHaveLength(1);
+    expect((events[0]!.metadata as { reconciledFromStaleSending?: boolean } | null)?.reconciledFromStaleSending).toBe(
+      true,
+    );
+  });
+
+  it("never resends by itself — actually resending after reconciliation still requires explicit acknowledgement", async () => {
+    const { organization, user, communication } = await setup();
+    const startedAt = new Date(Date.now() - STALE_SENDING_THRESHOLD_MS - 1000);
+    await simulateStuckSending(organization.id, communication.id, startedAt);
+    await reconcileStaleSendingCommunication(organization.id, communication.id);
+
+    // Reconciling only admits the outcome is unknown — it must never itself
+    // dispatch anything, and the ordinary UNCERTAIN-without-acknowledgement
+    // guard must still apply afterward exactly as it does for any other
+    // UNCERTAIN outcome.
+    await expect(
+      sendCommunication(organization.id, communication.id, user.id, {
+        provider: createFakeEmailProvider({ kind: "success" }),
+      }),
+    ).rejects.toThrow(InvalidCommunicationTransitionError);
+
+    const result = await sendCommunication(organization.id, communication.id, user.id, {
+      provider: createFakeEmailProvider({ kind: "success" }),
+      acknowledgeUncertainRisk: true,
+    });
+    expect(result.communication.status).toBe("SENT");
+    expect(result.deliveryAttempt.attemptNumber).toBe(2);
+  });
+
+  it("only lets one of two concurrent reconcile attempts succeed", async () => {
+    const { organization, communication } = await setup();
+    const startedAt = new Date(Date.now() - STALE_SENDING_THRESHOLD_MS - 1000);
+    await simulateStuckSending(organization.id, communication.id, startedAt);
+
+    const [first, second] = await Promise.allSettled([
+      reconcileStaleSendingCommunication(organization.id, communication.id),
+      reconcileStaleSendingCommunication(organization.id, communication.id),
+    ]);
+
+    const fulfilledCount = [first, second].filter((r) => r.status === "fulfilled").length;
+    expect(fulfilledCount).toBe(1);
+    const rejected = [first, second].find((r) => r.status === "rejected");
+    if (rejected && rejected.status === "rejected") {
+      expect(rejected.reason).toBeInstanceOf(InvalidCommunicationTransitionError);
+    }
+
+    const reloaded = await prisma.communication.findUniqueOrThrow({ where: { id: communication.id } });
+    expect(reloaded.status).toBe("UNCERTAIN");
+  });
+
+  it("rejects reconciling another organization's communication", async () => {
+    const { organization: orgA } = await createTestOrganization("Org A");
+    const { organization: orgB, user: userB } = await createTestOrganization("Org B");
+    const customerB = await createCustomer(orgB.id, { name: "B Customer", email: "b@example.com" });
+    const { communication } = await createDraftCommunication(orgB.id, userB.id, customerB.id);
+    const startedAt = new Date(Date.now() - STALE_SENDING_THRESHOLD_MS - 1000);
+    await simulateStuckSending(orgB.id, communication.id, startedAt);
+
+    await expect(reconcileStaleSendingCommunication(orgA.id, communication.id)).rejects.toThrow(
+      CommunicationResourceNotFoundError,
+    );
+
+    const reloaded = await prisma.communication.findUniqueOrThrow({ where: { id: communication.id } });
+    expect(reloaded.status).toBe("SENDING");
+  });
+
+  it("updates the actual PENDING attempt, not an earlier terminal one, when reconciling after a prior FAILED attempt", async () => {
+    const { organization, communication } = await setup();
+
+    // Build attempt #1 as a real FAILED attempt against this communication,
+    // then attempt #2 as the stuck PENDING one — reconcile must touch #2 only.
+    const failed = await prisma.deliveryAttempt.create({
+      data: {
+        organizationId: organization.id,
+        communicationId: communication.id,
+        attemptNumber: 1,
+        provider: "test",
+        idempotencyKey: `${communication.id}:1`,
+        status: "FAILED",
+        failureCategory: "PROVIDER_REJECTED",
+        failureMessage: "no such mailbox",
+        completedAt: new Date(Date.now() - STALE_SENDING_THRESHOLD_MS - 5000),
+      },
+    });
+    const startedAt = new Date(Date.now() - STALE_SENDING_THRESHOLD_MS - 1000);
+    await prisma.communication.update({ where: { id: communication.id }, data: { status: "SENDING" } });
+    const pending = await prisma.deliveryAttempt.create({
+      data: {
+        organizationId: organization.id,
+        communicationId: communication.id,
+        attemptNumber: 2,
+        provider: "test",
+        idempotencyKey: `${communication.id}:2`,
+        status: "PENDING",
+        startedAt,
+      },
+    });
+
+    const result = await reconcileStaleSendingCommunication(organization.id, communication.id);
+
+    expect(result.deliveryAttempt.id).toBe(pending.id);
+    const reloadedFailed = await prisma.deliveryAttempt.findUniqueOrThrow({ where: { id: failed.id } });
+    expect(reloadedFailed.status).toBe("FAILED"); // untouched
   });
 });
