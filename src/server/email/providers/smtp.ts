@@ -35,6 +35,18 @@ function getTransporter(): Transporter {
     port: env.SMTP_PORT,
     secure: env.SMTP_SECURE,
     auth: { user: env.SMTP_USER, pass: env.SMTP_PASSWORD },
+    // SMTP is a socket protocol, not a fetch()-based one — there is no
+    // AbortSignal to forward the way the AI/Messaging HTTP adapters take
+    // one (see src/server/ai/gateway.ts's doc comment for that pattern).
+    // The gateway's own timeout race (src/server/email/gateway.ts) still
+    // makes sendCommunication move on, but without these, the underlying
+    // TCP socket nodemailer opened would keep trying indefinitely in the
+    // background. These bound every phase of an SMTP attempt at the
+    // transport level so a stuck connection/greeting/DATA phase actually
+    // gets torn down, not just abandoned by the caller.
+    connectionTimeout: 15_000,
+    greetingTimeout: 15_000,
+    socketTimeout: 15_000,
   });
   return cachedTransporter;
 }

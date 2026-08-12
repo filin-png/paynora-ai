@@ -12,7 +12,14 @@ import { EmailProviderRejectedError } from "@/server/email/errors";
 import { dispatchEmail } from "@/server/email/gateway";
 import { getSenderAddress, resolveEmailProvider } from "@/server/email/service";
 import type { EmailProvider } from "@/server/email/types";
+import { MessagingProviderRejectedError } from "@/server/messaging/errors";
+import { dispatchMessage } from "@/server/messaging/gateway";
+import { resolveMessagingProvider } from "@/server/messaging/service";
+import type { MessagingProvider } from "@/server/messaging/types";
 import { CommunicationResourceNotFoundError, InvalidCommunicationTransitionError } from "./errors";
+
+/** Who actually triggered this send — encoded in the ActivityEvent's metadata, not a schema change. See docs/communications.md#audit-trail. */
+export type CommunicationActorSource = "USER" | "AUTOMATION";
 
 export type SendCommunicationOptions = {
   /**
@@ -31,7 +38,51 @@ export type SendCommunicationOptions = {
    * see src/server/communications/send.test.ts.
    */
   provider?: EmailProvider;
+  /** Same test-only injection point, for the TELEGRAM channel — see src/server/messaging/providers/fake.ts. */
+  messagingProvider?: MessagingProvider;
+  /** Defaults to "USER" — src/server/collections/engine.ts's executeAutoSend passes "AUTOMATION". */
+  actorSource?: CommunicationActorSource;
 };
+
+type DispatchOutcome = { providerName: string; providerMessageId?: string };
+
+/**
+ * The one place `sendCommunication` actually calls a provider — branches on
+ * `communication.channel`, but both branches feed the exact same
+ * claim/finalize state machine below, so every existing guarantee (atomic
+ * claim, UNCERTAIN-on-ambiguous-outcome, no auto-retry) applies identically
+ * regardless of channel. Telegram has no subject line, so the subject is
+ * folded into the message text rather than silently dropped.
+ */
+async function dispatchByChannel(
+  communication: Communication,
+  idempotencyKey: string,
+  from: string,
+  emailProvider: EmailProvider,
+  messagingProvider: MessagingProvider | null,
+): Promise<DispatchOutcome> {
+  if (communication.channel === "EMAIL") {
+    const result = await dispatchEmail(emailProvider, {
+      to: communication.recipient,
+      from,
+      subject: communication.subject,
+      text: communication.body,
+      idempotencyKey,
+    });
+    return { providerName: result.provider, providerMessageId: result.providerMessageId };
+  }
+
+  // communication.channel === "TELEGRAM". Resolved and validated before the
+  // claim step below (see sendCommunication) — reaching here with no
+  // provider would be a programming error, not a runtime possibility.
+  if (!messagingProvider) throw new Error("Telegram communication claimed without a resolved MessagingProvider");
+  const result = await dispatchMessage(messagingProvider, {
+    to: communication.recipient,
+    text: `${communication.subject}\n\n${communication.body}`,
+    idempotencyKey,
+  });
+  return { providerName: result.provider, providerMessageId: result.providerMessageId };
+}
 
 export type SendCommunicationResult = {
   communication: Communication;
@@ -92,13 +143,27 @@ export async function sendCommunication(
   userId: string,
   options: SendCommunicationOptions = {},
 ): Promise<SendCommunicationResult> {
+  // Which channel this communication uses is read once, up front, and
+  // determines which provider must be resolved/validated below — a
+  // tenant-scoped read, not a write, so it doesn't itself claim anything.
+  const channelLookup = await prisma.communication.findFirst({
+    where: { id: communicationId, organizationId },
+    select: { channel: true },
+  });
+  if (!channelLookup) throw new CommunicationResourceNotFoundError("Communication");
+
   // Resolved and validated *before* any state changes — a misconfigured
   // or disabled provider must never create a DeliveryAttempt or move the
   // communication into SENDING. See docs/communications.md#sender-safety.
-  const provider = options.provider ?? resolveEmailProvider();
-  const from = getSenderAddress();
+  const emailProvider = channelLookup.channel === "EMAIL" ? (options.provider ?? resolveEmailProvider()) : null;
+  const from = channelLookup.channel === "EMAIL" ? getSenderAddress() : null;
+  const messagingProvider =
+    channelLookup.channel === "TELEGRAM" ? (options.messagingProvider ?? resolveMessagingProvider()) : null;
+  const providerName = (channelLookup.channel === "EMAIL" ? emailProvider?.name : messagingProvider?.name)!;
 
   const allowedFrom = options.acknowledgeUncertainRisk ? UNCERTAIN_SENDABLE_FROM : ALWAYS_SENDABLE_FROM;
+  const actorSource: CommunicationActorSource = options.actorSource ?? "USER";
+  const channelLabel = channelLookup.channel === "EMAIL" ? "email" : "Telegram message";
 
   const claimed = await prisma.$transaction(async (tx) => {
     const claim = await tx.communication.updateMany({
@@ -132,7 +197,7 @@ export async function sendCommunication(
         organizationId,
         communicationId,
         attemptNumber,
-        provider: provider.name,
+        provider: providerName,
         idempotencyKey: `${communicationId}:${attemptNumber}`,
         status: "PENDING",
       },
@@ -141,10 +206,10 @@ export async function sendCommunication(
     await recordActivityEvent(tx, {
       organizationId,
       type: "COMMUNICATION_SEND_ATTEMPTED",
-      summary: `Payment reminder email send attempt #${attemptNumber} started for invoice ${communication.invoiceId}`,
+      summary: `Payment reminder ${channelLabel} send attempt #${attemptNumber} started for invoice ${communication.invoiceId}`,
       customerId: communication.customerId,
       invoiceId: communication.invoiceId,
-      metadata: { attemptNumber },
+      metadata: { attemptNumber, source: actorSource },
     });
 
     return { communication, deliveryAttempt };
@@ -153,16 +218,23 @@ export async function sendCommunication(
   const { communication, deliveryAttempt } = claimed;
 
   try {
-    const result = await dispatchEmail(provider, {
-      to: communication.recipient,
-      from,
-      subject: communication.subject,
-      text: communication.body,
-      idempotencyKey: deliveryAttempt.idempotencyKey,
-    });
-    return await finalizeSuccess(organizationId, communication, deliveryAttempt, userId, result.providerMessageId);
+    const result = await dispatchByChannel(
+      communication,
+      deliveryAttempt.idempotencyKey,
+      from ?? "",
+      emailProvider as EmailProvider,
+      messagingProvider,
+    );
+    return await finalizeSuccess(
+      organizationId,
+      communication,
+      deliveryAttempt,
+      userId,
+      result.providerMessageId,
+      actorSource,
+    );
   } catch (error) {
-    if (error instanceof EmailProviderRejectedError) {
+    if (error instanceof EmailProviderRejectedError || error instanceof MessagingProviderRejectedError) {
       return await finalizeTerminal(organizationId, communication, deliveryAttempt, {
         deliveryStatus: "FAILED",
         communicationStatus: "FAILED",
@@ -188,7 +260,9 @@ async function finalizeSuccess(
   deliveryAttempt: DeliveryAttempt,
   userId: string,
   providerMessageId: string | undefined,
+  actorSource: CommunicationActorSource,
 ): Promise<SendCommunicationResult> {
+  const channelLabel = communication.channel === "EMAIL" ? "email" : "Telegram message";
   return prisma.$transaction(async (tx) => {
     const updatedAttempt = await tx.deliveryAttempt.update({
       where: { id: deliveryAttempt.id },
@@ -201,9 +275,10 @@ async function finalizeSuccess(
     await recordActivityEvent(tx, {
       organizationId,
       type: "COMMUNICATION_SENT",
-      summary: `Payment reminder email sent for invoice ${communication.invoiceId}`,
+      summary: `Payment reminder ${channelLabel} sent for invoice ${communication.invoiceId}`,
       customerId: communication.customerId,
       invoiceId: communication.invoiceId,
+      metadata: { source: actorSource },
     });
 
     // Only a *confirmed successful send* executes the proposal — approving
@@ -264,13 +339,14 @@ async function finalizeTerminal(
       where: { id: communication.id },
       data: { status: outcome.communicationStatus },
     });
+    const channelLabel = communication.channel === "EMAIL" ? "email" : "Telegram message";
     await recordActivityEvent(tx, {
       organizationId,
       type: "COMMUNICATION_SEND_FAILED",
       summary:
         outcome.outcome === "FAILED"
-          ? `Payment reminder email send failed for invoice ${communication.invoiceId}`
-          : `Payment reminder email delivery status uncertain for invoice ${communication.invoiceId}`,
+          ? `Payment reminder ${channelLabel} send failed for invoice ${communication.invoiceId}`
+          : `Payment reminder ${channelLabel} delivery status uncertain for invoice ${communication.invoiceId}`,
       customerId: communication.customerId,
       invoiceId: communication.invoiceId,
       metadata: { outcome: outcome.outcome, failureCategory: outcome.failureCategory },

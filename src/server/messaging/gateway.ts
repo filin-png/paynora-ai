@@ -33,9 +33,15 @@ export async function dispatchMessage(
 ): Promise<MessagingSendResult> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const startedAt = Date.now();
+  const controller = new AbortController();
 
   try {
-    const result = await withTimeout(provider.send(message), provider.name, timeoutMs);
+    const result = await withTimeout(
+      provider.send(message, { signal: controller.signal }),
+      provider.name,
+      timeoutMs,
+      controller,
+    );
     recordProviderTelemetry({
       category: "messaging",
       provider: provider.name,
@@ -81,9 +87,18 @@ export async function dispatchMessage(
   }
 }
 
-function withTimeout<T>(promise: Promise<T>, providerName: string, timeoutMs: number): Promise<T> {
+/** Mirrors src/server/ai/gateway.ts's withTimeout exactly, including real request cancellation on timeout — see that file's doc comment. */
+function withTimeout<T>(
+  promise: Promise<T>,
+  providerName: string,
+  timeoutMs: number,
+  controller: AbortController,
+): Promise<T> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new MessagingTimeoutError(providerName, timeoutMs)), timeoutMs);
+    const timer = setTimeout(() => {
+      controller.abort();
+      reject(new MessagingTimeoutError(providerName, timeoutMs));
+    }, timeoutMs);
     promise.then(
       (value) => {
         clearTimeout(timer);

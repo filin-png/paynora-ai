@@ -116,21 +116,64 @@ MISTRAL_API_KEY=...
 MISTRAL_MODEL=...
 ```
 
-To exercise the real Telegram messaging adapter (note: **no domain code
-calls this yet** — see `docs/integration-architecture.md#messaging-a-foundation-with-no-caller` —
-so setting this alone has no visible effect on the app today; it's for
-exercising the adapter directly, e.g. via a test script):
+To exercise the real Telegram messaging adapter:
 
 ```bash
 MESSAGING_PROVIDER=telegram
 TELEGRAM_BOT_TOKEN=...        # from @BotFather
 ```
 
+As of Phase 8, this is a real second communication channel (see
+[Production Communications & AI (Phase 8)](#production-communications--ai-phase-8)
+below) — a customer needs `telegramChatId` set (via the Customer edit
+form or directly) before a reminder can actually be sent there.
+
 `BILLING_PROVIDER` and `DEPLOYMENT_PROFILE` have no local-dev setup step
 yet — `stripe`/`yookassa` are recognized but throw "not implemented" if
 selected (see `docs/integration-architecture.md#billing`), and
 `DEPLOYMENT_PROFILE` is descriptive-only metadata with no effect on
 runtime behavior.
+
+## Production Communications & AI (Phase 8)
+
+Telegram now has a real domain caller (Email and Telegram are both
+first-class communication channels — see `docs/communications.md#channel-model`),
+and the AI/Email/Messaging gateways were hardened for production use (real
+request cancellation on timeout, HTTP status classification, SMTP socket
+timeouts). No new environment variables were introduced — everything
+above (`AI_PROVIDER*`, `OPENROUTER_*`, `MISTRAL_*`, `EMAIL_PROVIDER`,
+`SMTP_*`, `PAYNORA_EMAIL_FROM`, `MESSAGING_PROVIDER`, `TELEGRAM_BOT_TOKEN`)
+is unchanged in shape; Telegram's variables simply now do something when
+set.
+
+One Prisma migration was added:
+`prisma/migrations/20260812152618_phase8_communication_channels` — adds
+`TELEGRAM` to the `CommunicationChannel` enum and two nullable columns to
+`customers` (`telegramChatId`, `preferredCommunicationChannel`). Apply it
+the same way as any other migration (`prisma migrate deploy` in
+production, `prisma migrate dev` locally) — it has no data backfill step
+and is safe against an existing `customers` table (both new columns are
+nullable, no default required).
+
+### Live smoke test (`npm run smoke`)
+
+A dev-only, manual CLI for verifying a real configured provider actually
+works against the real vendor — `scripts/live-smoke-test.ts`. It is
+**never** invoked by `npm test`, CI, or any application code path; running
+it requires you to type the command yourself, with `--confirm`:
+
+```bash
+npm run smoke -- ai openrouter --confirm      # real OpenRouter call
+npm run smoke -- ai mistral --confirm         # real Mistral call
+npm run smoke -- email --to=you@example.com --confirm     # real SMTP send
+npm run smoke -- telegram --to=<chat-id> --confirm         # real Telegram send
+```
+
+Every target requires `--confirm` and (for email/telegram) an explicit
+`--to` — there is no default recipient and nothing is ever sent
+automatically. It refuses to run under `CI=true` or inside the Vitest
+runner, and only ever logs a normalized provider name/result — never a
+secret, a raw response body, or a request header.
 
 ## Hosting (future)
 
@@ -142,7 +185,7 @@ OpenAI, Anthropic, and Clerk). Next.js does not require Vercel to run — it
 builds to a standard Node.js server (`npm run build && npm run start`) or a
 container, so self-hosting or a Russia-accessible hosting provider are both
 viable without any code changes. This decision is deferred to the phase
-that actually needs a public deployment (Phase 8+), and will be documented
+that actually needs a public deployment (Phase 10+), and will be documented
 here when made — not before.
 
 ## Environment variables

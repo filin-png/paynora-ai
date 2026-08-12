@@ -18,7 +18,10 @@ export function createFakeMessagingProvider(
 ): MessagingProvider {
   return {
     name,
-    async send(message: MessagingMessage): Promise<MessagingSendResult> {
+    async send(
+      message: MessagingMessage,
+      options?: { signal?: AbortSignal },
+    ): Promise<MessagingSendResult> {
       switch (behavior.kind) {
         case "success":
           return { provider: name, providerMessageId: behavior.providerMessageId ?? `fake-${message.idempotencyKey}` };
@@ -27,8 +30,12 @@ export function createFakeMessagingProvider(
         case "error":
           throw new Error(behavior.message);
         case "hang":
-          return new Promise<MessagingSendResult>(() => {
-            // Deliberately never resolves — used to exercise gateway timeout handling.
+          // Rejects if aborted — see src/server/ai/providers/fake.ts's
+          // identical "hang" behavior for why.
+          return new Promise<MessagingSendResult>((_resolve, reject) => {
+            options?.signal?.addEventListener("abort", () => {
+              reject(new DOMException("The operation was aborted.", "AbortError"));
+            });
           });
       }
     },

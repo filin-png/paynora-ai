@@ -19,7 +19,10 @@ export function createFakeProvider(
 ): AIProvider {
   return {
     name,
-    async generateStructured<T>(_request: AIRequest<T>): Promise<AIResult<T>> {
+    async generateStructured<T>(
+      _request: AIRequest<T>,
+      options?: { signal?: AbortSignal },
+    ): Promise<AIResult<T>> {
       switch (behavior.kind) {
         case "success":
           return { data: behavior.data as T, provider: name, usage: behavior.usage };
@@ -28,8 +31,15 @@ export function createFakeProvider(
         case "error":
           throw new Error(behavior.message);
         case "hang":
-          return new Promise<AIResult<T>>(() => {
-            // Deliberately never resolves — used to exercise gateway timeout handling.
+          // Never resolves on its own — used to exercise gateway timeout
+          // handling. Rejects if aborted, mirroring how a real fetch-based
+          // adapter behaves once the gateway cancels it — this is what
+          // lets a test prove the gateway's AbortController is actually
+          // wired to the provider, not just racing a promise.
+          return new Promise<AIResult<T>>((_resolve, reject) => {
+            options?.signal?.addEventListener("abort", () => {
+              reject(new DOMException("The operation was aborted.", "AbortError"));
+            });
           });
       }
     },

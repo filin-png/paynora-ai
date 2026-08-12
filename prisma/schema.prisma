@@ -116,6 +116,19 @@ model Customer {
   phone          String?
   companyName    String?
   notes          String?
+  // Phase 8: Telegram chat destination (see docs/communications.md#channel-model).
+  // A numeric chat id or "@channelusername" — the same identifier shape
+  // MessagingMessage.to already expects. Never itself proof of identity;
+  // always resolved server-side from this column, never accepted as
+  // client input at send time.
+  telegramChatId String?
+  // Phase 8: explicit channel selection when a customer has more than one
+  // usable destination configured — see
+  // src/server/communications/channel.ts#resolveCommunicationDestination.
+  // Null is not "pick one silently"; it only auto-resolves when exactly
+  // one destination exists, and requires this to be set explicitly the
+  // moment a second one is added.
+  preferredCommunicationChannel CommunicationChannel?
   archivedAt     DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
@@ -398,9 +411,11 @@ model ActionProposal {
 // UNCERTAIN means), and idempotency strategy.
 
 enum CommunicationChannel {
-  // The only channel Phase 4 implements. Telegram/SMS/WhatsApp are
-  // explicitly out of scope — see docs/communications.md.
   EMAIL
+  // Phase 8: a real, tenant-scoped communication channel — see
+  // docs/communications.md#channel-model. SMS/WhatsApp remain out of
+  // scope.
+  TELEGRAM
 }
 
 enum CommunicationPurpose {

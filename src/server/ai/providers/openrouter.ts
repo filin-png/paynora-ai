@@ -20,13 +20,17 @@ const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 export function createOpenRouterProvider(fetchImpl: typeof fetch = fetch): AIProvider {
   return {
     name: "openrouter",
-    async generateStructured<T>(request: AIRequest<T>): Promise<AIResult<T>> {
+    async generateStructured<T>(
+      request: AIRequest<T>,
+      options?: { signal?: AbortSignal },
+    ): Promise<AIResult<T>> {
       if (!env.OPENROUTER_API_KEY || !env.OPENROUTER_MODEL) {
         throw new Error("OPENROUTER_API_KEY and OPENROUTER_MODEL must be configured to use AI_PROVIDER=openrouter");
       }
       return callOpenAiCompatibleChat(
         { name: "openrouter", baseUrl: OPENROUTER_URL, apiKey: env.OPENROUTER_API_KEY, model: env.OPENROUTER_MODEL, fetchImpl },
         request,
+        { signal: options?.signal },
       );
     },
   };

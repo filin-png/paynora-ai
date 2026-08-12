@@ -11,7 +11,7 @@ import { createTestOrganization } from "@/server/ar/test-fixtures";
 import { prisma } from "@/server/db/client";
 import { resetDatabase } from "@/server/db/test-utils";
 import { getCommunicationForProposal, prepareReminderCommunication } from "./draft";
-import { InvalidActionProposalForCommunicationError, MissingCustomerEmailError } from "./errors";
+import { CommunicationChannelBlockedError, InvalidActionProposalForCommunicationError } from "./errors";
 
 beforeEach(async () => {
   await resetDatabase();
@@ -78,13 +78,13 @@ describe("prepareReminderCommunication", () => {
     expect(count).toBe(1);
   });
 
-  it("rejects preparing a communication when the customer has no email", async () => {
+  it("rejects preparing a communication when the customer has no communication destination", async () => {
     const { organization, user } = await createTestOrganization();
-    const customer = await createCustomer(organization.id, { name: "Acme Co" }); // no email
+    const customer = await createCustomer(organization.id, { name: "Acme Co" }); // no email, no Telegram
     const { proposal } = await createApprovedProposal(organization.id, user.id, customer.id);
 
     await expect(prepareReminderCommunication(organization.id, proposal.id)).rejects.toThrow(
-      MissingCustomerEmailError,
+      CommunicationChannelBlockedError,
     );
 
     const communication = await getCommunicationForProposal(organization.id, proposal.id);
@@ -120,6 +120,46 @@ describe("prepareReminderCommunication", () => {
     const { proposal } = await createApprovedProposal(orgB.id, userB.id, customerB.id);
 
     await expect(prepareReminderCommunication(orgA.id, proposal.id)).rejects.toThrow();
+  });
+
+  it("drafts a TELEGRAM communication when that's the customer's only configured destination", async () => {
+    const { organization, user } = await createTestOrganization();
+    const customer = await createCustomer(organization.id, { name: "Acme Co" });
+    await prisma.customer.update({ where: { id: customer.id }, data: { telegramChatId: "999888777" } });
+    const { proposal } = await createApprovedProposal(organization.id, user.id, customer.id);
+
+    const { communication } = await prepareReminderCommunication(organization.id, proposal.id);
+
+    expect(communication.channel).toBe("TELEGRAM");
+    expect(communication.recipient).toBe("999888777");
+  });
+
+  it("respects an explicit preferred channel over the other configured destination", async () => {
+    const { organization, user } = await createTestOrganization();
+    const customer = await createCustomer(organization.id, { name: "Acme Co", email: "billing@acme.example" });
+    await prisma.customer.update({
+      where: { id: customer.id },
+      data: { telegramChatId: "999888777", preferredCommunicationChannel: "TELEGRAM" },
+    });
+    const { proposal } = await createApprovedProposal(organization.id, user.id, customer.id);
+
+    const { communication } = await prepareReminderCommunication(organization.id, proposal.id);
+
+    expect(communication.channel).toBe("TELEGRAM");
+    expect(communication.recipient).toBe("999888777");
+  });
+
+  it("is blocked (never silently picks a channel) when both email and Telegram are configured with no preference set", async () => {
+    const { organization, user } = await createTestOrganization();
+    const customer = await createCustomer(organization.id, { name: "Acme Co", email: "billing@acme.example" });
+    await prisma.customer.update({ where: { id: customer.id }, data: { telegramChatId: "999888777" } });
+    const { proposal } = await createApprovedProposal(organization.id, user.id, customer.id);
+
+    await expect(prepareReminderCommunication(organization.id, proposal.id)).rejects.toThrow(
+      CommunicationChannelBlockedError,
+    );
+    const communication = await getCommunicationForProposal(organization.id, proposal.id);
+    expect(communication).toBeNull();
   });
 
   it("records a COMMUNICATION_PREPARED activity event", async () => {

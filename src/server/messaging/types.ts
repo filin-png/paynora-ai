@@ -42,5 +42,12 @@ export type MessagingSendResult = {
  */
 export interface MessagingProvider {
   readonly name: string;
-  send(message: MessagingMessage): Promise<MessagingSendResult>;
+  /**
+   * `options.signal`, when provided, is a real `AbortSignal` the gateway
+   * aborts on timeout (src/server/messaging/gateway.ts) — an adapter that
+   * makes an HTTP call must forward it to `fetch` so a timed-out request
+   * is actually cancelled, not just abandoned. See
+   * docs/integration-architecture.md#messaging.
+   */
+  send(message: MessagingMessage, options?: { signal?: AbortSignal }): Promise<MessagingSendResult>;
 }

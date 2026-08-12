@@ -5,7 +5,7 @@ employees) that helps them track accounts receivable, spot payment risk
 early, and automate collection follow-up — without replacing the accounting
 software they already use.
 
-**Project status: Phase 7 — Premium Product Experience & Complete UI.**
+**Project status: Phase 8 — Production Communications & AI.**
 Authentication, organizations, tenant isolation, customers, invoices,
 payments, and a real AR dashboard are implemented (Phase 1–2). Phase 3
 added an event → insight → proposal → human-approval pipeline (an Action
@@ -37,7 +37,20 @@ color reserved for real financial meaning), with real empty/loading/
 error/not-found states, verified responsiveness (390–1440px, zero
 horizontal overflow), and a zero-violation accessibility pass — while
 every domain function underneath stayed exactly what Phase 1–6 already
-built and tested. See
+built and tested. Phase 8 turns the Phase 3/4/6 foundations into a real
+production-oriented communication pipeline: Telegram gets its first real
+domain caller as a second, first-class channel alongside Email (explicit,
+non-silent channel selection — never a guess between the two); the
+AI/Email/Messaging gateways gained real request cancellation on timeout
+(an `AbortController`, not just an abandoned local promise) and tightened
+secret-redaction; Collections Automation's `AUTO_SEND` path now records
+who actually triggered a send (`"USER"` vs. `"AUTOMATION"`) on the audit
+trail; and every existing safety guarantee — idempotent sends, an
+explicit `UNCERTAIN` state for an ambiguous delivery outcome that's never
+auto-retried, AI that can never set who a message goes to or how much is
+owed — now applies to both channels identically, proven with tests, not
+just asserted. **The test environment still requires zero real API
+credentials.** See
 [docs/product-ui.md](./docs/product-ui.md),
 [docs/integration-architecture.md](./docs/integration-architecture.md),
 [docs/collections-automation.md](./docs/collections-automation.md),

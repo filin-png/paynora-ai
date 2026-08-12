@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { getProviderRegistrySnapshot, getRecommendedVendors, resolveHealth } from "./registry";
+import { getProviderRegistrySnapshot, getProviderVendorBreakdown, getRecommendedVendors, resolveHealth } from "./registry";
 
 describe("getProviderRegistrySnapshot", () => {
   it("reports the test environment's default configuration honestly", () => {
@@ -40,6 +40,26 @@ describe("resolveHealth", () => {
 
   it("is HEALTHY for a selected vendor with a real adapter", () => {
     expect(resolveHealth("openrouter", true)).toBe("HEALTHY");
+  });
+});
+
+describe("getProviderVendorBreakdown", () => {
+  it("reports every known vendor as not configured in the test environment (no secrets set)", () => {
+    const vendors = getProviderVendorBreakdown();
+    const names = vendors.map((v) => v.vendor).sort();
+    expect(names).toEqual(["mistral", "openrouter", "smtp", "telegram"]);
+    for (const vendor of vendors) {
+      expect(vendor.configured).toBe(false);
+      expect(vendor.active).toBe(false);
+    }
+  });
+
+  it("never includes a secret value — only vendor/category/configured/implemented/active booleans", () => {
+    const vendors = getProviderVendorBreakdown();
+    for (const vendor of vendors) {
+      const keys = Object.keys(vendor).sort();
+      expect(keys).toEqual(["active", "category", "configured", "implemented", "vendor"]);
+    }
   });
 });
 

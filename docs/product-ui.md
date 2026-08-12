@@ -171,7 +171,7 @@ nothing has to be relabeled later just to sound less internal. Integrations
 renders the real Phase 6 `getProviderRegistrySnapshot()` (provider,
 category, configured/disabled, deployment profile) instead of a mocked
 list; Billing states plainly that subscription billing isn't built yet
-(Phase 8) instead of showing a fake plan/invoice UI.
+(Phase 10) instead of showing a fake plan/invoice UI.
 
 ## Accessibility
 

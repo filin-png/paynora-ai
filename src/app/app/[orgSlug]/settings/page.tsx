@@ -5,7 +5,7 @@ import { Card } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { Tabs } from "@/components/ui/tabs";
 import type { ProviderHealthStatus, ProviderRegistryEntry } from "@/server/providers/types";
-import { getProviderRegistrySnapshot } from "@/server/providers/registry";
+import { getProviderRegistrySnapshot, getProviderVendorBreakdown } from "@/server/providers/registry";
 import { listOrganizationMembers } from "@/server/tenancy/organizations";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
 import { RenameOrganizationForm } from "./rename-organization-form";
@@ -23,6 +23,19 @@ const HEALTH_DISPLAY: Record<ProviderHealthStatus, { label: string; tone: NonNul
   DOWN: { label: "Down", tone: "danger", icon: CircleOff },
   DISABLED: { label: "Not configured", tone: "neutral", icon: CircleOff },
   UNKNOWN: { label: "Not available yet", tone: "neutral", icon: CircleHelp },
+};
+
+const VENDOR_LABEL: Record<string, string> = {
+  openrouter: "OpenRouter",
+  mistral: "Mistral",
+  smtp: "SMTP",
+  telegram: "Telegram",
+};
+
+const VENDOR_GROUP_LABEL: Record<"ai" | "email" | "messaging", string> = {
+  ai: "AI",
+  email: "Email",
+  messaging: "Messaging",
 };
 
 const TABS = ["general", "members", "integrations", "security"] as const;
@@ -98,31 +111,66 @@ async function MembersTab({ organizationId }: { organizationId: string }) {
  */
 async function IntegrationsTab() {
   const snapshot = getProviderRegistrySnapshot();
+  const vendors = getProviderVendorBreakdown();
+  const vendorsByGroup = {
+    ai: vendors.filter((v) => v.category === "ai"),
+    email: vendors.filter((v) => v.category === "email"),
+    messaging: vendors.filter((v) => v.category === "messaging"),
+  } as const;
+
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-6">
       <p className="text-sm text-muted">
         Deployment profile: <span className="font-medium text-foreground">{snapshot.deploymentProfile}</span>. Configured
-        via environment variables — see DEPLOYMENT.md.
+        via environment variables — see DEPLOYMENT.md. Never shows a secret value; this only reflects whether the
+        required variables are present.
       </p>
-      <Card className="overflow-hidden">
-        <ul className="divide-y divide-border">
-          {snapshot.entries.map((entry) => {
-            const health = HEALTH_DISPLAY[entry.health];
-            return (
-              <li key={entry.category} className="flex items-center justify-between gap-4 px-5 py-3.5 text-sm">
-                <div>
-                  <p className="font-medium text-foreground">{CATEGORY_LABEL[entry.category]}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {entry.vendor === "none" ? "Not connected" : entry.vendor}
-                    {!entry.implemented && entry.vendor !== "none" ? " — integration foundation, not yet connectable" : ""}
-                  </p>
-                </div>
-                <Badge tone={health.tone}>{health.label}</Badge>
-              </li>
-            );
-          })}
-        </ul>
-      </Card>
+
+      {(["ai", "email", "messaging"] as const).map((group) => (
+        <div key={group} className="flex flex-col gap-2">
+          <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">{VENDOR_GROUP_LABEL[group]}</p>
+          <Card className="overflow-hidden">
+            <ul className="divide-y divide-border">
+              {vendorsByGroup[group].map((vendor) => (
+                <li key={vendor.vendor} className="flex items-center justify-between gap-4 px-5 py-3.5 text-sm">
+                  <div>
+                    <p className="font-medium text-foreground">{VENDOR_LABEL[vendor.vendor] ?? vendor.vendor}</p>
+                    {vendor.active ? <p className="text-xs text-muted-foreground">Currently selected</p> : null}
+                  </div>
+                  <Badge tone={vendor.configured ? "success" : "neutral"}>
+                    {vendor.configured ? "Configured" : "Not configured"}
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+          </Card>
+        </div>
+      ))}
+
+      <div className="flex flex-col gap-2">
+        <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Billing</p>
+        <Card className="overflow-hidden">
+          <ul className="divide-y divide-border">
+            {snapshot.entries
+              .filter((entry) => entry.category === "billing")
+              .map((entry) => {
+                const health = HEALTH_DISPLAY[entry.health];
+                return (
+                  <li key={entry.category} className="flex items-center justify-between gap-4 px-5 py-3.5 text-sm">
+                    <div>
+                      <p className="font-medium text-foreground">{CATEGORY_LABEL[entry.category]}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {entry.vendor === "none" ? "Not connected" : entry.vendor}
+                        {!entry.implemented && entry.vendor !== "none" ? " — not implemented yet" : ""}
+                      </p>
+                    </div>
+                    <Badge tone={health.tone}>{health.label}</Badge>
+                  </li>
+                );
+              })}
+          </ul>
+        </Card>
+      </div>
     </div>
   );
 }

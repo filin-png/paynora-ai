@@ -37,6 +37,22 @@ export const customerInputSchema = z.object({
     .max(2000)
     .optional()
     .transform((value) => (value ? value : undefined)),
+  // Phase 8: Telegram destination — see docs/communications.md#channel-model.
+  // A numeric chat id or "@channelusername"; free-form since Telegram's own
+  // id space isn't a fixed pattern this codebase should second-guess.
+  telegramChatId: z
+    .string()
+    .trim()
+    .max(100)
+    .optional()
+    .transform((value) => (value ? value : undefined)),
+  // Explicit only — never inferred. Empty string means "no preference set",
+  // not "EMAIL" — see resolveCommunicationDestination for what that means.
+  preferredCommunicationChannel: z
+    .enum(["EMAIL", "TELEGRAM"])
+    .optional()
+    .or(z.literal(""))
+    .transform((value) => (value ? value : undefined)),
 });
 
 export type CustomerInput = z.input<typeof customerInputSchema>;

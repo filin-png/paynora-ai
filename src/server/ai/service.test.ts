@@ -126,6 +126,51 @@ describe("tryGenerateStructured — routing and fallback (via DI, no real networ
     expect(result?.data).toEqual({ answer: "from-fallback" });
   });
 
+  it("policy: every AIProvider failure kind is fallback-eligible — timeout, provider/rate-limit error, invalid output, and invalid config alike", async () => {
+    // Documents docs/integration-architecture.md#ai-routing's "retryable
+    // vs. non-retryable, explicitly" section as an executable assertion:
+    // there is no non-retryable category here, because "fallback" always
+    // means a structurally different vendor/credential, never a retry
+    // against the same one. Timeout (AITimeoutError) is deliberately not
+    // repeated here — tryGenerateStructured's catch treats it identically
+    // to every other thrown error (no special-casing), and its own
+    // fallback-after-timeout behavior is already exercised directly in
+    // gateway.test.ts without paying this suite's default 10s timeout cost.
+    const scenarios: Array<{ label: string; primary: () => import("./types").AIProvider }> = [
+      { label: "provider error (e.g. rate limit / 5xx)", primary: () => createFakeProvider({ kind: "error", message: "429 rate limited" }, "primary") },
+      { label: "invalid output failing schema validation", primary: () => createFakeProvider({ kind: "invalid", data: { wrong: "shape" } }, "primary") },
+      {
+        label: "invalid configuration (resolution throws before any request)",
+        primary: () => {
+          throw new Error("unreachable — resolve() throws directly for this scenario");
+        },
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const fallback = createFakeProvider({ kind: "success", data: { answer: "from-fallback" } }, "fallback");
+      let fallbackResolved = false;
+
+      const result = await tryGenerateStructured(request, {
+        enabled: true,
+        order: ["gigachat", "yandex"] as AiProviderName[],
+        resolve: (name) => {
+          if (name === "yandex") {
+            fallbackResolved = true;
+            return fallback;
+          }
+          if (scenario.label.startsWith("invalid configuration")) {
+            throw new Error("primary misconfigured — missing API key");
+          }
+          return scenario.primary();
+        },
+      });
+
+      expect(fallbackResolved).toBe(true);
+      expect(result?.data).toEqual({ answer: "from-fallback" });
+    }
+  });
+
   it("respects the enabled override — false short-circuits to null without resolving anything", async () => {
     let resolveCalled = false;
     const result = await tryGenerateStructured(request, {

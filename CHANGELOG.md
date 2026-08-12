@@ -5,6 +5,88 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Phase 8: Production Communications & AI
+
+- `prisma/schema.prisma` + `prisma/migrations/20260812152618_phase8_communication_channels`:
+  `CommunicationChannel` gains `TELEGRAM` (alongside `EMAIL`);
+  `Customer` gains nullable `telegramChatId` and
+  `preferredCommunicationChannel`. No backfill needed — both columns are
+  optional.
+- `src/server/communications/channel.ts` (new): `resolveCommunicationDestination`
+  — the one place channel selection is decided. Auto-resolves only when
+  exactly one destination is configured; returns `blocked: true` with a
+  human-readable reason otherwise (both configured with no explicit
+  preference, neither configured, or an explicit preference pointing at a
+  destination that isn't set). No silent "email missing, try Telegram"
+  fallback anywhere. `CommunicationChannelBlockedError` replaces the
+  now-removed, email-only `MissingCustomerEmailError`.
+- `src/server/communications/send.ts`: `dispatchByChannel` branches on
+  `communication.channel` inside the existing atomic claim → dispatch →
+  finalize state machine, so every existing guarantee (concurrency-safe
+  claim, `UNCERTAIN`-never-silently-`FAILED`, no auto-retry after an
+  ambiguous outcome) applies to Telegram automatically rather than being
+  reimplemented. New `actorSource: "USER" | "AUTOMATION"` option, recorded
+  in the `ActivityEvent.metadata.source` of every send-related audit
+  event; `src/server/collections/engine.ts`'s `executeAutoSend` now passes
+  `"AUTOMATION"` explicitly — a real gap found and fixed during this
+  phase's audit (it previously defaulted silently to `"USER"` for every
+  automated send).
+- Real request cancellation on timeout: `runAIGeneration`
+  (`src/server/ai/gateway.ts`) and `dispatchMessage`
+  (`src/server/messaging/gateway.ts`) now create a real `AbortController`
+  per attempt and abort it when the timeout fires, forwarded into `fetch`
+  by every real HTTP adapter (`openrouter.ts`, `mistral.ts`,
+  `telegram.ts`) via a new `options?: { signal?: AbortSignal }` parameter
+  on `AIProvider.generateStructured`/`MessagingProvider.send`. SMTP
+  (`src/server/email/providers/smtp.ts`) is socket-based, not
+  fetch-based, so it instead gained `connectionTimeout`/`greetingTimeout`/
+  `socketTimeout` on the nodemailer transporter.
+- `openai-compatible-chat.ts` (OpenRouter/Mistral's shared HTTP helper):
+  HTTP status classification (401/403 → authentication failed, 429 → rate
+  limited, 5xx → provider error, else → request rejected) in the thrown
+  error message — still never the response body or headers.
+- AI routing's retryable/non-retryable policy documented and tested
+  explicitly: every `AIProvider` failure kind (timeout, provider/
+  rate-limit error, invalid configuration, invalid output) is
+  fallback-eligible, because "fallback" here always means a structurally
+  different vendor/credential, not a resubmission to the same one — see
+  `docs/integration-architecture.md#ai-routing` and the new policy test in
+  `src/server/ai/service.test.ts`.
+- Action Center (`/app/[orgSlug]/actions/[proposalId]`) and Customer
+  detail/edit pages: minimal additions only (channel badge + destination,
+  blocked-channel alert with an "Edit customer" link, Telegram chat id +
+  preferred-channel fields on the customer form) — no redesign of the
+  Phase 7 design system.
+- Settings → Integrations: real per-vendor status
+  (`getProviderVendorBreakdown()`, `src/server/providers/registry.ts`) —
+  "OpenRouter: Configured", "Mistral: Not configured", "SMTP: Configured",
+  "Telegram: Not configured" — distinct from the existing category-level
+  snapshot, which only reports the currently *active* selection. Never a
+  secret value; no path to editing `.env` from the browser.
+- `scripts/live-smoke-test.ts` + `npm run smoke` (new `tsx` dev
+  dependency): a dev-only CLI to manually verify a real OpenRouter,
+  Mistral, SMTP, or Telegram call later. Refuses to run under `CI`/
+  `VITEST`, requires `--confirm` and an explicit `--to` for every
+  side-effect target, never prints a secret or raw response, and is not
+  reachable from any test file or CI workflow.
+- Adversarial security review of this phase's surface (Telegram identity
+  spoofing, cross-tenant `communicationId` access, silent channel
+  fallback, AI-controlled financial/identity values, secret/raw-response
+  leakage, header/CRLF injection, SSRF) — no new exploitable finding
+  beyond the `actorSource` gap above, which was fixed.
+- 38 new tests (416 total): channel resolution matrix, draft-time
+  Telegram/preference/ambiguous-destination cases, Telegram send
+  (success/rejection/unknown-outcome/concurrency), AI/Messaging gateway
+  `AbortController` cancellation, engine-level Telegram `AUTO_SEND`
+  end-to-end and `actorSource` audit-trail assertions, AI routing
+  fallback-eligibility policy, provider vendor-breakdown secret-safety.
+- ROADMAP.md, SECURITY.md, DEPLOYMENT.md, `.env.example`,
+  `docs/communications.md`, `docs/integration-architecture.md`,
+  `docs/provider-strategy.md`, `docs/product-ui.md` updated; this phase
+  is inserted as Phase 8, renumbering the former Phase 8–12
+  (Intelligence/Monetization/Integrations/Commercialization/Exit
+  Readiness) to Phase 9–13.
+
 ### Added — Phase 7: Premium Product Experience & Complete UI
 
 - `src/app/globals.css`: full design-token rewrite — a restrained
@@ -144,7 +226,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   PAYNORA, not what their own customers pay them. No Prisma schema, no
   real Stripe/YooKassa SDK call — selecting either resolves to a clear
   `BillingProviderNotImplementedError`, the same precedent as AI's
-  `gigachat`/`yandex`. Real implementation is Phase 8 "Monetization," per
+  `gigachat`/`yandex`. Real implementation is Phase 10 "Monetization," per
   `ROADMAP.md`.
 - Telemetry retrofitted into every gateway
   (`ai/gateway.ts#runAIGeneration`, `email/gateway.ts#dispatchEmail`,

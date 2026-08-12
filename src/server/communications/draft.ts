@@ -6,10 +6,11 @@ import { getCustomer } from "@/server/ar/customers";
 import { buildDeterministicInvoiceContext } from "@/server/ar/reminder-context";
 import { prisma } from "@/server/db/client";
 import { buildReminderEmailRequest } from "./ai-context";
+import { resolveCommunicationDestination } from "./channel";
 import {
+  CommunicationChannelBlockedError,
   CommunicationResourceNotFoundError,
   InvalidActionProposalForCommunicationError,
-  MissingCustomerEmailError,
 } from "./errors";
 import { buildDeterministicReminderEmail, type ReminderEmailContext } from "./templates";
 
@@ -81,10 +82,12 @@ export async function prepareReminderCommunication(
     buildDeterministicInvoiceContext(organizationId, proposal.invoiceId),
   ]);
 
-  if (!customer.email) throw new MissingCustomerEmailError();
+  const destination = resolveCommunicationDestination(customer);
+  if (destination.blocked) throw new CommunicationChannelBlockedError(destination.reason);
 
   const emailContext: ReminderEmailContext = { ...invoiceContext, organizationName: organization.name };
   const content = await generateReminderEmail(emailContext);
+  const channelLabel = destination.channel === "EMAIL" ? "email" : "Telegram message";
 
   try {
     const communication = await prisma.$transaction(async (tx) => {
@@ -94,9 +97,9 @@ export async function prepareReminderCommunication(
           customerId: proposal.customerId!,
           invoiceId: proposal.invoiceId!,
           actionProposalId: proposal.id,
-          channel: "EMAIL",
+          channel: destination.channel,
           purpose: "PAYMENT_REMINDER",
-          recipient: customer.email!,
+          recipient: destination.destination,
           subject: content.subject,
           body: content.body,
           aiGenerated: content.aiGenerated,
@@ -106,7 +109,7 @@ export async function prepareReminderCommunication(
       await recordActivityEvent(tx, {
         organizationId,
         type: "COMMUNICATION_PREPARED",
-        summary: `Payment reminder email drafted for invoice ${proposal.invoiceId}`,
+        summary: `Payment reminder ${channelLabel} drafted for invoice ${proposal.invoiceId}`,
         customerId: proposal.customerId ?? undefined,
         invoiceId: proposal.invoiceId ?? undefined,
       });

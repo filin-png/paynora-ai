@@ -9,7 +9,7 @@ import type { MessagingMessage, MessagingProvider, MessagingSendResult } from ".
  */
 export const noneMessagingProvider: MessagingProvider = {
   name: "none",
-  send(_message: MessagingMessage): Promise<MessagingSendResult> {
+  send(_message: MessagingMessage, _options?: { signal?: AbortSignal }): Promise<MessagingSendResult> {
     throw new MessagingDisabledError();
   },
 };

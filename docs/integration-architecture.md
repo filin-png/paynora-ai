@@ -23,7 +23,7 @@ before assuming any vendor "works."
 | AI | GigaChat | Recognized, not implemented. Selecting it throws a clear "not implemented yet" error. See [Why GigaChat/Yandex AI aren't real adapters yet](#why-gigachatyandex-ai-arent-real-adapters-yet). |
 | AI | Yandex AI | Recognized, not implemented. Same as GigaChat. |
 | Email | SMTP | Implemented since Phase 4 — unchanged by Phase 6. Outlook/Microsoft 365 (SMTP AUTH) and Yandex Mail both work today as SMTP configuration, not new code — see [Email: no new adapter needed](#email-no-new-adapter-needed). |
-| Messaging | Telegram | Implemented — real Bot API adapter, mocked-network tests. **No domain code calls it yet** — see [Messaging: a foundation with no caller](#messaging-a-foundation-with-no-caller). |
+| Messaging | Telegram | Implemented — real Bot API adapter, mocked-network tests. **Since Phase 8, a real second communication channel** (alongside Email) — see [Messaging: from a foundation with no caller to a real channel](#messaging-from-a-foundation-with-no-caller-to-a-real-channel-phase-8). |
 | Billing | Stripe | Types + normalized contract only. No SDK call, no Prisma schema. Selecting it throws "not implemented yet." |
 | Billing | YooKassa | Same as Stripe. |
 | Storage, Accounting, CRM, Banking | — | Not represented in code at all. Documented as planned only — see [Documented-only boundaries](#documented-only-boundaries). |
@@ -143,12 +143,59 @@ back after an uncertain AI outcome is at most one duplicate vendor call —
 never a duplicate customer-visible side effect, since only the *first
 confirmed schema-valid result* is ever returned to the caller and
 persisted; a redundant background response, if the timed-out request later
-completes anyway, is simply discarded. This is the same underlying
-un-aborted-background-request behavior `withTimeout` has had since Phase
-4's Email gateway (no `AbortController` wiring in any gateway in this
-codebase) — carried forward here, not newly introduced, and bounded to
-exactly one extra attempt by the routing logic above, never a longer
-chain.
+completes anyway, is simply discarded.
+
+As of Phase 8, `runAIGeneration` (`src/server/ai/gateway.ts`) creates a
+real `AbortController` per attempt and passes `controller.signal` through
+to the provider (`AIProvider.generateStructured(request, { signal })`);
+on timeout it calls `controller.abort()`, and both real adapters forward
+that signal into their `fetch` call — so a timed-out request's underlying
+socket is genuinely torn down, not merely abandoned client-side. The
+"redundant background response is simply discarded" framing above now
+mostly describes what happens if the abort itself doesn't reach the
+vendor in time (network partition, a proxy that ignores client aborts) —
+the residual case, not the common one. This is bounded to exactly one
+extra attempt by the routing logic above, never a longer chain, and it's
+still the same deliberate policy: fallback after a timeout is acceptable
+here because AI output is never customer-visible without a confirmed
+schema-valid result and (for anything sent to a customer) a downstream
+human-approval or channel-send gate.
+
+**Retryable vs. non-retryable, explicitly.** Every `AIProvider` error this
+codebase can produce is fallback-eligible — there is deliberately no
+non-retryable category for AI routing, and that's a narrower guarantee
+than it sounds: "retry" here never means "resubmit to the same vendor
+with the same credential." It means "try a different vendor with a
+different credential, at most once." That reframing is why classes that
+would be non-retryable in a same-provider-retry design are safe here:
+
+- **Timeout / temporary failure / rate limit / vendor unavailable**
+  (`AITimeoutError`, `AIProviderError` from a 429/5xx) — fallback-eligible.
+  Retrying the *same* provider on a rate limit would be pointless or
+  harmful; trying a *different* provider is not a retry against the
+  limiting party at all.
+- **Invalid configuration** (a selected vendor missing its API
+  key/model — caught at `resolveProviderByName` or adapter construction) —
+  fallback-eligible, because the fallback is a distinct vendor with its
+  own, independently-checked configuration. A misconfigured primary says
+  nothing about whether the fallback is configured correctly.
+- **Invalid request / validation failure** (`AIValidationError`, the
+  provider's output failed the caller's Zod schema) — fallback-eligible.
+  This is the one case that would be genuinely pointless to retry against
+  the *same* provider (the same prompt would likely produce the same
+  malformed shape again) — which is exactly why nothing in this codebase
+  ever does that; it only ever tries a structurally different vendor next.
+- **Authentication failure** (401/403, classified in
+  `openai-compatible-chat.ts`) — fallback-eligible for the same reason as
+  invalid configuration: the fallback vendor has a separate credential
+  boundary (a different env var, a different vendor account), so a
+  rejected OpenRouter key says nothing about whether the configured
+  Mistral key is valid.
+
+See `src/server/ai/service.test.ts`'s `"tryGenerateStructured — routing
+and fallback"` block for the executable form of this policy (bounded
+attempts, exactly-once fallback, `null` on exhaustion, no real network
+call anywhere in the suite).
 
 **Vendor adapters implemented**: OpenRouter and Mistral
 (`src/server/ai/providers/openrouter.ts`, `mistral.ts`), both real HTTP
@@ -219,27 +266,36 @@ no real bot token anywhere in the suite. Errors never include the request
 URL (it embeds the bot token as a path segment) or the raw response body —
 only the status code and Telegram's own `description` field.
 
-### Messaging: a foundation with no caller
+### Messaging: from a foundation with no caller to a real channel (Phase 8)
 
-**No domain code constructs a `MessagingMessage` or calls
-`dispatchMessage` anywhere in this codebase today.** This is deliberate,
-matching exactly how `AIProvider` itself started in Phase 3 (a real
-gateway with no caller until Phase 3's Operator pipeline needed it): the
-provider boundary and a real adapter exist so a future phase can add
-operator notifications (e.g., "sequence paused due to uncertain delivery")
-or interactive Telegram actions (approve/reject/pause/open-invoice from a
-chat) without first building the provider layer from scratch — but Phase 6
-does not invent that feature to give the provider a caller. Building a
-notification feature "to have something to call this" would be exactly
-the padding the Phase 6 brief explicitly ruled out.
+Through Phase 6, no domain code constructed a `MessagingMessage` or
+called `dispatchMessage` anywhere in this codebase — deliberate, matching
+exactly how `AIProvider` itself started in Phase 3 (a real gateway with no
+caller until Phase 3's Operator pipeline needed it). Phase 8 gives it its
+first real caller: Telegram as a second, first-class communication
+channel alongside Email — see `docs/communications.md#channel-model` for
+the full design (`resolveCommunicationDestination`, the schema addition,
+and how `sendCommunication`'s existing claim/dispatch/finalize state
+machine now branches on channel without being forked in two).
 
-**Security note**: because there is no caller yet, there is also no
-existing authorization boundary a future Telegram integration could
-bypass — but the constraint stands for whenever one is built: an
-interactive Telegram action must re-verify the acting user's real PAYNORA
-authorization server-side (the same way every other mutation in this
-codebase does via `src/server/tenancy/context.ts`) before taking effect —
-a Telegram chat ID is never itself proof of identity or authorization.
+Interactive Telegram actions (approve/reject/pause/open-invoice from a
+chat) remain out of scope — Phase 8 only wires up *outbound* messages;
+there is still no inbound webhook receiver anywhere in this codebase.
+
+**Security note, now load-bearing rather than forward-looking**: a
+Telegram chat id is never itself proof of identity or authorization.
+`communication.recipient` (the chat id passed to
+`MessagingProvider.send`) is set exactly once, at draft time, from a
+tenant-scoped server-side read of `Customer.telegramChatId` — never from
+a client-supplied value. `sendCommunication` re-derives everything from
+`organizationId` + `communicationId`, both filtered by `organizationId`
+on every query, so there is no path by which a request naming another
+tenant's `communicationId` reaches that tenant's data. If a future phase
+adds an *inbound* Telegram integration (interactive actions from a chat),
+the same rule applies going the other direction: the acting user's real
+PAYNORA authorization must be re-verified server-side
+(`src/server/tenancy/context.ts`) before any action takes effect — the
+chat id alone is still never sufficient.
 
 ## Billing
 
@@ -340,6 +396,51 @@ in this phase** — reserved honestly for a future real health-check
 mechanism (e.g., a periodic lightweight probe with its own explicit
 side-effect budget) so a future "PAYNORA Control Center" page doesn't need
 a breaking type change when that mechanism is added.
+
+### Provider Settings UI (Phase 8)
+
+`/app/[orgSlug]/settings?tab=integrations` renders real, per-vendor
+status — `getProviderVendorBreakdown()` (`src/server/providers/registry.ts`,
+new in Phase 8) — distinct from `getProviderRegistrySnapshot()`'s
+category-level view: the registry snapshot reports only the *currently
+active* selection per category (e.g. `AI_PROVIDER`), while the vendor
+breakdown reports every known vendor's `configured`/`active` state
+independently, so a deployment can see "OpenRouter: Configured" and
+"Mistral: Configured, currently selected" at the same time (e.g. while
+preparing a fallback). Every field is a boolean or a name — never a
+secret value — enforced structurally the same way
+`ProviderTelemetryEvent` is (`registry.test.ts` asserts no vendor object
+ever exposes an unlisted key). There is no path from this page to editing
+an environment variable — configuration remains deployment-level only
+(`.env`/hosting platform config); the UI only ever reflects it.
+
+### Live smoke test (Phase 8)
+
+`scripts/live-smoke-test.ts` (`npm run smoke -- <target> ...`) is a
+dev-only, manual CLI for verifying a real configured provider actually
+works — OpenRouter, Mistral, SMTP, and Telegram, each independently. It
+deliberately sits outside every automated boundary in this codebase:
+
+- Not imported by, or reachable from, any application code path, any test
+  file, or `vitest.config.mts`'s `include` glob (`src/**/*.test.ts` only)
+  — nothing in `npm test` or CI can accidentally invoke it.
+- Refuses to run if `CI`/`VITEST` is set in the environment, as a second,
+  independent guard against accidental CI execution.
+- No default recipient for the side-effect targets (`email`, `telegram`)
+  — `--to=<address-or-chat-id>` is required.
+- Every target requires `--confirm` — nothing is ever sent automatically,
+  including AI generation (which spends real vendor quota even though it
+  reaches no human).
+- Only ever logs a normalized provider name, result, and (for AI) the
+  schema-validated output's shape — never a secret, a raw response body,
+  or a request header, mirroring the same discipline
+  [Observability](#observability) enforces for the gateways themselves.
+- Reuses real production request-building where it exists
+  (`buildReminderEmailRequest`) rather than a bespoke fixture, so a
+  passing run genuinely proves the wire contract production code depends
+  on, not just that *some* request against the vendor succeeds.
+
+See `DEPLOYMENT.md#live-smoke-test-npm-run-smoke` for usage.
 
 ## Observability
 
