@@ -5,6 +5,7 @@ import { Alert } from "@/components/ui/alert";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { ConfirmActionButton } from "@/components/ui/confirm-action-button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader, SectionHeader } from "@/components/ui/page-header";
 import { Switch } from "@/components/ui/switch";
@@ -92,16 +93,36 @@ export default async function AutomationPage({
             </p>
           </div>
           {isOwner ? (
-            <form action={setAutomationEnabledAction.bind(null, orgSlug, !organization.automationEnabled)}>
-              <button
-                type="submit"
-                aria-pressed={organization.automationEnabled}
-                aria-label={organization.automationEnabled ? "Disable collections automation" : "Enable collections automation"}
-                className="flex items-center gap-2"
-              >
-                <Switch checked={organization.automationEnabled} />
-              </button>
-            </form>
+            organization.automationEnabled ? (
+              // Disabling is the safe/kill-switch direction — no confirmation needed to stop something.
+              <form action={setAutomationEnabledAction.bind(null, orgSlug, false)}>
+                <button
+                  type="submit"
+                  aria-pressed={true}
+                  aria-label="Disable collections automation"
+                  className="flex items-center gap-2"
+                >
+                  <Switch checked={true} />
+                </button>
+              </form>
+            ) : (
+              <ConfirmActionButton
+                trigger={
+                  <button
+                    type="button"
+                    aria-pressed={false}
+                    aria-label="Enable collections automation"
+                    className="flex items-center gap-2"
+                  >
+                    <Switch checked={false} />
+                  </button>
+                }
+                action={setAutomationEnabledAction.bind(null, orgSlug, true)}
+                confirmTitle="Enable collections automation?"
+                confirmDescription="Every enabled collection policy for this organization — including any already set to auto-send — will start running on the next scheduled tick. Invoices matching a policy step may be emailed or messaged automatically."
+                confirmLabel="Enable automation"
+              />
+            )
           ) : null}
         </div>
 
@@ -206,33 +227,32 @@ export default async function AutomationPage({
                   {isOwner ? (
                     <div className="mt-6 border-t border-border pt-4">
                       {isAutoSend ? (
-                        <Alert tone="warning" className="mb-3">
-                          Auto-send is on: approved reminders on this policy go out without a manual review step.
-                          A fresh financial check still happens immediately before every send.
-                        </Alert>
-                      ) : null}
-                      <form
-                        action={setPolicyAutomationModeAction.bind(
-                          null,
-                          orgSlug,
-                          policy.id,
-                          isAutoSend ? "APPROVAL_REQUIRED" : "AUTO_SEND",
-                        )}
-                      >
-                        <button
-                          type="submit"
-                          className={cn(buttonVariants({ variant: isAutoSend ? "outline" : "destructive", size: "sm" }))}
-                        >
-                          {isAutoSend ? (
-                            "Switch to approval required"
-                          ) : (
-                            <>
+                        <>
+                          <Alert tone="warning" className="mb-3">
+                            Auto-send is on: approved reminders on this policy go out without a manual review step.
+                            A fresh financial check still happens immediately before every send.
+                          </Alert>
+                          {/* Switching back to approval-required reduces risk — the safe direction needs no confirmation. */}
+                          <form action={setPolicyAutomationModeAction.bind(null, orgSlug, policy.id, "APPROVAL_REQUIRED")}>
+                            <button type="submit" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
+                              Switch to approval required
+                            </button>
+                          </form>
+                        </>
+                      ) : (
+                        <ConfirmActionButton
+                          trigger={
+                            <button type="button" className={cn(buttonVariants({ variant: "destructive", size: "sm" }))}>
                               <AlertTriangle className="size-4" />
                               Switch to auto-send
-                            </>
-                          )}
-                        </button>
-                      </form>
+                            </button>
+                          }
+                          action={setPolicyAutomationModeAction.bind(null, orgSlug, policy.id, "AUTO_SEND")}
+                          confirmTitle="Turn on auto-send for this policy?"
+                          confirmDescription={`Every future reminder generated under "${policy.name}" will be sent automatically as soon as it's due, with no human review step. A fresh financial check still runs immediately before each send. You can switch back to approval-required at any time.`}
+                          confirmLabel="Turn on auto-send"
+                        />
+                      )}
                     </div>
                   ) : null}
                 </Card>

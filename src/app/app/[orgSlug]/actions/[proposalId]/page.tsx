@@ -11,11 +11,12 @@ import { PageHeader, SectionHeader } from "@/components/ui/page-header";
 import { isResourceNotFoundError } from "@/lib/not-found";
 import { resolveCommunicationDestination } from "@/server/communications/channel";
 import { getCommunicationForProposal } from "@/server/communications/draft";
-import { listDeliveryAttempts } from "@/server/communications/send";
+import { listDeliveryAttempts, STALE_SENDING_THRESHOLD_MS } from "@/server/communications/send";
 import { getActionProposal } from "@/server/operator/approval";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
 import {
   prepareCommunicationAction,
+  reconcileStaleSendingCommunicationAction,
   resendUncertainCommunicationAction,
   sendCommunicationAction,
   updateCommunicationAction,
@@ -25,7 +26,10 @@ import { SendCommunicationForm } from "./send-form";
 
 const STATUS_BADGE: Record<Communication["status"], { label: string; tone: NonNullable<BadgeProps["tone"]> }> = {
   DRAFT: { label: "Draft", tone: "neutral" },
-  SENDING: { label: "Delivery status uncertain", tone: "warning" },
+  // SENDING has two distinct sub-states in practice (fresh vs. stale) —
+  // CommunicationReview below overrides this default for a SENDING row,
+  // this entry is only the fallback shape.
+  SENDING: { label: "Sending…", tone: "warning" },
   SENT: { label: "Sent", tone: "success" },
   FAILED: { label: "Failed", tone: "danger" },
   UNCERTAIN: { label: "Delivery status uncertain", tone: "warning" },
@@ -121,6 +125,24 @@ export default async function ActionProposalPage({
   );
 }
 
+// A SENDING communication is stale (safe to reconcile) once its most
+// recent PENDING delivery attempt has sat unresolved for longer than any
+// real provider timeout could explain — see
+// src/server/communications/send.ts#reconcileStaleSendingCommunication and
+// docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-3. A fresh SENDING might
+// still be genuinely in flight, so no recovery action is offered for it —
+// the backend would refuse it anyway, and this UI must never promise an
+// action the backend doesn't allow. A plain (non-component) function so
+// the one impure `Date.now()` read lives outside any component render —
+// see docs/product-ui.md for why this codebase always threads "now" in
+// explicitly rather than reading the clock inside a component.
+function isSendingStale(communication: Communication, deliveryAttempts: DeliveryAttempt[]): boolean {
+  if (communication.status !== "SENDING") return false;
+  const pendingAttempt = deliveryAttempts.find((attempt) => attempt.status === "PENDING");
+  if (!pendingAttempt) return false;
+  return Date.now() - pendingAttempt.startedAt.getTime() > STALE_SENDING_THRESHOLD_MS;
+}
+
 function CommunicationReview({
   orgSlug,
   proposalId,
@@ -132,10 +154,17 @@ function CommunicationReview({
   communication: Communication;
   deliveryAttempts: DeliveryAttempt[];
 }) {
-  const status = STATUS_BADGE[communication.status];
   const boundUpdate = updateCommunicationAction.bind(null, orgSlug, proposalId, communication.id);
   const boundSend = sendCommunicationAction.bind(null, orgSlug, proposalId, communication.id);
   const boundResendUncertain = resendUncertainCommunicationAction.bind(null, orgSlug, proposalId, communication.id);
+  const boundReconcile = reconcileStaleSendingCommunicationAction.bind(null, orgSlug, proposalId, communication.id);
+  const sendingIsStale = isSendingStale(communication, deliveryAttempts);
+  const channelLabel = communication.channel === "EMAIL" ? "email" : "Telegram message";
+
+  const status =
+    communication.status === "SENDING" && sendingIsStale
+      ? { label: "Delivery status unknown", tone: "warning" as const }
+      : STATUS_BADGE[communication.status];
 
   return (
     <div className="flex flex-col gap-6">
@@ -169,7 +198,15 @@ function CommunicationReview({
             <p className="mb-2 text-xs text-muted">
               Sending calls your configured email provider for real. Review the message above before sending.
             </p>
-            <SendCommunicationForm action={boundSend} label="Send email" pendingLabel="Sending…" />
+            <SendCommunicationForm
+              action={boundSend}
+              label="Send email"
+              pendingLabel="Sending…"
+              confirmTitle="Send this reminder?"
+              confirmMessage={`This will send a real ${channelLabel} to ${communication.recipient}. This cannot be undone.`}
+              confirmLabel="Send"
+              confirmVariant="primary"
+            />
           </div>
         </>
       ) : (
@@ -188,7 +225,35 @@ function CommunicationReview({
         </div>
       ) : null}
 
-      {communication.status === "SENDING" || communication.status === "UNCERTAIN" ? (
+      {communication.status === "SENDING" && !sendingIsStale ? (
+        <Alert tone="warning" title="Send in progress">
+          <p>
+            A send attempt for this message is still in progress or has not yet reported an outcome. This usually
+            resolves within a few seconds. If this message is still here after a while, it likely means the send
+            process was interrupted — check back shortly for a recovery option.
+          </p>
+        </Alert>
+      ) : null}
+
+      {communication.status === "SENDING" && sendingIsStale ? (
+        <Alert tone="warning" title="Delivery status unknown — send never reported an outcome">
+          <p>
+            A send attempt for this message started more than {Math.round(STALE_SENDING_THRESHOLD_MS / 60000)} minutes
+            ago and never reported success or failure — most likely the process was interrupted mid-send. We cannot
+            tell whether the message was actually delivered.
+          </p>
+          <div className="mt-3">
+            <SendCommunicationForm
+              action={boundReconcile}
+              label="Mark as uncertain (review before resending)"
+              pendingLabel="Updating…"
+              variant="outline"
+            />
+          </div>
+        </Alert>
+      ) : null}
+
+      {communication.status === "UNCERTAIN" ? (
         <Alert tone="warning" title="Delivery status uncertain">
           <p>
             We couldn&rsquo;t confirm whether this email was delivered. Do not resend automatically — resending may
@@ -201,7 +266,9 @@ function CommunicationReview({
               label="Resend anyway (may send a duplicate)"
               pendingLabel="Sending…"
               variant="outline"
+              confirmTitle="Resend this email?"
               confirmMessage="This may send a duplicate email if the previous attempt actually succeeded. Resend anyway?"
+              confirmLabel="Resend"
             />
           </div>
         </Alert>

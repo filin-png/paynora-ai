@@ -175,18 +175,100 @@ automatically. It refuses to run under `CI=true` or inside the Vitest
 runner, and only ever logs a normalized provider name/result — never a
 secret, a raw response body, or a request header.
 
-## Hosting (future)
+## Production hosting model
 
-No hosting target is committed to yet. The constraint that shapes the
-choice, from the project brief: the core workflow must not depend on a
-foreign-only service that may be inaccessible from Russia (this
-specifically rules out treating Vercel as a requirement, alongside Stripe,
-OpenAI, Anthropic, and Clerk). Next.js does not require Vercel to run — it
-builds to a standard Node.js server (`npm run build && npm run start`) or a
-container, so self-hosting or a Russia-accessible hosting provider are both
-viable without any code changes. This decision is deferred to the phase
-that actually needs a public deployment (Phase 10+), and will be documented
-here when made — not before.
+Decided in Phase 9 (see `docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md`
+P1-8) — a hard requirement for any production deployment, not a TODO.
+
+**Runtime: a long-lived Node.js process, not an edge/serverless function
+model.** This is not a preference — it's what the app's existing database
+layer already assumes and requires:
+
+- `src/server/db/client.ts` creates one `PrismaClient`/`pg.Pool` at module
+  load and reuses it for the life of the process (a global singleton —
+  the standard pattern for a persistent server). `DATABASE_POOL_MAX`
+  (default 10, env-configurable) bounds *that one process's* pool size.
+- A per-invocation serverless/edge model (Vercel Edge Functions, a bare
+  AWS Lambda, Cloudflare Workers) would instead create a fresh pool on
+  every cold start. At any real concurrency this exhausts Postgres's
+  `max_connections` long before the app hits any other limit — the
+  well-known "serverless + Postgres" problem, normally solved with an
+  external pooler (PgBouncer, Prisma Accelerate, a provider's built-in
+  HTTP/edge driver such as Neon's). This codebase includes none of that,
+  and adding one speculatively — before a real deployment target requires
+  it — is exactly the over-engineering the Phase 9 brief warns against.
+  The chosen fix is simpler: don't run in that model.
+
+**Deploy target:** `next build && next start` (or an equivalent container
+running that build) on any host that can run a long-lived Node.js 22+
+process with a reachable Postgres 14+ — a VPS, any container platform, or
+self-hosted infrastructure. This satisfies the project brief's constraint
+that the core workflow must not depend on a foreign-only service that may
+be inaccessible from Russia (Vercel, alongside Stripe/OpenAI/Anthropic/
+Clerk, is never a requirement). Vercel itself still works if chosen — this
+app never opts into Vercel's Edge Runtime — but nothing here is
+Vercel-specific.
+
+**Database:** a single reachable Postgres 14+ instance (required since
+Phase 1). No read replicas or multi-region setup — out of scope until a
+real deployment's load actually requires it.
+
+**Migrations:** run `npx prisma migrate deploy` once, before the new
+process/container starts serving traffic (a deploy-time step — a CI/CD
+pipeline stage, or container entrypoint ordering) — never `prisma migrate
+dev` in production (that's the interactive, dev-only command used
+elsewhere in this doc), and never triggered automatically by the running
+app at request time, which could race a live request against an
+in-progress schema change.
+
+**Scheduler:** unchanged from
+[Collections automation scheduler](#collections-automation-scheduler)
+above — any external trigger capable of an authenticated HTTPS POST on an
+interval, running independently of the app process (the app has no
+built-in cron loop by design).
+
+**Health/readiness:** `/internal/automation/health` (Phase 9, see
+`docs/collections-automation.md`) is the automation-specific liveness/
+readiness signal. There is no separate generic `/health` endpoint yet —
+any successful response from the running app is today's baseline
+liveness check. Noted here as an honest boundary, not a solved problem:
+a real alerting/monitoring setup needs its own credentials and is outside
+what this repository can commit to on its own.
+
+**Explicitly not decided here, and not this codebase's concern:** TLS
+termination/reverse proxy, container orchestration platform, secrets
+manager, CDN. Standard "any competent hosting setup" concerns, left to
+whoever operates the actual deployment.
+
+## Backups & point-in-time recovery
+
+Not implemented by this application, and not something application code
+can substitute for — this is a hard requirement for whoever operates the
+production database, documented here because SECURITY.md's "Organization
+deletion" note points here, and because the audit found no backup story
+was written down anywhere.
+
+PAYNORA has no in-app soft-delete, undo, or recycle bin for any
+tenant-scoped data (see SECURITY.md's organization-deletion cascade
+note). The only real recovery path for accidental deletion, a bad
+migration, or storage corruption is a database-level backup taken
+independently of the app:
+
+- Enable your Postgres host's continuous backup / point-in-time recovery
+  (PITR) if it offers one (most managed Postgres providers do, as a
+  configuration toggle, not a code change).
+- If self-hosting Postgres directly, configure WAL archiving and
+  periodic base backups (`pg_basebackup` + continuous WAL archiving, or
+  `pg_dump` on a schedule as a lower-fidelity fallback) — standard
+  Postgres operations, not specific to this app.
+- Verify restores actually work before relying on them — an untested
+  backup is not a backup.
+
+This section intentionally stops at "here is what's required and why" —
+which specific tool or managed-provider feature to use depends on the
+hosting choice made under
+[Production hosting model](#production-hosting-model) above, which this
+repository doesn't dictate.
 
 ## Environment variables
 

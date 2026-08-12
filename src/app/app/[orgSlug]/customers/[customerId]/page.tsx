@@ -20,19 +20,32 @@ import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
 import { getInvoiceStatusDisplay } from "../../invoices/status";
 import { archiveCustomerAction } from "./actions";
 
+// See docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-6 — bounds a
+// long-lived customer's activity timeline.
+const ACTIVITY_PAGE_SIZE = 25;
+
 export default async function CustomerDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ orgSlug: string; customerId: string }>;
+  searchParams: Promise<{ activityCursor?: string }>;
 }) {
   const { orgSlug, customerId } = await params;
+  const { activityCursor } = await searchParams;
   const context = await requireOrganizationMembershipForPage(orgSlug);
   const customer = await getCustomer(context.organization.id, customerId).catch((error: unknown) => {
     if (isResourceNotFoundError(error)) notFound();
     throw error;
   });
   const invoices = await listInvoicesWithFinancials(context.organization.id, "all", { customerId });
-  const activity = await listCustomerActivity(context.organization.id, customerId);
+  const activityPage = await listCustomerActivity(context.organization.id, customerId, {
+    cursor: activityCursor,
+    take: ACTIVITY_PAGE_SIZE + 1,
+  });
+  const activityHasMore = activityPage.length > ACTIVITY_PAGE_SIZE;
+  const activity = activityHasMore ? activityPage.slice(0, ACTIVITY_PAGE_SIZE) : activityPage;
+  const nextActivityCursor = activityHasMore ? activity.at(-1)!.id : null;
   const boundArchive = archiveCustomerAction.bind(null, orgSlug, customerId);
 
   const openInvoices = invoices.filter(({ invoice, financials }) => invoice.status === "OPEN" && !financials.isPaid);
@@ -196,6 +209,14 @@ export default async function CustomerDetailPage({
         ) : (
           <p className="mt-3 text-sm text-muted">No activity yet.</p>
         )}
+        {activityHasMore ? (
+          <Link
+            href={`/app/${orgSlug}/customers/${customerId}?activityCursor=${nextActivityCursor}`}
+            className="mt-3 inline-block text-xs font-medium text-primary hover:underline"
+          >
+            Older activity
+          </Link>
+        ) : null}
       </div>
     </div>
   );

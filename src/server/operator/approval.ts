@@ -125,11 +125,18 @@ export async function dismissActionProposal(
  * alphabetically, so `desc` puts HIGH first — verified in
  * approval.test.ts, not just assumed.
  */
+const PENDING_PROPOSALS_LIMIT = 500;
+
 export async function listPendingActionProposals(organizationId: string) {
   return prisma.actionProposal.findMany({
     where: { organizationId, status: "PENDING" },
     include: { invoice: { include: { customer: true } }, customer: true, insight: true },
     orderBy: [{ insight: { priority: "desc" } }, { createdAt: "asc" }],
+    // Defensive cap, not real pagination — see
+    // docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P2-3. Pending proposals
+    // are naturally self-limiting (they leave this list once approved or
+    // dismissed); this only guards a badly neglected organization.
+    take: PENDING_PROPOSALS_LIMIT,
   });
 }
 

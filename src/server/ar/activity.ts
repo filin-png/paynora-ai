@@ -43,16 +43,37 @@ export async function listOrganizationActivity(organizationId: string, take = AC
   });
 }
 
-export async function listInvoiceActivity(organizationId: string, invoiceId: string) {
+/**
+ * Bounds a single invoice's/customer's activity timeline the same way
+ * `listOrganizationActivity` above already bounds the org-wide one — a
+ * long-lived invoice or customer can otherwise accumulate an unbounded
+ * number of ActivityEvent rows. See
+ * docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-6.
+ */
+const ENTITY_ACTIVITY_DEFAULT_TAKE = 50;
+
+export async function listInvoiceActivity(
+  organizationId: string,
+  invoiceId: string,
+  options: { cursor?: string; take?: number } = {},
+) {
   return prisma.activityEvent.findMany({
     where: { organizationId, invoiceId },
-    orderBy: { createdAt: "desc" },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: options.take ?? ENTITY_ACTIVITY_DEFAULT_TAKE,
+    ...(options.cursor ? { cursor: { id: options.cursor }, skip: 1 } : {}),
   });
 }
 
-export async function listCustomerActivity(organizationId: string, customerId: string) {
+export async function listCustomerActivity(
+  organizationId: string,
+  customerId: string,
+  options: { cursor?: string; take?: number } = {},
+) {
   return prisma.activityEvent.findMany({
     where: { organizationId, customerId },
-    orderBy: { createdAt: "desc" },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: options.take ?? ENTITY_ACTIVITY_DEFAULT_TAKE,
+    ...(options.cursor ? { cursor: { id: options.cursor }, skip: 1 } : {}),
   });
 }

@@ -5,7 +5,7 @@ import { z } from "zod";
 
 import { prepareReminderCommunication } from "@/server/communications/draft";
 import { updateCommunicationDraft } from "@/server/communications/editing";
-import { sendCommunication } from "@/server/communications/send";
+import { reconcileStaleSendingCommunication, sendCommunication } from "@/server/communications/send";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
 
 export type CommunicationFormState = { error: string } | null;
@@ -82,4 +82,32 @@ export async function resendUncertainCommunicationAction(
   _prevState: CommunicationFormState,
 ): Promise<CommunicationFormState> {
   return trySend(orgSlug, proposalId, communicationId, { acknowledgeUncertainRisk: true });
+}
+
+/**
+ * Phase 9 (docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-3): the explicit
+ * recovery step for a communication genuinely stuck at SENDING. Never
+ * sends anything itself — it only moves the communication to UNCERTAIN
+ * (admitting the outcome is unknown), after which the existing, already-
+ * tested "Resend anyway" flow (`resendUncertainCommunicationAction`
+ * above) is what actually requires acknowledging duplicate-send risk
+ * before attempting anything further.
+ */
+export async function reconcileStaleSendingCommunicationAction(
+  orgSlug: string,
+  proposalId: string,
+  communicationId: string,
+  _prevState: CommunicationFormState,
+): Promise<CommunicationFormState> {
+  const context = await requireOrganizationMembershipForPage(orgSlug);
+  try {
+    await reconcileStaleSendingCommunication(context.organization.id, communicationId);
+  } catch (error) {
+    if (error instanceof Error) {
+      return { error: error.message };
+    }
+    throw error;
+  }
+  revalidateProposalPage(orgSlug, proposalId);
+  return null;
 }

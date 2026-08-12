@@ -91,6 +91,28 @@ const baseEnvSchema = z.object({
   // one codebase, different provider configurations. See
   // docs/integration-architecture.md#deployment-profiles.
   DEPLOYMENT_PROFILE: z.enum(["RU", "GLOBAL", "LOCAL_TEST"]).default("LOCAL_TEST"),
+  // Phase 9: how many automationEnabled organizations one
+  // runAutomationTick invocation processes, bounding a single scheduler
+  // call's work — see src/server/collections/engine.ts and
+  // docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-5. The remaining
+  // organizations are picked up by the next invocation via
+  // Organization.automationLastTickAt, not lost.
+  AUTOMATION_BATCH_SIZE: z.coerce.number().int().positive().default(20),
+  // Phase 9: per-organization, per-hour safety ceilings on expensive,
+  // provider-backed operations — a defense against a compromised/
+  // malicious member or a runaway client generating unbounded real AI/
+  // email/Telegram vendor spend, not a commercial plan limit. See
+  // src/server/rate-limit/policies.ts and
+  // docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-7.
+  RATE_LIMIT_AI_GENERATION_PER_HOUR: z.coerce.number().int().positive().default(50),
+  RATE_LIMIT_COMMUNICATION_SEND_PER_HOUR: z.coerce.number().int().positive().default(100),
+  RATE_LIMIT_OPERATOR_RUN_PER_HOUR: z.coerce.number().int().positive().default(20),
+  // Phase 9: `pg.Pool`'s max connections per process — see
+  // src/server/db/client.ts and DEPLOYMENT.md#connection-pooling. The
+  // default (10) matches node-postgres's own default; deployments running
+  // many concurrent serverless instances against one Postgres server
+  // should size this deliberately, not leave it unbounded.
+  DATABASE_POOL_MAX: z.coerce.number().int().positive().default(10),
 });
 
 export const envSchema = baseEnvSchema.superRefine((data, ctx) => {

@@ -36,6 +36,10 @@ src/
     api/auth/[...nextauth]/ Auth.js route handler
     internal/automation/tick/ Vendor-neutral scheduler adapter endpoint —
                              see docs/collections-automation.md#scheduler-deployment
+    internal/automation/health/ Secret-free liveness/readiness endpoint for
+                             the automation tick — see
+                             docs/collections-automation.md and
+                             docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-4
   components/ui/          Reusable, shadcn/ui-style UI primitives (cva + cn)
   lib/                     Cross-cutting utilities (env validation, cn helper)
   server/
@@ -99,13 +103,27 @@ src/
                              any one category (ai/email/messaging/billing);
                              the one place that reports on all of them
                              together.
+    rate-limit/               Postgres-backed fixed-window rate limiter
+                             (Phase 9) — see
+                             docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md.
+                             Not in-memory: an in-process counter is
+                             meaningless once more than one server process
+                             exists. Used for auth brute-force/enumeration
+                             protection and per-organization provider
+                             cost/abuse limits (AI generation, sends,
+                             operator runs); not tenant-scoped data itself.
 prisma/
   schema.prisma            User, Organization, OrganizationMember,
                              Customer, Invoice, Payment, ActivityEvent,
                              BusinessEvent, OperatorInsight, ActionProposal,
                              Communication, DeliveryAttempt, CollectionPolicy,
                              CollectionPolicyStep, CollectionSequence,
-                             CollectionStepExecution
+                             CollectionStepExecution, RateLimitCounter,
+                             AutomationTickRun (Phase 9 — neither is
+                             organization-scoped: RateLimitCounter is keyed
+                             by an arbitrary scope+key pair, and
+                             AutomationTickRun is a single-process-wide
+                             heartbeat)
   migrations/               Applied migration history (includes hand-added
                              CHECK constraints — see docs/accounts-receivable.md)
 prisma.config.ts            Prisma 7 config (schema path, datasource URL source)
@@ -149,7 +167,9 @@ AIProvider (implemented, Phase 3;      generateStructured<T> — see src/server/
                                         Yandex AI recognized, not implemented.
 EmailProvider (implemented, Phase 4)   send(message) over SMTP — see src/server/email/
 MessagingProvider (implemented,        send(message) — see src/server/messaging/. Real
-  Phase 6)                             Telegram adapter; no domain call site yet.
+  Phase 6; real domain call site       Telegram adapter, mirrors EmailProvider exactly;
+  since Phase 8)                       src/server/communications/send.ts calls it for
+                                        TELEGRAM-channel communications.
 BillingProvider (types only, Phase 6)  verifyAndParseWebhook — see src/server/billing/.
                                         PAYNORA's own subscription billing (distinct from
                                         AR/collections). No schema, no real SDK yet —

@@ -254,6 +254,38 @@ See `docs/communications.md` and `docs/integration-architecture.md` for
 the full design, including what is real-network-verified vs. only
 mock-tested so far.
 
+## Production Hardening — ✅ complete (2026-08-12)
+
+Not a numbered feature phase — a full adversarial audit was run against
+the Phase 8 baseline (`docs/audits/PAYNORA-AUDIT-V1.md`), and this closes
+every P0/P1 finding plus the related critical P2s
+(`docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md` has the full per-finding
+mapping to implementation/tests/limitations). Turns PAYNORA into a beta
+candidate, not a finished product — see the remediation doc's honest
+readiness assessment before treating any of this as "production-ready"
+in an unqualified sense.
+
+- [x] Postgres-backed auth rate limiting (IP + account) — enumeration-
+      safe, fail-closed
+- [x] Client-generated payment idempotency key, DB-enforced uniqueness
+- [x] Deterministic post-generation safety check on AI-drafted reminders
+- [x] Explicit confirmation UX for AUTO_SEND, the automation kill-switch,
+      and first manual send
+- [x] Recovery path for a `Communication` genuinely stuck at `SENDING`
+- [x] Automation observability: heartbeat table + secret-free health
+      endpoint
+- [x] Bounded, cursor-based automation tick batching
+- [x] Cursor-paginated invoices/customers/activity lists; new indexes
+- [x] Org-scoped hourly limits on AI generation, sends, and operator runs
+- [x] Decided and documented production hosting/DB-connection model
+- [x] P2 batch: financial-invariant defense-in-depth, defensive caps on
+      remaining lists, org-delete-cascade + backup/PITR docs, stale-doc
+      fixes
+- [x] One race condition found and fixed during this phase's own
+      adversarial self-review (unconditional finalize writes racing
+      stale-SENDING reconciliation) — see the remediation doc
+- [x] 515+ tests passing (up from 416 at the Phase 8 baseline)
+
 ## Phase 9 — Intelligence
 
 - [ ] Payment behavior analytics

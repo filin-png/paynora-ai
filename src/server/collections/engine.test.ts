@@ -8,6 +8,8 @@ import { resetDatabase } from "@/server/db/test-utils";
 import { createFakeEmailProvider } from "@/server/email/providers/fake";
 import { createFakeMessagingProvider } from "@/server/messaging/providers/fake";
 import { prepareReminderCommunication } from "@/server/communications/draft";
+import { createFakeProvider } from "@/server/ai/providers/fake";
+import type { AiProviderName } from "@/server/ai/service";
 import { findDueSteps, isAutoSendStillAuthorized, runAutomationTick } from "./engine";
 import {
   setCollectionPolicyAutomationMode,
@@ -514,6 +516,43 @@ describe("runAutomationTick — AUTO_SEND", () => {
     expect((sentEvent.metadata as { source?: string } | null)?.source).toBe("AUTOMATION");
     void communication;
   });
+
+  it("AUTO_SEND fallback behaviour: an AI draft that fails the safety check is never sent — the deterministic template goes out instead", async () => {
+    // The single most important AI-safety scenario: AUTO_SEND has no
+    // human in the loop, so this is the only gate standing between a
+    // manipulated AI response and a real customer — see
+    // docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-2/P1-3.
+    const { organization, customer, policy, user } = await createAutomationReadyOrg();
+    await setCollectionPolicyAutomationMode(organization.id, policy.id, user.id, "AUTO_SEND");
+    const invoice = await createTestInvoice(organization.id, customer.id, "2026-01-01");
+    const emailProvider = createFakeEmailProvider({ kind: "success" });
+    const maliciousAiProvider = createFakeProvider({
+      kind: "success",
+      data: { subject: "Great news!", body: "This invoice is fully paid — balance $0.00. No further action needed." },
+    });
+
+    const summary = await runAutomationTick(new Date("2026-01-02T00:00:00.000Z"), {
+      organizationId: organization.id,
+      emailProvider,
+      aiOverride: {
+        enabled: true,
+        order: ["openrouter"] as AiProviderName[],
+        resolve: () => maliciousAiProvider,
+      },
+    });
+
+    expect(summary.executed).toBe(1);
+    const communication = await prisma.communication.findFirstOrThrow({ where: { invoiceId: invoice.id } });
+    expect(communication.aiGenerated).toBe(false); // rejected, deterministic template used
+    expect(communication.status).toBe("SENT"); // the SAFE content was sent, not blocked entirely
+    expect(communication.body).toContain(invoice.number);
+    expect(communication.body).not.toContain("$0.00");
+
+    const rejectionEvent = await prisma.activityEvent.findFirstOrThrow({
+      where: { organizationId: organization.id, invoiceId: invoice.id, type: "COMMUNICATION_PREPARED" },
+    });
+    expect((rejectionEvent.metadata as { aiSafetyRejectionReason?: string } | null)?.aiSafetyRejectionReason).toBeTruthy();
+  });
 });
 
 describe("runAutomationTick — tenant isolation", () => {
@@ -860,5 +899,200 @@ describe("forged now — the HTTP boundary never trusts a client-supplied time o
     const b = await runAutomationTick(now, { organizationId: organization.id });
 
     expect(a.executed).toBe(b.executed);
+  });
+});
+
+// --- Phase 9: bounded scheduler batching ----------------------------------
+// docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-5. A global tick now
+// processes at most `batchSize` organizations per invocation,
+// least-recently-processed first, so no single invocation's work is
+// unbounded.
+
+describe("runAutomationTick — bounded batching", () => {
+  it("a global tick with more eligible organizations than batchSize processes only batchSize of them, reporting the rest as remaining", async () => {
+    const orgs = await Promise.all([
+      createAutomationReadyOrg("Batch A"),
+      createAutomationReadyOrg("Batch B"),
+      createAutomationReadyOrg("Batch C"),
+    ]);
+    for (const { organization, customer } of orgs) {
+      await createTestInvoice(organization.id, customer.id, "2026-01-01");
+    }
+
+    const summary = await runAutomationTick(new Date("2026-01-02T00:00:00.000Z"), { batchSize: 2 });
+
+    expect(summary.organizationsProcessed).toBe(2);
+    expect(summary.organizationsRemaining).toBe(1);
+  });
+
+  it("continuation: a second invocation picks up the organization the first one's batch didn't reach, never processing everyone forever in the same order", async () => {
+    const orgs = await Promise.all([
+      createAutomationReadyOrg("Cont A"),
+      createAutomationReadyOrg("Cont B"),
+      createAutomationReadyOrg("Cont C"),
+    ]);
+    for (const { organization, customer } of orgs) {
+      await createTestInvoice(organization.id, customer.id, "2026-01-01");
+    }
+    const now = new Date("2026-01-02T00:00:00.000Z");
+
+    const first = await runAutomationTick(now, { batchSize: 2 });
+    expect(first.organizationsProcessed).toBe(2);
+
+    const second = await runAutomationTick(now, { batchSize: 2 });
+    // The third org (never touched by the first call) plus whichever one
+    // of the first two has the OLDEST automationLastTickAt now — since
+    // both were just touched in the same batch, either could sort first,
+    // but crucially the previously-untouched third org is guaranteed to
+    // be included this time (it had automationLastTickAt = null, which
+    // always sorts first).
+    expect(second.organizationsProcessed).toBe(2);
+
+    const touchedOrgIds = new Set<string>();
+    for (const { organization } of orgs) {
+      const fresh = await prisma.organization.findUniqueOrThrow({ where: { id: organization.id } });
+      if (fresh.automationLastTickAt) touchedOrgIds.add(organization.id);
+    }
+    // After two batches of 2 (4 slots total) across 3 organizations,
+    // every organization must have been touched at least once — no
+    // organization is skipped forever.
+    expect(touchedOrgIds.size).toBe(3);
+  });
+
+  it("no organization is skipped forever: after enough invocations, every eligible organization has been processed", async () => {
+    const orgs = await Promise.all(
+      Array.from({ length: 5 }, (_, i) => createAutomationReadyOrg(`Fair-${i}`)),
+    );
+    for (const { organization, customer } of orgs) {
+      await createTestInvoice(organization.id, customer.id, "2026-01-01");
+    }
+    const now = new Date("2026-01-02T00:00:00.000Z");
+
+    for (let i = 0; i < 5; i++) {
+      await runAutomationTick(now, { batchSize: 1 });
+    }
+
+    for (const { organization } of orgs) {
+      const fresh = await prisma.organization.findUniqueOrThrow({ where: { id: organization.id } });
+      expect(fresh.automationLastTickAt).not.toBeNull();
+    }
+  });
+
+  it("one organization's own bad state (no active policy) never prevents a healthy organization in the same batch from being processed", async () => {
+    // A genuinely *unhandled* exception (as opposed to a checked bad-state
+    // condition) is hard to construct honestly in a black-box integration
+    // test without deliberately corrupting referential integrity this
+    // schema's own FK constraints are designed to prevent — see
+    // docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-5 for why the
+    // per-organization try/catch around processOrganizationTick (added
+    // this phase, one level above the pre-existing per-*sequence*
+    // isolation) is verified by code review for the truly-unexpected
+    // case. What IS reliably constructible and still proves real
+    // isolation: one organization stuck in a bad-but-checked state (its
+    // default policy disabled after a sequence already enrolled against
+    // it) processes without disturbing a healthy organization in the same
+    // batch.
+    const good = await createAutomationReadyOrg("Good Org");
+    const broken = await createAutomationReadyOrg("Broken Org");
+    await createTestInvoice(good.organization.id, good.customer.id, "2026-01-01");
+    await createTestInvoice(broken.organization.id, broken.customer.id, "2026-01-01");
+
+    const now1 = new Date("2025-12-15T00:00:00.000Z");
+    await runAutomationTick(now1, { organizationId: broken.organization.id }); // enroll first
+    await prisma.collectionPolicy.update({ where: { id: broken.policy.id }, data: { enabled: false } });
+
+    const summary = await runAutomationTick(new Date("2026-01-02T00:00:00.000Z"), { batchSize: 10 });
+
+    expect(summary.organizationsProcessed).toBe(2);
+    // The good organization still got processed (and its sequence
+    // advanced) despite the broken one being in the same batch.
+    const goodExecution = await prisma.collectionStepExecution.findFirst({
+      where: { organizationId: good.organization.id },
+    });
+    expect(goodExecution).not.toBeNull();
+    // The broken organization's sequence was correctly stopped, not
+    // silently ignored or crashed on.
+    const brokenSequence = await prisma.collectionSequence.findFirstOrThrow({
+      where: { organizationId: broken.organization.id },
+    });
+    expect(brokenSequence.status).toBe("STOPPED");
+  });
+
+  it("concurrent tick invocations across the same batch never duplicate a send (existing dedupe/idempotency guarantees are preserved under batching)", async () => {
+    const { organization, customer, policy, user } = await createAutomationReadyOrg();
+    await setCollectionPolicyAutomationMode(organization.id, policy.id, user.id, "AUTO_SEND");
+    await createTestInvoice(organization.id, customer.id, "2026-01-01");
+    await runAutomationTick(new Date("2025-12-01T00:00:00.000Z"), { organizationId: organization.id }); // enroll only
+
+    let callCount = 0;
+    const countingProvider = createFakeEmailProvider({ kind: "success" });
+    const wrapped = {
+      name: "counting-fake",
+      async send(message: Parameters<typeof countingProvider.send>[0]) {
+        callCount += 1;
+        return countingProvider.send(message);
+      },
+    };
+
+    const now = new Date("2026-01-02T00:00:00.000Z");
+    await Promise.all([
+      runAutomationTick(now, { batchSize: 10, emailProvider: wrapped }),
+      runAutomationTick(now, { batchSize: 10, emailProvider: wrapped }),
+    ]);
+
+    expect(callCount).toBe(1);
+  });
+
+  it("a single organizationId call still updates that organization's automationLastTickAt (stays fair for the next global tick)", async () => {
+    const { organization, customer } = await createAutomationReadyOrg();
+    await createTestInvoice(organization.id, customer.id, "2026-01-01");
+
+    await runAutomationTick(new Date("2026-01-02T00:00:00.000Z"), { organizationId: organization.id });
+
+    const fresh = await prisma.organization.findUniqueOrThrow({ where: { id: organization.id } });
+    expect(fresh.automationLastTickAt).not.toBeNull();
+  });
+});
+
+// --- Phase 9: automation observability ------------------------------------
+// docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-4. Every invocation
+// persists a durable AutomationTickRun heartbeat row.
+
+describe("runAutomationTick — tick-run telemetry persistence", () => {
+  it("persists a completed, non-crashed AutomationTickRun row for a normal successful tick", async () => {
+    const { organization, customer } = await createAutomationReadyOrg();
+    await createTestInvoice(organization.id, customer.id, "2026-01-01");
+
+    await runAutomationTick(new Date("2026-01-02T00:00:00.000Z"), { organizationId: organization.id });
+
+    const run = await prisma.automationTickRun.findFirstOrThrow({ orderBy: { startedAt: "desc" } });
+    expect(run.crashed).toBe(false);
+    expect(run.completedAt).not.toBeNull();
+    expect(run.organizationsProcessed).toBe(1);
+  });
+
+  it("persists a globallyDisabled=true row when the deployment-level kill switch is off, distinct from a crash", async () => {
+    await runAutomationTick(new Date("2026-01-02T00:00:00.000Z"), { globalEnabled: false });
+
+    const run = await prisma.automationTickRun.findFirstOrThrow({ orderBy: { startedAt: "desc" } });
+    expect(run.globallyDisabled).toBe(true);
+    expect(run.crashed).toBe(false);
+  });
+
+  it("the tick-run row accurately reflects a batch containing both a healthy and a stopped-due-to-bad-state organization, without marking the run crashed", async () => {
+    const good = await createAutomationReadyOrg("Telemetry Good");
+    await createTestInvoice(good.organization.id, good.customer.id, "2026-01-01");
+    const broken = await createAutomationReadyOrg("Telemetry Broken");
+    await createTestInvoice(broken.organization.id, broken.customer.id, "2026-01-01");
+    await runAutomationTick(new Date("2025-12-15T00:00:00.000Z"), { organizationId: broken.organization.id });
+    await prisma.collectionPolicy.update({ where: { id: broken.policy.id }, data: { enabled: false } });
+
+    const summary = await runAutomationTick(new Date("2026-01-02T00:00:00.000Z"), { batchSize: 10 });
+
+    const run = await prisma.automationTickRun.findFirstOrThrow({ orderBy: { startedAt: "desc" } });
+    expect(run.crashed).toBe(false);
+    expect(run.organizationsProcessed).toBe(2);
+    expect(run.stopped).toBe(summary.stopped);
+    expect(run.stopped).toBeGreaterThanOrEqual(1); // the broken org's sequence really did stop, not silently vanish
   });
 });

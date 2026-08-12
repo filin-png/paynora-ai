@@ -1,3 +1,6 @@
+import { RateLimitExceededError } from "@/server/rate-limit/errors";
+import { operatorRunPolicy } from "@/server/rate-limit/policies";
+import { checkRateLimit } from "@/server/rate-limit/service";
 import { detectInvoiceOverdueEvents } from "./events";
 import { ensureInsightForInvoiceOverdueEvent } from "./insights";
 import { ensureReminderProposalForInsight } from "./proposals";
@@ -29,6 +32,23 @@ export type OperatorRunSummary = {
  * counted, not allowed to abort the run for every other event.
  */
 export async function runOperator(organizationId: string): Promise<OperatorRunSummary> {
+  // Bounds how often this organization can trigger a full pipeline run
+  // (each one can invoke AI for every newly-detected event) — see
+  // docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-7. Unlike AI
+  // generation inside a single reminder, there's no safe degraded
+  // behavior for "run the pipeline anyway" — a rate-limited run is
+  // refused outright, exactly like the automation tick endpoint refuses
+  // an unauthorized request, and fails closed on an unexpected
+  // rate-limiter error for the same reason every other check in this
+  // codebase does.
+  const runLimit = await checkRateLimit("operator:run", organizationId, operatorRunPolicy());
+  if (!runLimit.allowed) {
+    throw new RateLimitExceededError(
+      runLimit.resetAt,
+      "This organization has reached its hourly limit for checking for new actions. Please try again later.",
+    );
+  }
+
   const startedAt = Date.now();
   const summary: OperatorRunSummary = {
     eventsDetected: 0,

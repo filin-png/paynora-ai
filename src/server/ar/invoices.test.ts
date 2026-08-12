@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/server/db/client";
 import { resetDatabase } from "@/server/db/test-utils";
 import { createCustomer } from "./customers";
@@ -145,6 +145,84 @@ describe("tenant isolation", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0]?.invoice.organizationId).toBe(orgA.id);
+  });
+});
+
+describe("listInvoicesWithFinancials — pagination", () => {
+  it("omitting take/cursor keeps the previous unbounded behavior (automation/enrollment/events rely on this)", async () => {
+    const { organization, customer } = await setupOrgWithCustomer();
+    for (let i = 0; i < 5; i += 1) {
+      await createInvoice(organization.id, { ...validInvoice, number: `INV-000${i}`, customerId: customer.id });
+    }
+
+    const result = await listInvoicesWithFinancials(organization.id);
+
+    expect(result).toHaveLength(5);
+  });
+
+  it("`take` bounds the result and returns exact-count pages via cursor, in stable issueDate-desc order", async () => {
+    const { organization, customer } = await setupOrgWithCustomer();
+    // Distinct issueDates so ordering is unambiguous before the id tiebreak.
+    for (let i = 0; i < 5; i += 1) {
+      await createInvoice(organization.id, {
+        ...validInvoice,
+        number: `INV-000${i}`,
+        customerId: customer.id,
+        issueDate: `2026-08-0${i + 1}`,
+      });
+    }
+
+    const firstPage = await listInvoicesWithFinancials(organization.id, "all", { take: 2 });
+    expect(firstPage).toHaveLength(2);
+    expect(firstPage[0]!.invoice.number).toBe("INV-0004"); // most recently issued first
+    expect(firstPage[1]!.invoice.number).toBe("INV-0003");
+
+    const secondPage = await listInvoicesWithFinancials(organization.id, "all", {
+      take: 2,
+      cursor: firstPage[1]!.invoice.id,
+    });
+    expect(secondPage).toHaveLength(2);
+    expect(secondPage[0]!.invoice.number).toBe("INV-0002");
+    expect(secondPage[1]!.invoice.number).toBe("INV-0001");
+
+    const thirdPage = await listInvoicesWithFinancials(organization.id, "all", {
+      take: 2,
+      cursor: secondPage[1]!.invoice.id,
+    });
+    expect(thirdPage).toHaveLength(1); // exactly the remainder — no duplicates, no gaps
+    expect(thirdPage[0]!.invoice.number).toBe("INV-0000");
+  });
+
+  it("paginates correctly together with the customerId filter", async () => {
+    const { organization, customer: customerA } = await setupOrgWithCustomer("Org");
+    const customerB = await createCustomer(organization.id, { name: "Other Customer" });
+    await createInvoice(organization.id, { ...validInvoice, number: "A-1", customerId: customerA.id });
+    await createInvoice(organization.id, { ...validInvoice, number: "A-2", customerId: customerA.id });
+    await createInvoice(organization.id, { ...validInvoice, number: "B-1", customerId: customerB.id });
+
+    const page = await listInvoicesWithFinancials(organization.id, "all", {
+      customerId: customerA.id,
+      take: 10,
+    });
+
+    expect(page).toHaveLength(2);
+    expect(page.every(({ invoice }) => invoice.customerId === customerA.id)).toBe(true);
+  });
+
+  it("a cursor id belonging to another organization's invoice never leaks that organization's data", async () => {
+    const { organization: orgA, customer: customerA } = await setupOrgWithCustomer("Org A");
+    const { organization: orgB, customer: customerB } = await setupOrgWithCustomer("Org B");
+    const invoiceB = await createInvoice(orgB.id, { ...validInvoice, number: "B-1", customerId: customerB.id });
+    await createInvoice(orgA.id, { ...validInvoice, number: "A-1", customerId: customerA.id });
+
+    // orgA queries using orgB's real invoice id as the pagination cursor —
+    // this must never surface orgB's invoice, and must behave exactly
+    // like a nonexistent/meaningless cursor, not throw or leak a signal
+    // distinguishing "exists in another org" from "doesn't exist at all".
+    const result = await listInvoicesWithFinancials(orgA.id, "all", { take: 10, cursor: invoiceB.id });
+
+    expect(result.every(({ invoice }) => invoice.organizationId === orgA.id)).toBe(true);
+    expect(result.some(({ invoice }) => invoice.id === invoiceB.id)).toBe(false);
   });
 });
 
@@ -306,5 +384,33 @@ describe("computeInvoiceFinancials — lifecycle and dates", () => {
     );
     expect(financials.isOverdue).toBe(false);
     expect(financials.isPaid).toBe(false);
+  });
+});
+
+describe("computeInvoiceFinancials — financial invariant defense-in-depth (P2-2)", () => {
+  it("clamps outstandingMinor to zero (never negative) if paidMinor somehow exceeds amountMinor", () => {
+    const financials = computeInvoiceFinancials(
+      { amountMinor: majorToMinor(500), status: "OPEN" as const, dueDate: new Date("2026-08-20T00:00:00.000Z") },
+      majorToMinor(600), // more than amountMinor — should never happen via recordPayment's OverpaymentError, but this is the defense-in-depth backstop
+      "2026-08-15",
+    );
+
+    expect(financials.outstandingMinor).toBe(0n);
+    expect(financials.isPaid).toBe(true); // still correctly treated as fully paid, not "paid" with a negative balance
+    expect(financials.isOverdue).toBe(false);
+  });
+
+  it("logs the invariant violation for investigation rather than failing silently", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    computeInvoiceFinancials(
+      { amountMinor: majorToMinor(500), status: "OPEN" as const, dueDate: new Date("2026-08-20T00:00:00.000Z") },
+      majorToMinor(600),
+      "2026-08-15",
+    );
+
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy.mock.calls[0]?.[0]).toContain("financial invariant violated");
+    errorSpy.mockRestore();
   });
 });

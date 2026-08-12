@@ -1,9 +1,10 @@
-import type {
-  ActionProposal,
-  Communication,
-  CommunicationStatus,
-  DeliveryAttempt,
-  DeliveryFailureCategory,
+import {
+  Prisma,
+  type ActionProposal,
+  type Communication,
+  type CommunicationStatus,
+  type DeliveryAttempt,
+  type DeliveryFailureCategory,
 } from "@prisma/client";
 
 import { recordActivityEvent } from "@/server/ar/activity";
@@ -16,6 +17,9 @@ import { MessagingProviderRejectedError } from "@/server/messaging/errors";
 import { dispatchMessage } from "@/server/messaging/gateway";
 import { resolveMessagingProvider } from "@/server/messaging/service";
 import type { MessagingProvider } from "@/server/messaging/types";
+import { RateLimitExceededError } from "@/server/rate-limit/errors";
+import { communicationSendPolicy } from "@/server/rate-limit/policies";
+import { checkRateLimit } from "@/server/rate-limit/service";
 import { CommunicationResourceNotFoundError, InvalidCommunicationTransitionError } from "./errors";
 
 /** Who actually triggered this send — encoded in the ActivityEvent's metadata, not a schema change. See docs/communications.md#audit-trail. */
@@ -98,6 +102,124 @@ export async function listDeliveryAttempts(organizationId: string, communication
   });
 }
 
+/**
+ * How long a `Communication` can sit at `SENDING` with its most recent
+ * `DeliveryAttempt` still `PENDING` before it's treated as genuinely
+ * stuck (a process crash between claim and finalize — see the module doc
+ * comment above) rather than a request that might still be in flight.
+ * Comfortably larger than the longest real provider timeout in this
+ * codebase (Email/Messaging: 15s) — see docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md
+ * P1-3.
+ */
+export const STALE_SENDING_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
+
+export type ReconcileStaleSendingResult = {
+  communication: Communication;
+  deliveryAttempt: DeliveryAttempt;
+};
+
+/**
+ * The recovery path for a `Communication` genuinely stuck at `SENDING` —
+ * see docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-3 for the finding
+ * this closes: previously, `SENDING` was excluded from every
+ * `allowedFrom` list in `sendCommunication` *forever*, with no way back
+ * in, and the Action Center UI offered a "Resend anyway" button for that
+ * exact state that was guaranteed to fail.
+ *
+ * This does NOT resend anything and does NOT decide whether the original
+ * attempt actually reached the customer — a provider may well have
+ * accepted the message before the process died. It only moves the
+ * communication from the permanently-stuck `SENDING` state to the
+ * already-well-understood `UNCERTAIN` state, which — exactly like any
+ * other `UNCERTAIN` outcome — still requires an explicit
+ * `acknowledgeUncertainRisk: true` from a human before `sendCommunication`
+ * will attempt anything further. This function is the "admit we don't
+ * know" step; resending (accepting the duplicate-send risk) remains a
+ * deliberate, separate, already-existing, already-tested step.
+ *
+ * Refuses to act on a `SENDING` communication whose most recent attempt
+ * is still within `STALE_SENDING_THRESHOLD_MS` — a fresh `SENDING` might
+ * genuinely still be in flight, and reconciling it early would be an
+ * unsafe, premature judgment call.
+ *
+ * Concurrency-safe via the same atomic compare-and-swap technique used
+ * throughout this codebase: the `SENDING -> UNCERTAIN` transition only
+ * commits if the row is still `SENDING` at that instant, so two
+ * concurrent reconcile attempts (or a reconcile racing the original
+ * attempt actually completing) can never both "win", and can never
+ * silently overwrite a `SENT`/`FAILED` outcome that landed in between.
+ */
+export async function reconcileStaleSendingCommunication(
+  organizationId: string,
+  communicationId: string,
+  now: Date = new Date(),
+): Promise<ReconcileStaleSendingResult> {
+  const communication = await prisma.communication.findFirst({ where: { id: communicationId, organizationId } });
+  if (!communication) throw new CommunicationResourceNotFoundError("Communication");
+  if (communication.status !== "SENDING") {
+    throw new InvalidCommunicationTransitionError(
+      communication.status,
+      "only a communication currently stuck at SENDING can be reconciled",
+    );
+  }
+
+  const pendingAttempt = await prisma.deliveryAttempt.findFirst({
+    where: { communicationId, organizationId, status: "PENDING" },
+    orderBy: { attemptNumber: "desc" },
+  });
+  if (!pendingAttempt) {
+    throw new InvalidCommunicationTransitionError(
+      communication.status,
+      "no pending delivery attempt was found to reconcile",
+    );
+  }
+
+  const ageMs = now.getTime() - pendingAttempt.startedAt.getTime();
+  if (ageMs < STALE_SENDING_THRESHOLD_MS) {
+    throw new InvalidCommunicationTransitionError(
+      communication.status,
+      `this send attempt started only ${Math.round(ageMs / 1000)}s ago and may still be genuinely in flight — wait before reconciling`,
+    );
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const claim = await tx.communication.updateMany({
+      where: { id: communicationId, organizationId, status: "SENDING" },
+      data: { status: "UNCERTAIN" },
+    });
+    if (claim.count !== 1) {
+      const current = await tx.communication.findFirst({ where: { id: communicationId, organizationId } });
+      if (!current) throw new CommunicationResourceNotFoundError("Communication");
+      throw new InvalidCommunicationTransitionError(
+        current.status,
+        "this communication is no longer stuck at SENDING — it may have just been reconciled or resolved concurrently",
+      );
+    }
+
+    const updatedAttempt = await tx.deliveryAttempt.update({
+      where: { id: pendingAttempt.id },
+      data: {
+        status: "UNKNOWN",
+        failureCategory: "TIMEOUT_OR_UNKNOWN",
+        failureMessage: `No delivery confirmation was observed within ${Math.round(STALE_SENDING_THRESHOLD_MS / 60000)} minutes of this attempt starting — the provider may or may not have received it. Reconciled to allow manual review; never auto-retried.`,
+        completedAt: now,
+      },
+    });
+    const updatedCommunication = await tx.communication.findUniqueOrThrow({ where: { id: communicationId } });
+
+    await recordActivityEvent(tx, {
+      organizationId,
+      type: "COMMUNICATION_SEND_FAILED",
+      summary: `Payment reminder delivery status reconciled to uncertain for invoice ${updatedCommunication.invoiceId} (stuck at SENDING with no resolution)`,
+      customerId: updatedCommunication.customerId,
+      invoiceId: updatedCommunication.invoiceId,
+      metadata: { outcome: "UNCERTAIN", failureCategory: "TIMEOUT_OR_UNKNOWN", reconciledFromStaleSending: true },
+    });
+
+    return { communication: updatedCommunication, deliveryAttempt: updatedAttempt };
+  });
+}
+
 const ALWAYS_SENDABLE_FROM: CommunicationStatus[] = ["DRAFT", "FAILED"];
 const UNCERTAIN_SENDABLE_FROM: CommunicationStatus[] = ["DRAFT", "FAILED", "UNCERTAIN"];
 
@@ -160,6 +282,35 @@ export async function sendCommunication(
   const messagingProvider =
     channelLookup.channel === "TELEGRAM" ? (options.messagingProvider ?? resolveMessagingProvider()) : null;
   const providerName = (channelLookup.channel === "EMAIL" ? emailProvider?.name : messagingProvider?.name)!;
+
+  // Bounds real provider dispatch volume/cost per organization per hour —
+  // see docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-7. Checked here,
+  // before any state change, for the same reason provider resolution is:
+  // a blocked send must never create a DeliveryAttempt or move the
+  // communication into SENDING. Applies uniformly to USER and AUTOMATION
+  // sends — the point is a total-cost ceiling for the organization
+  // regardless of what triggered the send. Fails closed (throws) on an
+  // unexpected rate-limiter error, consistent with every other rate limit
+  // in this codebase.
+  //
+  // A genuine retry (after FAILED, or UNCERTAIN with acknowledgement) is
+  // a new real dispatch and correctly consumes a new slot each time. The
+  // one case this doesn't perfectly account for is two truly concurrent
+  // duplicate requests (e.g. a double-click) that both reach this check
+  // before either wins the claim below — the loser still consumes a slot
+  // even though it never dispatches anything. That's an accepted,
+  // documented imprecision (at most one wasted slot per genuine race, not
+  // a correctness bug) rather than moving this check after the claim,
+  // which would require inventing a new terminal DeliveryAttempt outcome
+  // for "claimed but blocked before dispatch" — not justified by an edge
+  // case this narrow.
+  const sendLimit = await checkRateLimit("communication:send", organizationId, communicationSendPolicy());
+  if (!sendLimit.allowed) {
+    throw new RateLimitExceededError(
+      sendLimit.resetAt,
+      "This organization has reached its hourly limit for sending reminders. Please try again later.",
+    );
+  }
 
   const allowedFrom = options.acknowledgeUncertainRisk ? UNCERTAIN_SENDABLE_FROM : ALWAYS_SENDABLE_FROM;
   const actorSource: CommunicationActorSource = options.actorSource ?? "USER";
@@ -254,6 +405,37 @@ export async function sendCommunication(
   }
 }
 
+/**
+ * `finalizeSuccess`/`finalizeTerminal` record the outcome of *one specific*
+ * dispatch attempt that started at claim time — but the provider call they
+ * are awaiting is not itself cancellable, so it can still resolve after
+ * that same attempt was independently reconciled (see
+ * `reconcileStaleSendingCommunication` above) by a stale-SENDING recovery
+ * that ran while this call was still genuinely in flight. Both finalize
+ * functions gate their `DeliveryAttempt` update on the attempt still being
+ * `PENDING` (a compare-and-swap, exactly like the claim step) — a
+ * late-arriving outcome for an attempt that was already finalized some
+ * other way is discarded rather than silently overwriting whatever the
+ * authoritative, already-recorded outcome was. Found and fixed during this
+ * phase's adversarial self-review; see
+ * docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-3.
+ */
+async function staleDispatchOutcome(
+  tx: Prisma.TransactionClient,
+  communicationId: string,
+  deliveryAttemptId: string,
+  discardedOutcome: string,
+): Promise<SendCommunicationResult> {
+  const [communication, deliveryAttempt] = await Promise.all([
+    tx.communication.findUniqueOrThrow({ where: { id: communicationId } }),
+    tx.deliveryAttempt.findUniqueOrThrow({ where: { id: deliveryAttemptId } }),
+  ]);
+  console.warn(
+    `[communications] discarded a late-arriving ${discardedOutcome} outcome for delivery attempt ${deliveryAttemptId} — it was already finalized (current status: ${deliveryAttempt.status})`,
+  );
+  return { communication, deliveryAttempt, actionProposal: null };
+}
+
 async function finalizeSuccess(
   organizationId: string,
   communication: Communication,
@@ -264,14 +446,23 @@ async function finalizeSuccess(
 ): Promise<SendCommunicationResult> {
   const channelLabel = communication.channel === "EMAIL" ? "email" : "Telegram message";
   return prisma.$transaction(async (tx) => {
-    const updatedAttempt = await tx.deliveryAttempt.update({
-      where: { id: deliveryAttempt.id },
+    const attemptClaim = await tx.deliveryAttempt.updateMany({
+      where: { id: deliveryAttempt.id, status: "PENDING" },
       data: { status: "SUCCESS", providerMessageId, completedAt: new Date() },
     });
-    const updatedCommunication = await tx.communication.update({
-      where: { id: communication.id },
+    if (attemptClaim.count !== 1) {
+      return staleDispatchOutcome(tx, communication.id, deliveryAttempt.id, "SUCCESS");
+    }
+    const updatedAttempt = await tx.deliveryAttempt.findUniqueOrThrow({ where: { id: deliveryAttempt.id } });
+    // Guards Communication.status too — always true in practice (this
+    // attempt and its Communication only ever move together, including in
+    // reconcileStaleSendingCommunication), but never claim SENT purely
+    // because the DeliveryAttempt CAS above succeeded.
+    await tx.communication.updateMany({
+      where: { id: communication.id, status: "SENDING" },
       data: { status: "SENT", sentAt: new Date() },
     });
+    const updatedCommunication = await tx.communication.findUniqueOrThrow({ where: { id: communication.id } });
     await recordActivityEvent(tx, {
       organizationId,
       type: "COMMUNICATION_SENT",
@@ -326,8 +517,8 @@ async function finalizeTerminal(
   },
 ): Promise<SendCommunicationResult> {
   return prisma.$transaction(async (tx) => {
-    const updatedAttempt = await tx.deliveryAttempt.update({
-      where: { id: deliveryAttempt.id },
+    const attemptClaim = await tx.deliveryAttempt.updateMany({
+      where: { id: deliveryAttempt.id, status: "PENDING" },
       data: {
         status: outcome.deliveryStatus,
         failureCategory: outcome.failureCategory,
@@ -335,10 +526,17 @@ async function finalizeTerminal(
         completedAt: new Date(),
       },
     });
-    const updatedCommunication = await tx.communication.update({
-      where: { id: communication.id },
+    if (attemptClaim.count !== 1) {
+      return staleDispatchOutcome(tx, communication.id, deliveryAttempt.id, outcome.outcome);
+    }
+    const updatedAttempt = await tx.deliveryAttempt.findUniqueOrThrow({ where: { id: deliveryAttempt.id } });
+    // See finalizeSuccess's identical guard above for why this is a CAS
+    // rather than an unconditional update.
+    await tx.communication.updateMany({
+      where: { id: communication.id, status: "SENDING" },
       data: { status: outcome.communicationStatus },
     });
+    const updatedCommunication = await tx.communication.findUniqueOrThrow({ where: { id: communication.id } });
     const channelLabel = communication.channel === "EMAIL" ? "email" : "Telegram message";
     await recordActivityEvent(tx, {
       organizationId,

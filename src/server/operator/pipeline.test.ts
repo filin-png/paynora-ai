@@ -6,6 +6,9 @@ import { majorToMinor } from "@/server/ar/money";
 import { createTestOrganization } from "@/server/ar/test-fixtures";
 import { prisma } from "@/server/db/client";
 import { resetDatabase } from "@/server/db/test-utils";
+import { RateLimitExceededError } from "@/server/rate-limit/errors";
+import { operatorRunPolicy } from "@/server/rate-limit/policies";
+import { checkRateLimit } from "@/server/rate-limit/service";
 import { runOperator } from "./pipeline";
 
 beforeEach(async () => {
@@ -108,4 +111,40 @@ describe("runOperator", () => {
     const proposalsForB = await prisma.actionProposal.count({ where: { organizationId: orgB.id } });
     expect(proposalsForB).toBe(0);
   });
+});
+
+describe("runOperator — abuse control / operator-run rate limit (P1-7)", () => {
+  it("refuses to run once the organization's hourly run budget is exhausted", async () => {
+    const { organization } = await createTestOrganization();
+    const customer = await createCustomer(organization.id, { name: "Acme Co" });
+    await createOverdueInvoice(organization.id, customer.id, "INV-1");
+
+    const policy = operatorRunPolicy();
+    for (let i = 0; i < policy.maxAttempts; i += 1) {
+      await checkRateLimit("operator:run", organization.id, policy);
+    }
+
+    await expect(runOperator(organization.id)).rejects.toThrow(RateLimitExceededError);
+
+    // Blocked before doing any work — no event/insight/proposal created by the refused call.
+    const proposals = await prisma.actionProposal.count({ where: { organizationId: organization.id } });
+    expect(proposals).toBe(0);
+  }, 20000);
+
+  it("a different organization's run budget is unaffected by another organization's exhausted limit", async () => {
+    const { organization: orgA } = await createTestOrganization("Org A");
+    const { organization: orgB } = await createTestOrganization("Org B");
+    const customerB = await createCustomer(orgB.id, { name: "B Customer" });
+    await createOverdueInvoice(orgB.id, customerB.id, "INV-1");
+
+    const policy = operatorRunPolicy();
+    for (let i = 0; i < policy.maxAttempts; i += 1) {
+      await checkRateLimit("operator:run", orgA.id, policy);
+    }
+
+    await expect(runOperator(orgA.id)).rejects.toThrow(RateLimitExceededError);
+
+    const summaryB = await runOperator(orgB.id);
+    expect(summaryB.eventsNew).toBe(1); // org B's budget is untouched
+  }, 20000);
 });

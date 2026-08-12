@@ -72,6 +72,14 @@ model Organization {
   // not by itself send anything: it only allows runAutomationTick to look
   // at this org's enabled CollectionPolicy/CollectionSequence rows at all.
   automationEnabled Boolean  @default(false)
+  // Phase 9: the scheduler's fair-rotation cursor — see
+  // src/server/collections/engine.ts#resolveTargetOrganizationIds and
+  // docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-5. Null means "never
+  // processed," which sorts first (highest priority) alongside genuinely
+  // stale organizations. Updated after an org is processed in a tick,
+  // regardless of that org's own success/failure, so one broken
+  // organization never blocks others from rotating through.
+  automationLastTickAt DateTime?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -181,6 +189,9 @@ model Invoice {
   @@unique([organizationId, number])
   @@index([organizationId, status])
   @@index([organizationId, dueDate])
+  // Phase 9: backs listInvoicesWithFinancials's `orderBy: { issueDate: "desc" }`
+  // over an organization-scoped query — see docs/audits/PAYNORA-AUDIT-V1.md P1-4.
+  @@index([organizationId, issueDate])
   @@index([customerId])
   @@map("invoices")
 }
@@ -192,13 +203,25 @@ model Payment {
   amountMinor    BigInt
   paidAt         DateTime @db.Date
   note           String?
+  // Phase 9: client-generated idempotency token — see
+  // src/server/ar/payments.ts#recordPayment and
+  // docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-1. Nullable so existing
+  // rows (recorded before this column existed) are unaffected; a plain
+  // Postgres unique constraint never conflicts across multiple NULLs, so
+  // this only starts enforcing dedup once every new payment supplies one
+  // (enforced by paymentInputSchema, not by this column being NOT NULL).
+  idempotencyKey String?
   createdAt      DateTime @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   invoice      Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
 
+  @@unique([invoiceId, idempotencyKey])
   @@index([organizationId])
   @@index([invoiceId])
+  // Phase 9: backs listRecentPayments's `orderBy: { createdAt: "desc" }`
+  // over an organization-scoped query — see docs/audits/PAYNORA-AUDIT-V1.md P1-4.
+  @@index([organizationId, createdAt])
   @@map("payments")
 }
 
@@ -717,4 +740,62 @@ model CollectionStepExecution {
   @@index([organizationId])
   @@index([sequenceId])
   @@map("collection_step_executions")
+}
+
+// --- Phase 9: Production Hardening ---------------------------------------
+// Rate limiting and automation observability infrastructure — see
+// docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md (P0-1, P1-4, P1-5, P1-7).
+
+/// A durable, multi-instance-safe fixed-window rate-limit counter —
+/// deliberately Postgres-backed rather than in-process memory, since an
+/// in-memory counter means nothing once more than one server process
+/// exists (serverless, or more than one long-lived instance behind a load
+/// balancer) — see src/server/rate-limit/service.ts and
+/// docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P0-1. `(scope, key,
+/// windowStart)` is the whole design: an atomic Postgres upsert
+/// (`INSERT ... ON CONFLICT DO UPDATE ... RETURNING`) is what makes
+/// concurrent requests unable to trivially race past the limit, not
+/// application-level locking.
+model RateLimitCounter {
+  id          String   @id @default(cuid())
+  scope       String
+  key         String
+  windowStart DateTime
+  count       Int      @default(0)
+  updatedAt   DateTime @updatedAt
+
+  @@unique([scope, key, windowStart])
+  @@index([scope, key])
+  @@map("rate_limit_counters")
+}
+
+/// One row per `runAutomationTick` invocation — the durable heartbeat a
+/// health/status endpoint reads from, so "is automation actually running"
+/// is answerable from persisted state, not just a log line that requires
+/// someone to be watching. Deliberately contains no customer data, message
+/// content, or provider secrets — only counts and a duration, safe to
+/// expose through an operational status surface. See
+/// src/server/collections/health.ts and
+/// docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-4.
+model AutomationTickRun {
+  id                     String    @id @default(cuid())
+  startedAt              DateTime  @default(now())
+  completedAt            DateTime?
+  durationMs             Int?
+  globallyDisabled       Boolean   @default(false)
+  organizationsProcessed Int       @default(0)
+  organizationsRemaining Int       @default(0)
+  scanned                Int       @default(0)
+  enrolled               Int       @default(0)
+  claimed                Int       @default(0)
+  executed               Int       @default(0)
+  skipped                Int       @default(0)
+  stopped                Int       @default(0)
+  blocked                Int       @default(0)
+  failed                 Int       @default(0)
+  crashed                Boolean   @default(false)
+  errorMessage           String?
+
+  @@index([startedAt])
+  @@map("automation_tick_runs")
 }

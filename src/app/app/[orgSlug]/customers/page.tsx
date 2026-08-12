@@ -13,27 +13,52 @@ import { formatMoney } from "@/server/ar/money";
 import { getCustomerReceivablesSummaries } from "@/server/ar/summary";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
 
+// Bounds the customers list page's query cost regardless of organization
+// size — see docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-6. `+1` is
+// the standard "peek ahead" trick: fetching one extra row reveals whether
+// another page exists without a separate COUNT query.
+const CUSTOMER_PAGE_SIZE = 50;
+
 export default async function CustomersPage({
   params,
   searchParams,
 }: {
   params: Promise<{ orgSlug: string }>;
-  searchParams: Promise<{ archived?: string }>;
+  searchParams: Promise<{ archived?: string; cursor?: string }>;
 }) {
   const { orgSlug } = await params;
-  const { archived } = await searchParams;
+  const { archived, cursor } = await searchParams;
   const context = await requireOrganizationMembershipForPage(orgSlug);
   const showArchived = archived === "1";
-  const [customers, receivables] = await Promise.all([
-    listCustomers(context.organization.id, { includeArchived: showArchived }),
+  const [page, receivables] = await Promise.all([
+    listCustomers(context.organization.id, {
+      includeArchived: showArchived,
+      cursor,
+      take: CUSTOMER_PAGE_SIZE + 1,
+    }),
     getCustomerReceivablesSummaries(context.organization.id),
   ]);
+  const hasMore = page.length > CUSTOMER_PAGE_SIZE;
+  const customers = hasMore ? page.slice(0, CUSTOMER_PAGE_SIZE) : page;
+  const nextCursor = hasMore ? customers.at(-1)!.id : null;
+
+  function pageHref(nextPageCursor: string | null): string {
+    const query = new URLSearchParams();
+    if (showArchived) query.set("archived", "1");
+    if (nextPageCursor) query.set("cursor", nextPageCursor);
+    const queryString = query.toString();
+    return `/app/${orgSlug}/customers${queryString ? `?${queryString}` : ""}`;
+  }
 
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Customers"
-        description={customers.length === 0 ? "No customers yet." : `${customers.length} customer${customers.length === 1 ? "" : "s"}.`}
+        description={
+          customers.length === 0
+            ? "No customers yet."
+            : `${customers.length}${hasMore ? "+" : ""} customer${customers.length === 1 && !hasMore ? "" : "s"}.`
+        }
         actions={
           <Link href={`/app/${orgSlug}/customers/new`} className={cn(buttonVariants())}>
             <Plus className="size-4" />
@@ -98,6 +123,12 @@ export default async function CustomersPage({
           }
         />
       )}
+
+      {hasMore ? (
+        <Link href={pageHref(nextCursor)} className={cn(buttonVariants({ variant: "outline" }), "self-center")}>
+          Next page
+        </Link>
+      ) : null}
     </div>
   );
 }

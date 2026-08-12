@@ -5,6 +5,42 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Production Hardening (Post-Phase-8 Audit Remediation)
+
+Closes every P0/P1 finding (plus related critical P2s) from
+`docs/audits/PAYNORA-AUDIT-V1.md`; full mapping in
+`docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md`. Turns PAYNORA into a beta
+candidate, not a finished product.
+
+- Postgres-backed auth rate limiting (per-IP and per-account,
+  enumeration-safe, fail-closed) — `src/server/rate-limit/`.
+- Payment recording idempotency: client-generated key,
+  `@@unique([invoiceId, idempotencyKey])` at the DB level.
+- Deterministic post-generation safety check on AI-drafted reminders —
+  `src/server/communications/ai-safety.ts`.
+- Confirmation dialogs for AUTO_SEND, the automation kill-switch, and
+  first manual send — `src/components/ui/confirm-action-button.tsx`.
+- Recovery path for a `Communication` stuck at `SENDING` —
+  `reconcileStaleSendingCommunication`. Also fixes a race condition found
+  during this phase's own adversarial self-review where a late-arriving
+  provider outcome could silently overwrite an already-reconciled state.
+- Automation observability: `AutomationTickRun` heartbeat table +
+  `GET /internal/automation/health`.
+- Bounded, cursor-based automation tick batching
+  (`Organization.automationLastTickAt`).
+- Cursor-paginated invoices/customers/activity lists; new
+  `organizationId`+`issueDate`/`createdAt` indexes.
+- Org-scoped hourly rate limits on AI generation, sends, and operator
+  runs.
+- Decided and documented production hosting/DB-connection model —
+  `DEPLOYMENT.md`.
+- P2 batch: financial-invariant defense-in-depth, defensive caps on
+  remaining unbounded lists, org-delete-cascade + backup/PITR docs,
+  stale `ARCHITECTURE.md` fixes, missing `(no-org)` loading state.
+- 517 tests passing (up from 416 at the Phase 8 baseline).
+- New migration:
+  `prisma/migrations/20260812201422_phase9_production_hardening`.
+
 ### Added — Phase 8: Production Communications & AI
 
 - `prisma/schema.prisma` + `prisma/migrations/20260812152618_phase8_communication_channels`:
