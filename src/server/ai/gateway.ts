@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { recordProviderTelemetry } from "@/server/providers/telemetry";
 import { AIProviderError, AITimeoutError, AIValidationError } from "./errors";
 import type { AIProvider, AIRequest, AIResult } from "./types";
 
@@ -7,12 +8,14 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 
 /**
  * The AI Gateway: the one place a provider's `generateStructured` is
- * actually invoked. Enforces a timeout and validates the response against
- * the request's schema before handing it back — a provider can return
- * anything, but nothing leaves this function that hasn't been checked.
- * Callers pass the provider explicitly (see
- * src/server/ai/service.ts for the layer that resolves *which* provider
- * from configuration) — that keeps this function trivially testable with a
+ * actually invoked. Enforces a timeout, validates the response against the
+ * request's schema before handing it back — a provider can return
+ * anything, but nothing leaves this function that hasn't been checked —
+ * and records structured, secret-free telemetry for every call regardless
+ * of caller (src/server/ai/service.ts is production's only caller today,
+ * but this is the real choke point: see
+ * docs/integration-architecture.md#observability). Callers pass the
+ * provider explicitly, which keeps this function trivially testable with a
  * fake provider and keeps provider selection out of the gateway itself.
  */
 export async function runAIGeneration<T>(
@@ -21,21 +24,57 @@ export async function runAIGeneration<T>(
   options: { timeoutMs?: number } = {},
 ): Promise<AIResult<T>> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const startedAt = Date.now();
 
   let raw: AIResult<T>;
   try {
     raw = await withTimeout(provider.generateStructured(request), provider.name, timeoutMs);
   } catch (error) {
-    if (error instanceof AITimeoutError) throw error;
+    if (error instanceof AITimeoutError) {
+      recordProviderTelemetry({
+        category: "ai",
+        provider: provider.name,
+        operation: "generateStructured",
+        result: "timeout",
+        durationMs: Date.now() - startedAt,
+        errorCode: error.name,
+      });
+      throw error;
+    }
     const message = error instanceof Error ? error.message : String(error);
-    throw new AIProviderError(provider.name, message);
+    const wrapped = new AIProviderError(provider.name, message);
+    recordProviderTelemetry({
+      category: "ai",
+      provider: provider.name,
+      operation: "generateStructured",
+      result: "failure",
+      durationMs: Date.now() - startedAt,
+      errorCode: wrapped.name,
+    });
+    throw wrapped;
   }
 
   const parsed = request.schema.safeParse(raw.data);
   if (!parsed.success) {
-    throw new AIValidationError(provider.name, z.prettifyError(parsed.error));
+    const validationError = new AIValidationError(provider.name, z.prettifyError(parsed.error));
+    recordProviderTelemetry({
+      category: "ai",
+      provider: provider.name,
+      operation: "generateStructured",
+      result: "failure",
+      durationMs: Date.now() - startedAt,
+      errorCode: validationError.name,
+    });
+    throw validationError;
   }
 
+  recordProviderTelemetry({
+    category: "ai",
+    provider: provider.name,
+    operation: "generateStructured",
+    result: "success",
+    durationMs: Date.now() - startedAt,
+  });
   return { data: parsed.data, provider: raw.provider, usage: raw.usage };
 }
 

@@ -81,6 +81,24 @@ src/
                              Communications (src/server/communications)
                              pipelines on a schedule; never a second
                              Operator or a second email sender.
+    messaging/               Provider-agnostic Messaging Gateway (Phase 6) —
+                             see docs/integration-architecture.md#messaging.
+                             Telegram adapter + test-only fake; mirrors
+                             src/server/email/ exactly. No domain call site
+                             yet — a foundation, like AIProvider was at the
+                             start of Phase 3.
+    billing/                 BillingProvider types/contract only (Phase 6) —
+                             see docs/integration-architecture.md#billing.
+                             PAYNORA's own subscription billing, distinct
+                             from AR/collections. No Prisma schema, no real
+                             Stripe/YooKassa SDK call yet; Phase 7
+                             "Monetization" work.
+    providers/                Cross-cutting provider registry, deployment
+                             profile, health model, and telemetry — see
+                             docs/integration-architecture.md. Not owned by
+                             any one category (ai/email/messaging/billing);
+                             the one place that reports on all of them
+                             together.
 prisma/
   schema.prisma            User, Organization, OrganizationMember,
                              Customer, Invoice, Payment, ActivityEvent,
@@ -125,11 +143,21 @@ from any one vendor, region, or founder's personal accounts — a direct
 requirement for a sellable asset.
 
 ```
-AIProvider (implemented, Phase 3)    generateStructured<T> — see src/server/ai/
-EmailProvider (implemented, Phase 4)  send(message) over SMTP — see src/server/email/
-PaymentProvider                       (billing, introduced Phase 6 — not accounting sync)
-AnalyticsProvider                     product analytics
-StorageProvider                       file/document storage
+AIProvider (implemented, Phase 3;      generateStructured<T> — see src/server/ai/.
+  extended Phase 6)                    OpenRouter/Mistral real adapters, bounded
+                                        primary+fallback routing (Phase 6); GigaChat/
+                                        Yandex AI recognized, not implemented.
+EmailProvider (implemented, Phase 4)   send(message) over SMTP — see src/server/email/
+MessagingProvider (implemented,        send(message) — see src/server/messaging/. Real
+  Phase 6)                             Telegram adapter; no domain call site yet.
+BillingProvider (types only, Phase 6)  verifyAndParseWebhook — see src/server/billing/.
+                                        PAYNORA's own subscription billing (distinct from
+                                        AR/collections). No schema, no real SDK yet —
+                                        Phase 7 "Monetization" work.
+AnalyticsProvider                     product analytics — not implemented
+StorageProvider                       file/document storage — not implemented
+AccountingProvider, CRMProvider,      documented only (docs/integration-architecture.md
+  BankingProvider                     #documented-only-boundaries) — no TypeScript yet
 JobProvider                           background job scheduling — Phase 5 needed a *trigger*
                                        boundary (POST /internal/automation/tick, vendor-neutral,
                                        auth via AUTOMATION_CRON_SECRET), not a job queue: the
@@ -137,9 +165,12 @@ JobProvider                           background job scheduling — Phase 5 need
                                        it — see docs/collections-automation.md#scheduler-deployment
 ```
 
-See `docs/ai-architecture.md` for the AI provider design and
+See `docs/ai-architecture.md` for the AI provider design,
 `docs/provider-strategy.md` for the full provider list and the
-Russia-accessibility constraint driving initial adapter choices.
+Russia-accessibility constraint driving initial adapter choices, and
+`docs/integration-architecture.md` for the Phase 6 cross-cutting provider
+registry, deployment profiles, health model, and telemetry boundary that
+apply across every category above.
 
 ## Multi-tenancy
 

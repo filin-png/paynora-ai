@@ -133,4 +133,106 @@ describe("parseEnv", () => {
     expect(env.AUTOMATION_ENABLED).toBe(true);
     expect(env.AUTOMATION_CRON_SECRET).toBe("c".repeat(24));
   });
+
+  it("defaults MESSAGING_PROVIDER/BILLING_PROVIDER/DEPLOYMENT_PROFILE safely with no other config required", () => {
+    const env = parseEnv(validBase);
+    expect(env.MESSAGING_PROVIDER).toBe("none");
+    expect(env.BILLING_PROVIDER).toBe("none");
+    expect(env.DEPLOYMENT_PROFILE).toBe("LOCAL_TEST");
+    expect(env.AI_PROVIDER_FALLBACK).toBeUndefined();
+  });
+
+  it("rejects AI_PROVIDER_FALLBACK equal to AI_PROVIDER", () => {
+    expect(() =>
+      parseEnv({ ...validBase, AI_PROVIDER: "openrouter", AI_PROVIDER_FALLBACK: "openrouter" }),
+    ).toThrow(/AI_PROVIDER_FALLBACK must differ from AI_PROVIDER/);
+  });
+
+  it("rejects AI_PROVIDER=openrouter with no OPENROUTER_API_KEY/OPENROUTER_MODEL", () => {
+    expect(() => parseEnv({ ...validBase, AI_PROVIDER: "openrouter" })).toThrow(
+      /OPENROUTER_API_KEY and OPENROUTER_MODEL are required/,
+    );
+  });
+
+  it("accepts AI_PROVIDER=openrouter with a valid key and model", () => {
+    const env = parseEnv({
+      ...validBase,
+      AI_PROVIDER: "openrouter",
+      OPENROUTER_API_KEY: "sk-or-test",
+      OPENROUTER_MODEL: "test-model",
+    });
+    expect(env.AI_PROVIDER).toBe("openrouter");
+    expect(env.OPENROUTER_API_KEY).toBe("sk-or-test");
+  });
+
+  it("rejects AI_PROVIDER=mistral with no MISTRAL_API_KEY/MISTRAL_MODEL", () => {
+    expect(() => parseEnv({ ...validBase, AI_PROVIDER: "mistral" })).toThrow(
+      /MISTRAL_API_KEY and MISTRAL_MODEL are required/,
+    );
+  });
+
+  it("accepts AI_PROVIDER=mistral with a valid key and model", () => {
+    const env = parseEnv({
+      ...validBase,
+      AI_PROVIDER: "mistral",
+      MISTRAL_API_KEY: "test-key",
+      MISTRAL_MODEL: "test-model",
+    });
+    expect(env.AI_PROVIDER).toBe("mistral");
+  });
+
+  it("requires OPENROUTER_API_KEY/OPENROUTER_MODEL when openrouter is only the fallback, not the primary", () => {
+    expect(() =>
+      parseEnv({
+        ...validBase,
+        AI_PROVIDER: "mistral",
+        MISTRAL_API_KEY: "test-key",
+        MISTRAL_MODEL: "test-model",
+        AI_PROVIDER_FALLBACK: "openrouter",
+      }),
+    ).toThrow(/OPENROUTER_API_KEY and OPENROUTER_MODEL are required/);
+  });
+
+  it("accepts a primary + fallback AI configuration when both are fully configured", () => {
+    const env = parseEnv({
+      ...validBase,
+      AI_PROVIDER: "mistral",
+      MISTRAL_API_KEY: "test-key",
+      MISTRAL_MODEL: "test-model",
+      AI_PROVIDER_FALLBACK: "openrouter",
+      OPENROUTER_API_KEY: "sk-or-test",
+      OPENROUTER_MODEL: "test-model",
+    });
+    expect(env.AI_PROVIDER).toBe("mistral");
+    expect(env.AI_PROVIDER_FALLBACK).toBe("openrouter");
+  });
+
+  it("rejects MESSAGING_PROVIDER=telegram with no TELEGRAM_BOT_TOKEN", () => {
+    expect(() => parseEnv({ ...validBase, MESSAGING_PROVIDER: "telegram" })).toThrow(
+      /TELEGRAM_BOT_TOKEN is required/,
+    );
+  });
+
+  it("accepts MESSAGING_PROVIDER=telegram with a TELEGRAM_BOT_TOKEN", () => {
+    const env = parseEnv({
+      ...validBase,
+      MESSAGING_PROVIDER: "telegram",
+      TELEGRAM_BOT_TOKEN: "123456:ABC-test-token",
+    });
+    expect(env.MESSAGING_PROVIDER).toBe("telegram");
+    expect(env.TELEGRAM_BOT_TOKEN).toBe("123456:ABC-test-token");
+  });
+
+  it("accepts BILLING_PROVIDER=stripe/yookassa and any recognized DEPLOYMENT_PROFILE with no further config required", () => {
+    expect(parseEnv({ ...validBase, BILLING_PROVIDER: "stripe" }).BILLING_PROVIDER).toBe("stripe");
+    expect(parseEnv({ ...validBase, BILLING_PROVIDER: "yookassa" }).BILLING_PROVIDER).toBe("yookassa");
+    expect(parseEnv({ ...validBase, DEPLOYMENT_PROFILE: "RU" }).DEPLOYMENT_PROFILE).toBe("RU");
+    expect(parseEnv({ ...validBase, DEPLOYMENT_PROFILE: "GLOBAL" }).DEPLOYMENT_PROFILE).toBe("GLOBAL");
+  });
+
+  it("rejects an unknown DEPLOYMENT_PROFILE", () => {
+    expect(() => parseEnv({ ...validBase, DEPLOYMENT_PROFILE: "MARS" })).toThrow(
+      /Invalid environment configuration/,
+    );
+  });
 });

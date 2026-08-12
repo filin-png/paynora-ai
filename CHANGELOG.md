@@ -5,6 +5,105 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Phase 6: Integration & Provider Foundation
+
+- `src/server/providers/`: new cross-cutting module, not owned by any one
+  category — `types.ts` (`DeploymentProfile`, `ProviderCategory`,
+  `ProviderHealthStatus`, registry entry/snapshot types), `registry.ts`
+  (`getProviderRegistrySnapshot()`, `resolveHealth()`,
+  `getRecommendedVendors()`), `telemetry.ts`
+  (`recordProviderTelemetry()` — a fixed, secret-free structured shape,
+  `{category, provider, operation, result, durationMs, errorCode?,
+  requestId?, organizationId?}`, enforced structurally by TypeScript, not
+  just convention). Health is configuration-derived only — no live network
+  probe anywhere in this phase, since a "check" that itself sends a real
+  email or spends a paid AI call would be a side effect, not a check;
+  `DEGRADED`/`DOWN` are defined but never produced today, reserved for a
+  future real health-check mechanism. `DEPLOYMENT_PROFILE`
+  (`RU`/`GLOBAL`/`LOCAL_TEST`) is purely descriptive metadata, never
+  enforced against provider selection.
+- `src/lib/env.ts` extended: `AI_PROVIDER` now recognizes `openrouter`/
+  `mistral` (real adapters) alongside the existing `gigachat`/`yandex`
+  (still unimplemented); new `AI_PROVIDER_FALLBACK` (optional, must differ
+  from `AI_PROVIDER`), `OPENROUTER_API_KEY`/`OPENROUTER_MODEL`,
+  `MISTRAL_API_KEY`/`MISTRAL_MODEL`, `MESSAGING_PROVIDER`
+  (`none`/`telegram`), `TELEGRAM_BOT_TOKEN`, `BILLING_PROVIDER`
+  (`none`/`stripe`/`yookassa`), `DEPLOYMENT_PROFILE`. All optional, safe
+  defaults, cross-field validation (e.g. Telegram requires its token;
+  OpenRouter/Mistral require their key+model whether selected as primary
+  or fallback) — the app still boots with none of this set.
+- `AIProvider` routing (`src/server/ai/service.ts`): `tryGenerateStructured`
+  now tries at most two providers — the primary, then an optional distinct
+  fallback — stopping at the first confirmed (schema-validated) success;
+  never a longer chain, never retried past success. Two real vendor
+  adapters, `src/server/ai/providers/openrouter.ts`/`mistral.ts`, both
+  OpenAI-compatible HTTP adapters sharing one wire-level helper
+  (`openai-compatible-chat.ts`), reading their API key/model lazily at
+  call time (the SMTP-adapter pattern) and taking an injectable
+  `fetchImpl` for fully mocked-network unit tests — no real key or network
+  call anywhere in the suite. Errors from a non-OK HTTP response include
+  only the status code, never the response body or `Authorization` header.
+- `MessagingProvider` (`src/server/messaging/`): new category mirroring
+  `EmailProvider`'s exact shape — `types.ts`/`errors.ts`
+  (`MessagingDisabledError`/`MessagingConfigurationError`/
+  `MessagingTimeoutError`/`MessagingProviderRejectedError`/
+  `MessagingProviderUnknownError`)/`gateway.ts`
+  (`dispatchMessage` — timeout + normalized outcome + telemetry)/
+  `service.ts`/`providers/{none,fake,telegram}.ts`. The Telegram adapter
+  is a real Bot API `sendMessage` HTTP adapter (mocked-fetch tested),
+  classifying `error_code` 400/403 as a definite rejection and everything
+  else (rate limits, 5xx, network failure) as an unknown outcome; never
+  includes the request URL (embeds the bot token) in a thrown error. **No
+  domain code calls this yet** — a provider foundation, the same
+  "boundary before feature" precedent `AIProvider` itself started under in
+  Phase 3.
+- `BillingProvider` (`src/server/billing/`): normalized types/contract
+  only — `BillingCustomerId`/`BillingSubscriptionId` (opaque),
+  `BillingSubscriptionStatus` (a shared vocabulary vendor statuses
+  normalize into), `WebhookEventIdentity` (the idempotency boundary a
+  future billing domain must check against repeated webhook delivery),
+  `NormalizedSubscriptionEvent`, and a single-method `BillingProvider`
+  interface (`verifyAndParseWebhook`) that only verifies and normalizes —
+  it must never itself change financial state. Explicitly distinct from
+  AR/collections (Phase 2–5): this is what a PAYNORA organization pays
+  PAYNORA, not what their own customers pay them. No Prisma schema, no
+  real Stripe/YooKassa SDK call — selecting either resolves to a clear
+  `BillingProviderNotImplementedError`, the same precedent as AI's
+  `gigachat`/`yandex`. Real implementation is Phase 8 "Monetization," per
+  `ROADMAP.md`.
+- Telemetry retrofitted into every gateway
+  (`ai/gateway.ts#runAIGeneration`, `email/gateway.ts#dispatchEmail`,
+  `messaging/gateway.ts#dispatchMessage`) rather than left at the
+  service-call-site level — the real choke point regardless of caller,
+  recording success/failure/timeout with the correct `errorCode` for
+  every outcome, additive with no behavior change to any existing error
+  path.
+- 47 new tests (378 total) covering: AI routing/fallback bounds via
+  dependency injection (primary-succeeds-fallback-never-called,
+  primary-fails-fallback-succeeds-exactly-once, bounded-attempts-both-
+  fail, no-fallback-one-attempt, unimplemented-vendor-treated-as-failure,
+  invalid-output-triggers-fallback, disabled-short-circuits); OpenRouter/
+  Mistral/Telegram adapter request shape, response parsing, and
+  secret-absent-from-error assertions against a mocked `fetch`; Messaging
+  gateway/service parity tests mirroring Email's; Billing service
+  disabled/not-implemented tests; provider registry health-state and
+  deployment-profile-recommendation tests; `env.ts` cross-field validation
+  for every new variable; gateway-level telemetry tests (success/failure/
+  timeout, secrets and message content never appear in a logged line)
+  across AI, Email, and Messaging.
+- Zero Prisma schema changes and zero migrations in this phase — every new
+  category is provider/type code only, consistent with
+  `docs/provider-strategy.md`'s existing "no adapter before the phase that
+  needs it, an interface with no caller is dead code" rule (applied here
+  to justify *not* building a Subscription table, Storage/Accounting/CRM/
+  Banking TypeScript files, or a real Stripe/YooKassa SDK integration yet).
+- New `docs/integration-architecture.md` (the full Phase 6 design,
+  including a status table distinguishing implemented-with-tests from
+  recognized-but-unimplemented from documented-only); ARCHITECTURE.md,
+  ROADMAP.md (new Phase 6, renumbering the former Phase 6–10 to 7–11),
+  SECURITY.md, DEPLOYMENT.md, `docs/provider-strategy.md`, and
+  `.env.example` updated to match.
+
 ### Added — Phase 5: Collections Automation Engine
 
 - `CollectionPolicy`/`CollectionPolicyStep`/`CollectionSequence`/

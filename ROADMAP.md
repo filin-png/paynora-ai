@@ -102,7 +102,49 @@ was deliberately left out and why.
 See `docs/collections-automation.md` for the full design, including the
 concurrency/race-condition reasoning and everything deliberately left out.
 
-## Phase 6 — Intelligence
+## Phase 6 — Integration & Provider Foundation — ✅ complete (2026-08-12)
+
+- [x] `AIProvider` extended: bounded primary+fallback routing
+      (`AI_PROVIDER`/`AI_PROVIDER_FALLBACK`, at most two attempts, never
+      retried past a confirmed success), real OpenRouter + Mistral HTTP
+      adapters (mocked-network tested, no real key in CI); GigaChat/Yandex
+      AI recognized-but-unimplemented (clear typed error, not a silent
+      no-op or a fictional adapter)
+- [x] `MessagingProvider` boundary + real Telegram Bot API adapter
+      (mocked-network tested) — mirrors `EmailProvider`'s exact shape; no
+      domain call site wired in yet, the same "foundation before feature"
+      precedent `AIProvider` itself started under in Phase 3
+- [x] `BillingProvider` types/contract only (`verifyAndParseWebhook`,
+      normalized `BillingSubscriptionStatus`, `WebhookEventIdentity` for
+      webhook idempotency) — explicitly for PAYNORA's own subscription
+      billing, distinct from AR/collections; no Prisma schema, no real
+      Stripe/YooKassa SDK call (that's Phase 8, below)
+- [x] Cross-cutting Provider Registry (`src/server/providers/`):
+      configuration-derived health model (`HEALTHY`/`DISABLED`/`UNKNOWN`
+      only — `DEGRADED`/`DOWN` reserved for a future live health-check,
+      never a network probe with a real side effect), deployment-profile
+      metadata (`RU`/`GLOBAL`/`LOCAL_TEST`, descriptive only, never
+      enforced), and a secret-free structured telemetry boundary wired
+      into every gateway (AI/Email/Messaging)
+- [x] Storage/Accounting/CRM/Banking: documented as planned candidates
+      only, zero TypeScript — no existing domain use case to justify code
+      yet, per `docs/provider-strategy.md`'s "no adapter before the phase
+      that needs it" rule
+- [x] 47 new tests (378 total) covering routing/fallback bounds, secrets
+      absent from every new adapter's errors, disabled/misconfigured
+      providers, health-state and deployment-profile resolution, and
+      gateway-level telemetry for success/failure/timeout across AI,
+      Email, and Messaging
+- [x] Zero Prisma schema changes — every new category is provider/type
+      code only, consistent with `docs/provider-strategy.md`'s dead-code
+      rule for anything with no current caller
+
+See `docs/integration-architecture.md` for the full design, including the
+status table distinguishing implemented-with-tests from
+recognized-but-unimplemented from documented-only, and exactly why each
+scope decision was made.
+
+## Phase 7 — Intelligence
 
 - [ ] Payment behavior analytics
 - [ ] Promise-to-pay tracking, manual first, automatic extraction later
@@ -110,29 +152,39 @@ concurrency/race-condition reasoning and everything deliberately left out.
 - [ ] Risk scoring improvements
 - [ ] Collection performance analytics
 
-## Phase 7 — Monetization
+## Phase 8 — Monetization
 
-- [ ] Subscription domain model
-- [ ] `BillingProvider` abstraction (no hard-coded Stripe)
+- [ ] Subscription domain model (Prisma schema — not yet added; Phase 6
+      deliberately stopped short of this, see
+      `docs/integration-architecture.md#billing`)
+- [ ] Real `BillingProvider` adapters (Stripe, YooKassa) — the interface
+      and normalized contract already exist (`src/server/billing/`, Phase
+      6); this phase adds the actual SDK calls and a real merchant account
+      to test against
 - [ ] Plans, usage limits, entitlements
-- [ ] Subscription lifecycle (trial, active, past-due, cancelled)
+- [ ] Subscription lifecycle (trial, active, past-due, cancelled) driven
+      by real, verified `BillingProvider` webhooks
 
-## Phase 8 — Integrations (only per validated customer demand)
+## Phase 9 — Integrations (only per validated customer demand)
 
 - [ ] Accounting system integrations (candidates: local/regional + QuickBooks, Xero)
-- [ ] Payment processor integrations (candidates: Stripe once relevant, regional providers)
-- [ ] Invoice import
+- [ ] Payment processor integrations for customer-facing collection (distinct
+      from Phase 8's PAYNORA-subscription billing — candidates: Stripe once
+      relevant, regional providers)
+- [ ] Invoice import (CSV/XLSX)
+- [ ] Object storage (S3-compatible, Yandex Object Storage) for the first
+      feature that needs to store a file/document
 
-## Phase 9 — Commercialization
+## Phase 10 — Commercialization
 
 - [ ] Landing page + pricing
 - [ ] Onboarding flow
 - [ ] Transactional communication
-- [ ] Analytics funnel
+- [ ] Analytics funnel (candidate: PostHog, per `docs/provider-strategy.md`)
 - [ ] Legal pages
 - [ ] Support workflow
 
-## Phase 10 — Exit Readiness
+## Phase 11 — Exit Readiness
 
 - [ ] Remove founder dependencies
 - [ ] Complete operational documentation

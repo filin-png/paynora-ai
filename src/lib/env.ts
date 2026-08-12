@@ -27,7 +27,20 @@ const baseEnvSchema = z.object({
       32,
       "AUTH_SECRET must be at least 32 characters — generate one with `openssl rand -base64 33`",
     ),
-  AI_PROVIDER: z.enum(["none", "gigachat"]).default("none"),
+  // Phase 6 extends this to a routing table (src/server/ai/service.ts) —
+  // "gigachat"/"yandex" remain recognized-but-not-implemented (same
+  // precedent as gigachat since Phase 3: selecting them throws a clear,
+  // typed "not implemented yet" error rather than silently doing nothing
+  // or pretending to work); "openrouter"/"mistral" have real adapters.
+  AI_PROVIDER: z.enum(["none", "gigachat", "yandex", "openrouter", "mistral"]).default("none"),
+  // Optional single fallback, tried only if the primary fails — never a
+  // chain, never retried past one confirmed success. See
+  // src/server/ai/service.ts and docs/integration-architecture.md#ai-routing.
+  AI_PROVIDER_FALLBACK: z.enum(["gigachat", "yandex", "openrouter", "mistral"]).optional(),
+  OPENROUTER_API_KEY: z.string().trim().min(1).optional(),
+  OPENROUTER_MODEL: z.string().trim().min(1).optional(),
+  MISTRAL_API_KEY: z.string().trim().min(1).optional(),
+  MISTRAL_MODEL: z.string().trim().min(1).optional(),
   EMAIL_PROVIDER: z.enum(["none", "smtp"]).default("none"),
   // The sender identity for every outgoing email, regardless of provider —
   // never user-supplied per-message, see docs/communications.md#sender-safety.
@@ -61,6 +74,23 @@ const baseEnvSchema = z.object({
     .string()
     .min(20, "AUTOMATION_CRON_SECRET must be at least 20 characters")
     .optional(),
+  // Phase 6: MessagingProvider boundary (src/server/messaging/*) — a
+  // foundation with no domain call site yet (see
+  // docs/integration-architecture.md#messaging). "none" is the default;
+  // nothing sends a Telegram message anywhere in this codebase today.
+  MESSAGING_PROVIDER: z.enum(["none", "telegram"]).default("none"),
+  TELEGRAM_BOT_TOKEN: z.string().trim().min(1).optional(),
+  // Phase 6: BillingProvider boundary (src/server/billing/*) — interface
+  // and normalized types only. Selecting "stripe"/"yookassa" resolves to a
+  // clear "not implemented yet" error, the same precedent as AI_PROVIDER's
+  // unimplemented values — see docs/integration-architecture.md#billing.
+  BILLING_PROVIDER: z.enum(["none", "stripe", "yookassa"]).default("none"),
+  // Purely descriptive metadata consumed by the provider registry
+  // (src/server/providers/registry.ts) to annotate which vendor set a
+  // deployment is expected to use — never enforced as a hard restriction;
+  // one codebase, different provider configurations. See
+  // docs/integration-architecture.md#deployment-profiles.
+  DEPLOYMENT_PROFILE: z.enum(["RU", "GLOBAL", "LOCAL_TEST"]).default("LOCAL_TEST"),
 });
 
 export const envSchema = baseEnvSchema.superRefine((data, ctx) => {
@@ -84,6 +114,39 @@ export const envSchema = baseEnvSchema.superRefine((data, ctx) => {
       code: "custom",
       path: ["AUTOMATION_CRON_SECRET"],
       message: 'AUTOMATION_CRON_SECRET is required when AUTOMATION_ENABLED="true"',
+    });
+  }
+
+  const selectedAiProviders = [data.AI_PROVIDER, data.AI_PROVIDER_FALLBACK].filter(
+    (value): value is NonNullable<typeof value> => value !== undefined && value !== "none",
+  );
+  if (data.AI_PROVIDER_FALLBACK && data.AI_PROVIDER_FALLBACK === data.AI_PROVIDER) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["AI_PROVIDER_FALLBACK"],
+      message: "AI_PROVIDER_FALLBACK must differ from AI_PROVIDER — falling back to the same provider is meaningless",
+    });
+  }
+  if (selectedAiProviders.includes("openrouter") && (!data.OPENROUTER_API_KEY || !data.OPENROUTER_MODEL)) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["OPENROUTER_API_KEY"],
+      message: 'OPENROUTER_API_KEY and OPENROUTER_MODEL are required when AI_PROVIDER or AI_PROVIDER_FALLBACK is "openrouter"',
+    });
+  }
+  if (selectedAiProviders.includes("mistral") && (!data.MISTRAL_API_KEY || !data.MISTRAL_MODEL)) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["MISTRAL_API_KEY"],
+      message: 'MISTRAL_API_KEY and MISTRAL_MODEL are required when AI_PROVIDER or AI_PROVIDER_FALLBACK is "mistral"',
+    });
+  }
+
+  if (data.MESSAGING_PROVIDER === "telegram" && !data.TELEGRAM_BOT_TOKEN) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["TELEGRAM_BOT_TOKEN"],
+      message: 'TELEGRAM_BOT_TOKEN is required when MESSAGING_PROVIDER="telegram"',
     });
   }
 });

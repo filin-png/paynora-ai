@@ -1,38 +1,43 @@
 import { recordProviderTelemetry } from "@/server/providers/telemetry";
-import { EmailProviderRejectedError, EmailProviderUnknownError, EmailTimeoutError } from "./errors";
-import type { EmailMessage, EmailProvider, EmailSendResult } from "./types";
+import {
+  MessagingProviderRejectedError,
+  MessagingProviderUnknownError,
+  MessagingTimeoutError,
+} from "./errors";
+import type { MessagingMessage, MessagingProvider, MessagingSendResult } from "./types";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 
 /**
- * The Email Gateway: the one place a provider's `send` is actually
- * invoked. Enforces a timeout, normalizes every failure into one of three
- * outcomes the caller must handle explicitly by catching the specific
- * error type, and records structured, secret-free telemetry for every call
- * (see docs/integration-architecture.md#observability — never the message
- * body or recipient, only provider/operation/result/duration/errorCode):
+ * The Messaging Gateway: the one place a provider's `send` is actually
+ * invoked — mirrors src/server/email/gateway.ts exactly, including its
+ * telemetry recording (never the message body or recipient, only
+ * provider/operation/result/duration/errorCode — see
+ * docs/integration-architecture.md#observability). Enforces a timeout and
+ * normalizes every failure into one of three outcomes the caller must
+ * handle explicitly by catching the specific error type:
  *
  * - resolves: the provider confirmed acceptance.
- * - throws `EmailProviderRejectedError`: the provider is certain the
+ * - throws `MessagingProviderRejectedError`: the provider is certain the
  *   message was not accepted — safe to record as a definite failure.
- * - throws anything else (normalized to `EmailTimeoutError` or
- *   `EmailProviderUnknownError`): the outcome is not known — never treat
- *   this as a confirmed failure or a confirmed success.
+ * - throws anything else (normalized to `MessagingTimeoutError` or
+ *   `MessagingProviderUnknownError`): the outcome is not known — never
+ *   treat this as a confirmed failure or a confirmed success.
  *
- * See docs/communications.md#unknown-outcomes.
+ * See docs/integration-architecture.md#messaging.
  */
-export async function dispatchEmail(
-  provider: EmailProvider,
-  message: EmailMessage,
+export async function dispatchMessage(
+  provider: MessagingProvider,
+  message: MessagingMessage,
   options: { timeoutMs?: number } = {},
-): Promise<EmailSendResult> {
+): Promise<MessagingSendResult> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const startedAt = Date.now();
 
   try {
     const result = await withTimeout(provider.send(message), provider.name, timeoutMs);
     recordProviderTelemetry({
-      category: "email",
+      category: "messaging",
       provider: provider.name,
       operation: "send",
       result: "success",
@@ -40,9 +45,9 @@ export async function dispatchEmail(
     });
     return result;
   } catch (error) {
-    if (error instanceof EmailTimeoutError) {
+    if (error instanceof MessagingTimeoutError) {
       recordProviderTelemetry({
-        category: "email",
+        category: "messaging",
         provider: provider.name,
         operation: "send",
         result: "timeout",
@@ -51,9 +56,9 @@ export async function dispatchEmail(
       });
       throw error;
     }
-    if (error instanceof EmailProviderRejectedError) {
+    if (error instanceof MessagingProviderRejectedError) {
       recordProviderTelemetry({
-        category: "email",
+        category: "messaging",
         provider: provider.name,
         operation: "send",
         result: "failure",
@@ -63,9 +68,9 @@ export async function dispatchEmail(
       throw error;
     }
     const detail = error instanceof Error ? error.message : String(error);
-    const wrapped = new EmailProviderUnknownError(provider.name, detail);
+    const wrapped = new MessagingProviderUnknownError(provider.name, detail);
     recordProviderTelemetry({
-      category: "email",
+      category: "messaging",
       provider: provider.name,
       operation: "send",
       result: "failure",
@@ -78,7 +83,7 @@ export async function dispatchEmail(
 
 function withTimeout<T>(promise: Promise<T>, providerName: string, timeoutMs: number): Promise<T> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new EmailTimeoutError(providerName, timeoutMs)), timeoutMs);
+    const timer = setTimeout(() => reject(new MessagingTimeoutError(providerName, timeoutMs)), timeoutMs);
     promise.then(
       (value) => {
         clearTimeout(timer);

@@ -89,6 +89,49 @@ app) at that same endpoint with the same secret. See
 `docs/collections-automation.md#scheduler-deployment` for the full
 design and a reasonable interval.
 
+## Integration & Provider Foundation (Phase 6)
+
+Everything in this section is optional — the app boots and every existing
+feature works with none of it set, exactly like `AI_PROVIDER`/
+`EMAIL_PROVIDER` before it. See `docs/integration-architecture.md` for the
+full design and status of each provider.
+
+To exercise the real OpenRouter or Mistral AI adapter locally:
+
+```bash
+# in .env.local
+AI_PROVIDER=openrouter
+OPENROUTER_API_KEY=...
+OPENROUTER_MODEL=...          # e.g. a model slug from https://openrouter.ai/models
+```
+
+Both have free/low-cost tiers reachable without a foreign bank card at the
+time of writing; see `docs/integration-architecture.md#ai-routing` for why
+GigaChat/Yandex AI remain recognized-but-unimplemented instead. An
+optional single fallback:
+
+```bash
+AI_PROVIDER_FALLBACK=mistral
+MISTRAL_API_KEY=...
+MISTRAL_MODEL=...
+```
+
+To exercise the real Telegram messaging adapter (note: **no domain code
+calls this yet** — see `docs/integration-architecture.md#messaging-a-foundation-with-no-caller` —
+so setting this alone has no visible effect on the app today; it's for
+exercising the adapter directly, e.g. via a test script):
+
+```bash
+MESSAGING_PROVIDER=telegram
+TELEGRAM_BOT_TOKEN=...        # from @BotFather
+```
+
+`BILLING_PROVIDER` and `DEPLOYMENT_PROFILE` have no local-dev setup step
+yet — `stripe`/`yookassa` are recognized but throw "not implemented" if
+selected (see `docs/integration-architecture.md#billing`), and
+`DEPLOYMENT_PROFILE` is descriptive-only metadata with no effect on
+runtime behavior.
+
 ## Hosting (future)
 
 No hosting target is committed to yet. The constraint that shapes the
@@ -109,3 +152,7 @@ onward, `DATABASE_URL` and `AUTH_SECRET` are required — both are free and
 local, no paid or foreign-only service involved. `AUTOMATION_ENABLED`/
 `AUTOMATION_CRON_SECRET` (Phase 5) are optional and default to fully
 disabled — see [Collections automation scheduler](#collections-automation-scheduler).
+`AI_PROVIDER_FALLBACK`/`OPENROUTER_*`/`MISTRAL_*`/`MESSAGING_PROVIDER`/
+`TELEGRAM_BOT_TOKEN`/`BILLING_PROVIDER`/`DEPLOYMENT_PROFILE` (Phase 6) are
+all optional and default to disabled/descriptive-only — see
+[Integration & Provider Foundation](#integration--provider-foundation-phase-6).

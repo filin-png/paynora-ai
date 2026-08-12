@@ -1,13 +1,20 @@
 # Provider Strategy
 
-**Status: `AIProvider` (Phase 3) and `EmailProvider` (Phase 4) are
-implemented. `AIProvider` has no real vendor adapter behind it yet;
-`EmailProvider` does — an SMTP adapter, not a vendor SDK (see below).
+**Status: `AIProvider` (Phase 3, extended Phase 6), `EmailProvider`
+(Phase 4), and `MessagingProvider` (Phase 6) are implemented.
+`BillingProvider` (Phase 6) is a normalized types/contract only — no real
+adapter. `AIProvider` now has two real vendor adapters (OpenRouter,
+Mistral); GigaChat/Yandex AI remain recognized but not implemented.
+`EmailProvider` has an SMTP adapter, not a vendor SDK (see below).
+`MessagingProvider` has a real Telegram adapter with no domain caller yet.
 Every other provider below is not implemented yet.** See
-`docs/ai-architecture.md` and `docs/communications.md`. This document
-records the intended boundary and the constraint driving it, so each
-phase that adds a provider has a consistent pattern to follow instead of
-inventing one per integration.
+`docs/ai-architecture.md`, `docs/communications.md`, and, for the full
+Phase 6 design (routing, health model, deployment profiles, telemetry,
+and exactly why each category stopped where it did),
+`docs/integration-architecture.md`. This document records the intended
+boundary and the constraint driving it, so each phase that adds a
+provider has a consistent pattern to follow instead of inventing one per
+integration.
 
 ## Why this matters for a sellable asset
 
@@ -37,18 +44,20 @@ interface — this is an ordering decision, not a permanent exclusion.
 
 | Boundary            | Purpose                                   | Initial candidate       | Status        |
 | -------------------- | ------------------------------------------ | ------------------------ | -------------- |
-| `AIProvider`          | Structured AI generation (insight/email wording) | GigaChat        | Interface + Gateway implemented (Phase 3); no vendor adapter yet |
+| `AIProvider`          | Structured AI generation (insight/email wording) | OpenRouter, Mistral (real); GigaChat, Yandex AI (recognized) | Interface + Gateway implemented (Phase 3); routing/fallback + two real vendor adapters (Phase 6) — see `docs/integration-architecture.md#ai-routing` |
 | `EmailProvider`       | Transactional payment-reminder email       | SMTP (any relay)         | Implemented (Phase 4) — see `docs/communications.md#provider-abstraction` |
-| `PaymentProvider`     | PAYNORA's own subscription billing        | TBD at Phase 6           | Not implemented (Phase 6) |
-| `AnalyticsProvider`   | Product analytics                         | TBD at Phase 7/8          | Not implemented |
-| `StorageProvider`     | File/document storage                     | TBD when first needed     | Not implemented |
+| `MessagingProvider`   | Operator notifications, future interactive actions | Telegram | Implemented (Phase 6) — real Bot API adapter, no domain caller yet, see `docs/integration-architecture.md#messaging` |
+| `BillingProvider`     | PAYNORA's own subscription billing        | Stripe, YooKassa         | Types/contract only (Phase 6); real adapter + Prisma schema is Phase 8 — see `docs/integration-architecture.md#billing` |
+| `AnalyticsProvider`   | Product analytics                         | PostHog                  | Not implemented — candidate documented in `docs/integration-architecture.md#documented-only-boundaries` |
+| `StorageProvider`     | File/document storage                     | S3-compatible, Yandex Object Storage | Not implemented — no current use case, see `docs/integration-architecture.md#documented-only-boundaries` |
+| `AccountingProvider`, `CRMProvider`, `BankingProvider` | Customer-facing integrations (1С, Bitrix24, amoCRM, bank APIs) | TBD, only per validated customer demand | Not implemented — Phase 9, documented only |
 | `JobProvider`         | Background job scheduling                 | TBD at a future phase, if one ever needs scheduled/automated sends | Not implemented — Phase 4's "Send" is a synchronous, human-triggered action, deliberately not queued |
 
-Note: `PaymentProvider` here is PAYNORA's own subscription billing
-(Phase 6), distinct from the Phase 7 "integrations" work that connects to a
-*customer's* accounting/payment infrastructure (QuickBooks, Xero, regional
-processors) — PAYNORA integrates with that infrastructure, it does not
-replace it.
+Note: `BillingProvider` here is PAYNORA's own subscription billing
+(Phase 6 types, Phase 8 real implementation), distinct from the Phase 9
+"integrations" work that connects to a *customer's* accounting/payment
+infrastructure (QuickBooks, Xero, regional processors) — PAYNORA
+integrates with that infrastructure, it does not replace it.
 
 ## Rule
 
