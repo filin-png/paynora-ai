@@ -44,11 +44,15 @@ export async function getCollectionPolicySteps(policyId: string, version: number
 /**
  * Creates a policy at version 1 with its first set of steps, in one
  * transaction. `enabled` always starts `false` regardless of input — a
- * newly created policy (including one seeded from DEFAULT_POLICY_TEMPLATE)
- * never sends anything until an OWNER explicitly flips it on via
- * setCollectionPolicyEnabled, which is itself inert unless the
- * organization's own automationEnabled kill switch is also on — see
+ * newly created policy never sends anything until an OWNER explicitly
+ * flips it on via setCollectionPolicyEnabled, which is itself inert unless
+ * the organization's own automationEnabled kill switch is also on — see
  * setOrganizationAutomationEnabled below.
+ *
+ * This is the general "add another policy" primitive, used once an
+ * organization already has at least one policy. It deliberately never
+ * makes a policy the default or enables it — see createDefaultCollectionPolicy
+ * below for the distinct first-time-onboarding path that does.
  */
 export async function createCollectionPolicy(
   organizationId: string,
@@ -76,6 +80,77 @@ export async function createCollectionPolicy(
       summary: `Collection policy "${policy.name}" created with ${orderedSteps.length} step(s)`,
     });
     return policy;
+  });
+}
+
+export type EnsuredDefaultPolicy = { policy: CollectionPolicy; created: boolean };
+
+/**
+ * The first-time-onboarding path behind the Automation page's "Create
+ * default policy" action (only rendered while an organization has zero
+ * policies — src/app/app/[orgSlug]/automation/page.tsx). Unlike
+ * createCollectionPolicy above, this creates the policy already
+ * `isDefault: true, enabled: true` — an organization's very first policy
+ * is immediately usable by the automation engine
+ * (processOrganizationTick's `isDefault: true, enabled: true` lookup in
+ * src/server/collections/engine.ts) on the next tick, with no separate
+ * "Make default"/"Enable" steps required. This does not change what an
+ * OWNER can still do afterward (disable it, create additional
+ * non-default/non-enabled policies via createCollectionPolicy, switch the
+ * default elsewhere) — it only fixes the one-time activation gap where a
+ * first-time OWNER's only available action left the organization with a
+ * policy the engine could never select.
+ *
+ * Concurrency: two racing first-policy-creation requests for the same
+ * organization (e.g. a double-submit) must not both succeed — that would
+ * either violate "at most one default policy" or silently create two
+ * enabled policies with no default. Serialized the same way
+ * lockInvoiceForUpdate (src/server/ar/invoices.ts) serializes concurrent
+ * invoice mutations: `SELECT ... FOR UPDATE` on the Organization row for
+ * the transaction's duration (an Organization row always exists once the
+ * caller has resolved organizationId, unlike CollectionPolicy rows, which
+ * don't yet exist on the very race this guards against). The loser of the
+ * race, after the lock releases, finds the winner's policy already
+ * present and returns it unchanged (`created: false`) instead of creating
+ * a duplicate or fighting over which is default.
+ */
+export async function createDefaultCollectionPolicy(
+  organizationId: string,
+  rawInput: CollectionPolicyInput,
+): Promise<EnsuredDefaultPolicy> {
+  const input = collectionPolicyInputSchema.parse(rawInput);
+  const orderedSteps = deriveOrderedSteps(input.steps as CollectionPolicyStepInput[]);
+
+  return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM organizations WHERE id = ${organizationId} FOR UPDATE`;
+
+    const existing = await tx.collectionPolicy.findFirst({
+      where: { organizationId },
+      orderBy: { createdAt: "asc" },
+    });
+    if (existing) {
+      return { policy: existing, created: false };
+    }
+
+    const policy = await tx.collectionPolicy.create({
+      data: {
+        organizationId,
+        name: input.name,
+        automationMode: input.automationMode,
+        isDefault: true,
+        enabled: true,
+        currentVersion: 1,
+      },
+    });
+    await tx.collectionPolicyStep.createMany({
+      data: orderedSteps.map((step) => ({ policyId: policy.id, version: 1, ...step })),
+    });
+    await recordActivityEvent(tx, {
+      organizationId,
+      type: "COLLECTION_POLICY_CREATED",
+      summary: `Collection policy "${policy.name}" created with ${orderedSteps.length} step(s) and activated as the organization's default policy`,
+    });
+    return { policy, created: true };
   });
 }
 

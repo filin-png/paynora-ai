@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { createCustomer } from "@/server/ar/customers";
 import { cancelInvoice } from "@/server/ar/invoices";
 import { majorToMinor } from "@/server/ar/money";
 import { recordPayment } from "@/server/ar/payments";
+import { createTestOrganization } from "@/server/ar/test-fixtures";
 import { prisma } from "@/server/db/client";
 import { resetDatabase } from "@/server/db/test-utils";
 import { createFakeEmailProvider } from "@/server/email/providers/fake";
@@ -12,11 +14,13 @@ import { createFakeProvider } from "@/server/ai/providers/fake";
 import type { AiProviderName } from "@/server/ai/service";
 import { findDueSteps, isAutoSendStillAuthorized, runAutomationTick } from "./engine";
 import {
+  createDefaultCollectionPolicy,
   setCollectionPolicyAutomationMode,
   setCollectionPolicyEnabled,
   setOrganizationAutomationEnabled,
   updateCollectionPolicySteps,
 } from "./policy";
+import { DEFAULT_POLICY_TEMPLATE } from "./policy-schema";
 import { pauseCollectionSequence } from "./sequences";
 import { createAutomationReadyOrg, createTestInvoice } from "./test-fixtures";
 
@@ -64,6 +68,43 @@ describe("runAutomationTick — global kill switch", () => {
     });
     expect(summary.enrolled).toBe(0);
     expect(summary.scanned).toBe(0);
+  });
+});
+
+describe("runAutomationTick — first-time onboarding flow (Phase 10.1 regression)", () => {
+  it("enrolls an eligible invoice on the very next tick after the organization's first policy is created through createDefaultCollectionPolicy — the previously-reported enrolled:0 failure can no longer occur", async () => {
+    // Deliberately mirrors the real first-time OWNER flow — no
+    // createAutomationReadyOrg shortcut, no manual setDefaultCollectionPolicy/
+    // setCollectionPolicyEnabled calls — because those extra steps are
+    // exactly what the fixed flow must no longer require.
+    const { organization } = await createTestOrganization();
+    const customer = await createCustomer(organization.id, { name: "Acme Co", email: "billing@acme.example" });
+    await setOrganizationAutomationEnabled(organization.id, true);
+
+    const { policy, created } = await createDefaultCollectionPolicy(organization.id, {
+      name: DEFAULT_POLICY_TEMPLATE.name,
+      steps: DEFAULT_POLICY_TEMPLATE.steps,
+    });
+    expect(created).toBe(true);
+    expect(policy.isDefault).toBe(true);
+    expect(policy.enabled).toBe(true);
+
+    const invoice = await createTestInvoice(organization.id, customer.id, "2026-01-10");
+
+    const summary = await runAutomationTick(new Date("2026-01-10T00:00:00.000Z"), {
+      organizationId: organization.id,
+    });
+
+    expect(summary.globallyDisabled).toBe(false);
+    expect(summary.organizationsProcessed).toBe(1);
+    expect(summary.enrolled).toBe(1);
+    expect(summary.failed).toBe(0);
+
+    const sequence = await prisma.collectionSequence.findUniqueOrThrow({
+      where: { organizationId_invoiceId: { organizationId: organization.id, invoiceId: invoice.id } },
+    });
+    expect(sequence.status).toBe("ACTIVE");
+    expect(sequence.policyId).toBe(policy.id);
   });
 });
 

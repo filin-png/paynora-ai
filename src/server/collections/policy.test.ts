@@ -7,6 +7,7 @@ import { resetDatabase } from "@/server/db/test-utils";
 import { CollectionsResourceNotFoundError } from "./errors";
 import {
   createCollectionPolicy,
+  createDefaultCollectionPolicy,
   getCollectionPolicySteps,
   renameCollectionPolicy,
   setCollectionPolicyAutomationMode,
@@ -82,6 +83,112 @@ describe("createCollectionPolicy", () => {
         steps: [{ daysAfterDue: 1, action: "CALL_CUSTOMER" }],
       }),
     ).rejects.toThrow(z.ZodError);
+  });
+});
+
+describe("createDefaultCollectionPolicy", () => {
+  it("creates the organization's first policy already default and enabled", async () => {
+    const { organization } = await createTestOrganization();
+
+    const { policy, created } = await createDefaultCollectionPolicy(organization.id, {
+      name: DEFAULT_POLICY_TEMPLATE.name,
+      steps: DEFAULT_POLICY_TEMPLATE.steps,
+    });
+
+    expect(created).toBe(true);
+    expect(policy.isDefault).toBe(true);
+    expect(policy.enabled).toBe(true);
+    expect(policy.currentVersion).toBe(1);
+
+    const steps = await getCollectionPolicySteps(policy.id, 1);
+    expect(steps.map((s) => s.daysAfterDue)).toEqual([1, 3, 7, 14]);
+  });
+
+  it("does not affect an organization's default/enabled state for its second policy", async () => {
+    const { organization } = await createTestOrganization();
+    const { policy: first } = await createDefaultCollectionPolicy(organization.id, {
+      name: "First",
+      steps: [{ daysAfterDue: 1, action: "SEND_PAYMENT_REMINDER" }],
+    });
+
+    const second = await createCollectionPolicy(organization.id, {
+      name: "Second",
+      steps: [{ daysAfterDue: 2, action: "SEND_PAYMENT_REMINDER" }],
+    });
+
+    expect(second.isDefault).toBe(false);
+    expect(second.enabled).toBe(false);
+
+    const refreshedFirst = await prisma.collectionPolicy.findUniqueOrThrow({ where: { id: first.id } });
+    expect(refreshedFirst.isDefault).toBe(true);
+    expect(refreshedFirst.enabled).toBe(true);
+  });
+
+  it("is idempotent: calling it again for an organization that already has a policy returns the existing one unchanged", async () => {
+    const { organization } = await createTestOrganization();
+    const { policy: firstCall } = await createDefaultCollectionPolicy(organization.id, {
+      name: DEFAULT_POLICY_TEMPLATE.name,
+      steps: DEFAULT_POLICY_TEMPLATE.steps,
+    });
+
+    const { policy: secondCall, created } = await createDefaultCollectionPolicy(organization.id, {
+      name: "A different name — should be ignored",
+      steps: [{ daysAfterDue: 99, action: "NOTIFY_OWNER" }],
+    });
+
+    expect(created).toBe(false);
+    expect(secondCall.id).toBe(firstCall.id);
+    expect(secondCall.name).toBe(DEFAULT_POLICY_TEMPLATE.name);
+
+    const allPolicies = await prisma.collectionPolicy.findMany({ where: { organizationId: organization.id } });
+    expect(allPolicies).toHaveLength(1);
+  });
+
+  it("never creates two default/enabled policies when two first-time requests race", async () => {
+    const { organization } = await createTestOrganization();
+
+    const [resultA, resultB] = await Promise.all([
+      createDefaultCollectionPolicy(organization.id, {
+        name: "Race A",
+        steps: [{ daysAfterDue: 1, action: "SEND_PAYMENT_REMINDER" }],
+      }),
+      createDefaultCollectionPolicy(organization.id, {
+        name: "Race B",
+        steps: [{ daysAfterDue: 2, action: "SEND_PAYMENT_REMINDER" }],
+      }),
+    ]);
+
+    // Exactly one of the two racing calls actually created the policy;
+    // the other observed it already existing.
+    expect([resultA.created, resultB.created].filter(Boolean)).toHaveLength(1);
+    expect(resultA.policy.id).toBe(resultB.policy.id);
+
+    const allPolicies = await prisma.collectionPolicy.findMany({ where: { organizationId: organization.id } });
+    expect(allPolicies).toHaveLength(1);
+    expect(allPolicies[0]!.isDefault).toBe(true);
+    expect(allPolicies[0]!.enabled).toBe(true);
+
+    const defaultPolicies = allPolicies.filter((p) => p.isDefault);
+    expect(defaultPolicies).toHaveLength(1);
+  });
+
+  it("scopes to the organization: two different organizations each get their own first default policy", async () => {
+    const { organization: orgA } = await createTestOrganization("OrgA");
+    const { organization: orgB } = await createTestOrganization("OrgB");
+
+    const { policy: policyA } = await createDefaultCollectionPolicy(orgA.id, {
+      name: "A",
+      steps: [{ daysAfterDue: 1, action: "SEND_PAYMENT_REMINDER" }],
+    });
+    const { policy: policyB } = await createDefaultCollectionPolicy(orgB.id, {
+      name: "B",
+      steps: [{ daysAfterDue: 1, action: "SEND_PAYMENT_REMINDER" }],
+    });
+
+    expect(policyA.organizationId).toBe(orgA.id);
+    expect(policyB.organizationId).toBe(orgB.id);
+    expect(policyA.isDefault).toBe(true);
+    expect(policyB.isDefault).toBe(true);
   });
 });
 

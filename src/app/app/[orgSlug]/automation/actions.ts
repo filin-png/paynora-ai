@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { runAutomationTick } from "@/server/collections/engine";
 import {
-  createCollectionPolicy,
+  createDefaultCollectionPolicy,
   setCollectionPolicyAutomationMode,
   setCollectionPolicyEnabled,
   setDefaultCollectionPolicy,
@@ -31,13 +31,18 @@ export async function setAutomationEnabledAction(orgSlug: string, enabled: boole
 
 /**
  * OWNER-only. Seeds the documented safe onboarding template
- * (DEFAULT_POLICY_TEMPLATE) — still disabled and not the default until an
- * OWNER explicitly flips those on separately, same two-step-minimum as
- * every other automation config change.
+ * (DEFAULT_POLICY_TEMPLATE) as the organization's first policy, already
+ * active — isDefault: true, enabled: true — via
+ * createDefaultCollectionPolicy, so eligible open invoices enroll on the
+ * very next automation tick with no separate "Make default"/"Enable"
+ * steps required. Only ever reachable while the organization has zero
+ * policies (see the button's render condition in page.tsx); a concurrent
+ * double-submit resolves safely to the same single first policy rather
+ * than creating a duplicate.
  */
 export async function createDefaultPolicyAction(orgSlug: string): Promise<void> {
   const context = await requireOrganizationRoleForPage(orgSlug, "OWNER");
-  await createCollectionPolicy(context.organization.id, {
+  await createDefaultCollectionPolicy(context.organization.id, {
     name: DEFAULT_POLICY_TEMPLATE.name,
     steps: DEFAULT_POLICY_TEMPLATE.steps,
   });

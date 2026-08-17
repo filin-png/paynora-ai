@@ -71,9 +71,13 @@ export function deriveOrderedSteps(
  * #default-policy) — day+1 soft, day+3 standard, day+7 firm, day+14 firm
  * with an owner-notify escalation. Only ever used to *pre-fill* an OWNER's
  * explicit "create policy" action; nothing imports this to auto-create a
- * policy, and even a created-from-this-template policy is `enabled: false`
- * and requires the organization's own automationEnabled kill switch too —
- * see src/server/collections/policy.ts.
+ * policy. When used via createDefaultCollectionPolicy (the organization's
+ * first policy), the resulting policy is immediately `isDefault: true,
+ * enabled: true` — it still requires the organization's own
+ * automationEnabled kill switch too before anything runs — see
+ * src/server/collections/policy.ts. Used via the general
+ * createCollectionPolicy instead, a template-seeded policy keeps the
+ * usual `enabled: false`, non-default start.
  */
 export const DEFAULT_POLICY_TEMPLATE: { name: string; steps: CollectionPolicyStepInput[] } = {
   name: "Default AR Policy",
