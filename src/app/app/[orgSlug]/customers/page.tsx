@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Plus, Users } from "lucide-react";
+import { Plus, Upload, Users } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
@@ -60,10 +60,19 @@ export default async function CustomersPage({
             : `${customers.length}${hasMore ? "+" : ""} customer${customers.length === 1 && !hasMore ? "" : "s"}.`
         }
         actions={
-          <Link href={`/app/${orgSlug}/customers/new`} className={cn(buttonVariants())}>
-            <Plus className="size-4" />
-            New customer
-          </Link>
+          <div className="flex gap-2">
+            <Link
+              href={`/app/${orgSlug}/import?type=customers`}
+              className={cn(buttonVariants({ variant: "outline" }))}
+            >
+              <Upload className="size-4" />
+              Import
+            </Link>
+            <Link href={`/app/${orgSlug}/customers/new`} className={cn(buttonVariants())}>
+              <Plus className="size-4" />
+              New customer
+            </Link>
+          </div>
         }
       />
 

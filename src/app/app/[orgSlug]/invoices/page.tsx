@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Plus, Receipt } from "lucide-react";
+import { Plus, Receipt, Upload } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
@@ -71,10 +71,19 @@ export default async function InvoicesPage({
             : `${invoices.length}${hasMore ? "+" : ""} invoice${invoices.length === 1 && !hasMore ? "" : "s"}.`
         }
         actions={
-          <Link href={`/app/${orgSlug}/invoices/new`} className={cn(buttonVariants())}>
-            <Plus className="size-4" />
-            New invoice
-          </Link>
+          <div className="flex gap-2">
+            <Link
+              href={`/app/${orgSlug}/import?type=invoices`}
+              className={cn(buttonVariants({ variant: "outline" }))}
+            >
+              <Upload className="size-4" />
+              Import
+            </Link>
+            <Link href={`/app/${orgSlug}/invoices/new`} className={cn(buttonVariants())}>
+              <Plus className="size-4" />
+              New invoice
+            </Link>
+          </div>
         }
       />
 
