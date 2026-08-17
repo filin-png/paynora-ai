@@ -100,6 +100,7 @@ model Organization {
   collectionSequences      CollectionSequence[]
   collectionStepExecutions CollectionStepExecution[]
   invitations              OrganizationInvitation[]
+  subscription             OrganizationSubscription?
 
   @@map("organizations")
 }
@@ -184,6 +185,59 @@ model OrganizationInvitation {
   @@index([organizationId])
   @@index([email])
   @@map("organization_invitations")
+}
+
+// Phase 11.3: commercial plans, entitlements, and usage enforcement — see
+// docs/billing-entitlements.md. This is PAYNORA's own subscription state
+// (what an organization pays PAYNORA), independent of any payment
+// provider — no card data, no checkout, no vendor-specific fields beyond
+// nullable future integration points (see below). The BillingProvider
+// abstraction (src/server/billing/types.ts) already establishes the
+// contract a future webhook adapter must fill: verify a vendor event,
+// normalize it, and hand it to whatever writes this model — that writer
+// does not exist yet (no payment provider is implemented in this phase).
+enum PlanId {
+  FREE
+  STARTER
+  PRO
+}
+
+// A small, deliberately non-vendor-specific status vocabulary — mirrors
+// BillingSubscriptionStatus's normalized values (billing/types.ts) closely
+// enough that a future adapter can map 1:1, but this enum is PAYNORA's own
+// and never a raw Stripe/YooKassa string. See
+// src/server/billing/entitlements.ts#deriveEffectivePlan for exactly how
+// each status affects access.
+enum SubscriptionStatus {
+  ACTIVE
+  TRIALING
+  PAST_DUE
+  CANCELED
+}
+
+model OrganizationSubscription {
+  id             String             @id @default(cuid())
+  organizationId String             @unique
+  plan           PlanId             @default(FREE)
+  status         SubscriptionStatus @default(ACTIVE)
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+  // Nullable future integration points only — populated by a future
+  // billing adapter applying a verified webhook event, never by domain
+  // code in this phase. See src/server/billing/types.ts's
+  // BillingProviderName/BillingCustomerId/BillingSubscriptionId; kept as
+  // plain strings here (not FKs, not vendor-typed columns) so this table
+  // stays genuinely provider-neutral — AR/AI/Collections code never reads
+  // these fields, only `plan`/`status`.
+  billingProvider        String?
+  externalCustomerId     String?
+  externalSubscriptionId String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("organization_subscriptions")
 }
 
 model Customer {
@@ -341,6 +395,11 @@ enum ActivityEventType {
   MEMBER_INVITED
   MEMBER_INVITATION_REVOKED
   MEMBER_JOINED
+  // Phase 11.3: commercial plans/entitlements — see
+  // docs/billing-entitlements.md. Recorded whenever plan or status
+  // actually changes (setOrganizationPlan), never on every quota check —
+  // that would be pure noise (see this phase's brief, section 13).
+  PLAN_CHANGED
 }
 
 model ActivityEvent {

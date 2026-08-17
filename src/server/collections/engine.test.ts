@@ -5,6 +5,7 @@ import { cancelInvoice } from "@/server/ar/invoices";
 import { majorToMinor } from "@/server/ar/money";
 import { recordPayment } from "@/server/ar/payments";
 import { createTestOrganization } from "@/server/ar/test-fixtures";
+import { setOrganizationPlan } from "@/server/billing/subscription";
 import { prisma } from "@/server/db/client";
 import { resetDatabase } from "@/server/db/test-utils";
 import { createFakeEmailProvider } from "@/server/email/providers/fake";
@@ -79,6 +80,7 @@ describe("runAutomationTick — first-time onboarding flow (Phase 10.1 regressio
     // exactly what the fixed flow must no longer require.
     const { organization } = await createTestOrganization();
     const customer = await createCustomer(organization.id, { name: "Acme Co", email: "billing@acme.example" });
+    await setOrganizationPlan(organization.id, "STARTER"); // FREE (the new-org default) does not entitle automation
     await setOrganizationAutomationEnabled(organization.id, true);
 
     const { policy, created } = await createDefaultCollectionPolicy(organization.id, {
@@ -1135,5 +1137,45 @@ describe("runAutomationTick — tick-run telemetry persistence", () => {
     expect(run.organizationsProcessed).toBe(2);
     expect(run.stopped).toBe(summary.stopped);
     expect(run.stopped).toBeGreaterThanOrEqual(1); // the broken org's sequence really did stop, not silently vanish
+  });
+});
+
+// --- Phase 11.3 (brief section 6 E / section 9): Collections Automation
+// entitlement, including "already-active automation" after a downgrade. ---
+describe("runAutomationTick — plan entitlement", () => {
+  it("a FREE organization's tick runs nothing, even if automationEnabled is somehow already true", async () => {
+    const { organization, customer } = await createAutomationReadyOrg("Downgrade");
+    await createTestInvoice(organization.id, customer.id, "2026-01-01");
+    // Simulate a downgrade that happened after automation was already on —
+    // automationEnabled stays true (data/state is never touched by a plan
+    // change), only the plan changes.
+    await setOrganizationPlan(organization.id, "FREE");
+
+    const summary = await runAutomationTick(new Date("2026-01-05T00:00:00.000Z"), {
+      organizationId: organization.id,
+    });
+
+    expect(summary.scanned).toBe(0);
+    expect(summary.enrolled).toBe(0);
+    expect(summary.executed).toBe(0);
+
+    // Nothing was deleted — the policy and the kill-switch flag are both
+    // preserved exactly as they were.
+    const org = await prisma.organization.findUniqueOrThrow({ where: { id: organization.id } });
+    expect(org.automationEnabled).toBe(true);
+  });
+
+  it("upgrading back to an automation-capable plan resumes ticks on the very next run, with no re-toggle needed", async () => {
+    const { organization, customer } = await createAutomationReadyOrg("Resume");
+    await createTestInvoice(organization.id, customer.id, "2026-01-01");
+    await setOrganizationPlan(organization.id, "FREE");
+    await runAutomationTick(new Date("2026-01-02T00:00:00.000Z"), { organizationId: organization.id });
+
+    await setOrganizationPlan(organization.id, "STARTER");
+    const summary = await runAutomationTick(new Date("2026-01-05T00:00:00.000Z"), {
+      organizationId: organization.id,
+    });
+
+    expect(summary.scanned).toBeGreaterThan(0);
   });
 });

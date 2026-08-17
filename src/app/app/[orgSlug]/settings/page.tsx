@@ -9,6 +9,7 @@ import { getProviderRegistrySnapshot, getProviderVendorBreakdown } from "@/serve
 import { listOrganizationMembers } from "@/server/tenancy/organizations";
 import { listPendingInvitations } from "@/server/tenancy/invitations";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
+import { BillingTab } from "./billing-tab";
 import { InviteMemberForm } from "./invite-member-form";
 import { PendingInvitationsList } from "./pending-invitations-list";
 import { RenameOrganizationForm } from "./rename-organization-form";
@@ -41,7 +42,7 @@ const VENDOR_GROUP_LABEL: Record<"ai" | "email" | "messaging", string> = {
   messaging: "Messaging",
 };
 
-const TABS = ["general", "members", "integrations", "security"] as const;
+const TABS = ["general", "members", "integrations", "security", "billing"] as const;
 type SettingsTab = (typeof TABS)[number];
 
 export default async function OrganizationSettingsPage({
@@ -66,7 +67,7 @@ export default async function OrganizationSettingsPage({
           { href: `/app/${orgSlug}/settings?tab=members`, label: "Members", active: tab === "members" },
           { href: `/app/${orgSlug}/settings?tab=integrations`, label: "Integrations", active: tab === "integrations" },
           { href: `/app/${orgSlug}/settings?tab=security`, label: "Security", active: tab === "security" },
-          { href: `/app/${orgSlug}/settings?tab=billing`, label: "Billing", active: false, disabled: true },
+          { href: `/app/${orgSlug}/settings?tab=billing`, label: "Billing", active: tab === "billing" },
         ]}
       />
 
@@ -76,6 +77,7 @@ export default async function OrganizationSettingsPage({
       ) : null}
       {tab === "integrations" ? <IntegrationsTab /> : null}
       {tab === "security" ? <SecurityTab email={context.user.email} role={context.role} /> : null}
+      {tab === "billing" ? <BillingTab organizationId={context.organization.id} /> : null}
     </div>
   );
 }

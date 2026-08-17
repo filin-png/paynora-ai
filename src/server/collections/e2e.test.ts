@@ -5,6 +5,7 @@ import { createInvoice } from "@/server/ar/invoices";
 import { majorToMinor } from "@/server/ar/money";
 import { recordPayment } from "@/server/ar/payments";
 import { createTestOrganization } from "@/server/ar/test-fixtures";
+import { setOrganizationPlan } from "@/server/billing/subscription";
 import { prisma } from "@/server/db/client";
 import { resetDatabase } from "@/server/db/test-utils";
 import { approveActionProposal } from "@/server/operator/approval";
@@ -44,6 +45,7 @@ describe("end-to-end: register -> org -> customer -> overdue invoice -> policy -
     });
     await setDefaultCollectionPolicy(organization.id, policy.id);
     await setCollectionPolicyEnabled(organization.id, policy.id, true);
+    await setOrganizationPlan(organization.id, "STARTER"); // FREE (the new-org default) does not entitle automation
     await setOrganizationAutomationEnabled(organization.id, true);
 
     expect(await prisma.communication.count()).toBe(0);
@@ -126,6 +128,7 @@ describe("end-to-end: UNCERTAIN delivery blocks the next automated reminder unti
     });
     await setDefaultCollectionPolicy(organization.id, policy.id);
     await setCollectionPolicyEnabled(organization.id, policy.id, true);
+    await setOrganizationPlan(organization.id, "STARTER"); // FREE (the new-org default) does not entitle automation
     await setOrganizationAutomationEnabled(organization.id, true);
 
     // Day+1 reminder becomes due, approved, and sent — but the provider

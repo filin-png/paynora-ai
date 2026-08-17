@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { prisma } from "@/server/db/client";
 import { normalizeEmail } from "@/server/auth/email";
+import { assertWithinResourceLimit } from "@/server/billing/entitlements";
 import { recordActivityEvent } from "./activity";
 import { ArResourceNotFoundError } from "./errors";
 
@@ -61,6 +62,8 @@ export async function createCustomer(organizationId: string, rawInput: CustomerI
   const input = customerInputSchema.parse(rawInput);
 
   return prisma.$transaction(async (tx) => {
+    await assertWithinResourceLimit(tx, organizationId, "customers");
+
     const customer = await tx.customer.create({
       data: { organizationId, ...input },
     });

@@ -3,6 +3,7 @@ import { Prisma, type BusinessEvent, type InsightPriority, type OperatorInsight 
 import { prisma } from "@/server/db/client";
 import { tryGenerateStructured } from "@/server/ai/service";
 import { buildDeterministicInvoiceContext, type DeterministicInvoiceContext } from "@/server/ar/reminder-context";
+import { checkAiGenerationQuota } from "@/server/billing/entitlements";
 import { buildReminderInsightRequest } from "./ai-context";
 
 const UNIQUE_CONSTRAINT_VIOLATION = "P2002";
@@ -34,7 +35,22 @@ type GeneratedSummary = { summary: string; aiGenerated: boolean; aiProvider?: st
  * trusted at all. Never affects priority or any financial field — those
  * are computed before this is even called and passed in unchanged.
  */
-async function generateInsightSummary(context: DeterministicInvoiceContext): Promise<GeneratedSummary> {
+/**
+ * Checked before every AI attempt, alongside the deterministic fallback
+ * every AI call in this codebase already has — a denied plan quota
+ * degrades to `buildDeterministicSummary` exactly like a disabled/failed
+ * provider already does, and never reaches `tryGenerateStructured` (so a
+ * denied quota can never trigger a real provider call). See
+ * src/server/billing/entitlements.ts#checkAiGenerationQuota for why this
+ * is a distinct check from any abuse-protection rate limit.
+ */
+async function generateInsightSummary(
+  organizationId: string,
+  context: DeterministicInvoiceContext,
+): Promise<GeneratedSummary> {
+  if (!(await checkAiGenerationQuota(organizationId))) {
+    return { summary: buildDeterministicSummary(context), aiGenerated: false };
+  }
   const aiResult = await tryGenerateStructured(buildReminderInsightRequest(context));
   if (!aiResult) {
     return { summary: buildDeterministicSummary(context), aiGenerated: false };
@@ -69,7 +85,7 @@ export async function ensureInsightForInvoiceOverdueEvent(
   }
   const context = await buildDeterministicInvoiceContext(organizationId, event.invoiceId);
   const priority = computeOverduePriority(context.daysOverdue);
-  const { summary, aiGenerated, aiProvider } = await generateInsightSummary(context);
+  const { summary, aiGenerated, aiProvider } = await generateInsightSummary(organizationId, context);
 
   try {
     const insight = await prisma.operatorInsight.create({

@@ -1,6 +1,7 @@
 import type { CollectionPolicy } from "@prisma/client";
 
 import { recordActivityEvent } from "@/server/ar/activity";
+import { CollectionsAutomationNotEntitledError, isCollectionsAutomationEntitled } from "@/server/billing/entitlements";
 import { prisma } from "@/server/db/client";
 import { CollectionsResourceNotFoundError } from "./errors";
 import {
@@ -322,6 +323,13 @@ export async function setOrganizationAutomationEnabled(
   organizationId: string,
   enabled: boolean,
 ): Promise<void> {
+  // Activation only (section 6 E) — disabling is always allowed regardless
+  // of plan, since it can only reduce what an organization does, never
+  // extend it beyond its entitlement.
+  if (enabled && !(await isCollectionsAutomationEntitled(organizationId))) {
+    throw new CollectionsAutomationNotEntitledError();
+  }
+
   await prisma.$transaction(async (tx) => {
     const org = await tx.organization.findUniqueOrThrow({ where: { id: organizationId } });
     if (org.automationEnabled === enabled) return;

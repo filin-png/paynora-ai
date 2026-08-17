@@ -3,6 +3,7 @@ import { Prisma, type OrganizationRole } from "@prisma/client";
 import { env } from "@/lib/env";
 import { normalizeEmail } from "@/server/auth/email";
 import { generateToken, hashToken } from "@/server/auth/tokens";
+import { assertCanCreateInvitation, assertWithinResourceLimit } from "@/server/billing/entitlements";
 import { prisma } from "@/server/db/client";
 import { sendTransactionalEmail, type TransactionalEmailOptions } from "@/server/email/transactional";
 import { recordActivityEvent } from "@/server/ar/activity";
@@ -113,6 +114,8 @@ export async function createInvitation(
   let organization: { name: string };
   try {
     organization = await prisma.$transaction(async (tx) => {
+      await assertCanCreateInvitation(tx, organizationId);
+
       const org = await tx.organization.findUniqueOrThrow({
         where: { id: organizationId },
         select: { name: true },
@@ -228,6 +231,33 @@ export async function revokeInvitation(organizationId: string, invitationId: str
   });
 }
 
+/**
+ * Creates the membership row only if it doesn't already exist, and only
+ * then checks the member-seat entitlement (section 6 C, section 8
+ * concurrency) — an already-existing membership is a no-op regardless of
+ * current usage, so a legitimate idempotent replay (see acceptInvitation's
+ * doc comment) can never be incorrectly blocked by a quota that's since
+ * been reached by other activity. `assertWithinResourceLimit` locks the
+ * Organization row for the remainder of this transaction, so two
+ * concurrent acceptances for *different* invitations into the same
+ * organization serialize correctly here even though each has its own
+ * invitation-level CAS.
+ */
+async function ensureMembershipWithinQuota(
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+  userId: string,
+  role: OrganizationRole,
+): Promise<void> {
+  const existing = await tx.organizationMember.findUnique({
+    where: { userId_organizationId: { userId, organizationId } },
+  });
+  if (existing) return;
+
+  await assertWithinResourceLimit(tx, organizationId, "members");
+  await tx.organizationMember.create({ data: { userId, organizationId, role } });
+}
+
 export type AcceptInvitationResult = { organizationSlug: string };
 
 /**
@@ -280,11 +310,7 @@ export async function acceptInvitation(
     });
 
     if (claim.count === 1) {
-      await tx.organizationMember.upsert({
-        where: { userId_organizationId: { userId: user.id, organizationId: invitation.organizationId } },
-        create: { userId: user.id, organizationId: invitation.organizationId, role: invitation.role },
-        update: {},
-      });
+      await ensureMembershipWithinQuota(tx, invitation.organizationId, user.id, invitation.role);
       await recordActivityEvent(tx, {
         organizationId: invitation.organizationId,
         type: "MEMBER_JOINED",
@@ -300,11 +326,7 @@ export async function acceptInvitation(
     const current = await tx.organizationInvitation.findUniqueOrThrow({ where: { id: invitation.id } });
     if (current.status !== "ACCEPTED") throw new InvalidOrExpiredInvitationError();
 
-    await tx.organizationMember.upsert({
-      where: { userId_organizationId: { userId: user.id, organizationId: invitation.organizationId } },
-      create: { userId: user.id, organizationId: invitation.organizationId, role: invitation.role },
-      update: {},
-    });
+    await ensureMembershipWithinQuota(tx, invitation.organizationId, user.id, invitation.role);
   });
 
   return { organizationSlug };

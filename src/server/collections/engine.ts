@@ -15,6 +15,7 @@ import { recordActivityEvent } from "@/server/ar/activity";
 import { daysBetween, toDateOnlyString } from "@/server/ar/dates";
 import { getInvoiceWithFinancials, listInvoicesWithFinancials } from "@/server/ar/invoices";
 import { buildDeterministicInvoiceContext } from "@/server/ar/reminder-context";
+import { isCollectionsAutomationEntitled } from "@/server/billing/entitlements";
 import { prisma } from "@/server/db/client";
 import type { EmailProvider } from "@/server/email/types";
 import type { MessagingProvider } from "@/server/messaging/types";
@@ -278,6 +279,17 @@ async function processOrganizationTick(
   aiOverride?: AiOverride,
 ): Promise<OrgCounts> {
   const counts = emptyOrgCounts();
+
+  // Section 6 E / section 9's "already-active automation" case: an
+  // organization can have `automationEnabled: true` (set while entitled)
+  // and then be downgraded to a plan without Collections Automation —
+  // re-checked fresh on every tick, not just at activation time, so a
+  // downgrade takes effect on this organization's very next tick with no
+  // extra migration/cleanup step. Data (policies, sequences, executions)
+  // is never touched — this only skips running anything for this tick,
+  // exactly like "no active policy" or "no active sequences" already do
+  // below. See src/server/billing/entitlements.ts#isCollectionsAutomationEntitled.
+  if (!(await isCollectionsAutomationEntitled(organizationId))) return counts;
 
   const activePolicy = await prisma.collectionPolicy.findFirst({
     where: { organizationId, isDefault: true, enabled: true },
@@ -718,19 +730,25 @@ async function executeAutoSend(
  * see docs/collections-automation.md#concurrency.
  */
 export async function isAutoSendStillAuthorized(sequence: CollectionSequence): Promise<boolean> {
-  const [currentSequence, organization, policy] = await Promise.all([
+  const [currentSequence, organization, policy, entitled] = await Promise.all([
     prisma.collectionSequence.findUnique({ where: { id: sequence.id }, select: { status: true } }),
     prisma.organization.findUnique({ where: { id: sequence.organizationId }, select: { automationEnabled: true } }),
     prisma.collectionPolicy.findUnique({
       where: { id: sequence.policyId },
       select: { enabled: true, automationMode: true },
     }),
+    // Section 6 E: re-verified fresh here too, alongside every other
+    // condition this function re-checks — a plan downgrade between claim
+    // and dispatch must block an AUTO_SEND exactly like the organization
+    // kill switch already does.
+    isCollectionsAutomationEntitled(sequence.organizationId),
   ]);
   return (
     currentSequence?.status === "ACTIVE" &&
     organization?.automationEnabled === true &&
     policy?.enabled === true &&
-    policy?.automationMode === "AUTO_SEND"
+    policy?.automationMode === "AUTO_SEND" &&
+    entitled
   );
 }
 

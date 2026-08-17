@@ -6,6 +6,7 @@ import type { AIProvider } from "@/server/ai/types";
 import { recordActivityEvent } from "@/server/ar/activity";
 import { getCustomer } from "@/server/ar/customers";
 import { buildDeterministicInvoiceContext } from "@/server/ar/reminder-context";
+import { checkAiGenerationQuota } from "@/server/billing/entitlements";
 import { prisma } from "@/server/db/client";
 import { aiGenerationPolicy } from "@/server/rate-limit/policies";
 import { checkRateLimit } from "@/server/rate-limit/service";
@@ -75,7 +76,13 @@ async function generateReminderEmail(
   context: ReminderEmailContext,
   aiOverride?: AiOverride,
 ) {
-  if (!(await aiGenerationAllowed(organizationId))) {
+  // Two distinct, both-required checks — see
+  // src/server/billing/entitlements.ts#checkAiGenerationQuota's doc
+  // comment for why plan quota and abuse-protection rate limiting stay
+  // separate calls rather than one merged concept. Either one denying
+  // degrades identically to the deterministic template, and neither ever
+  // reaches tryGenerateStructured when denied.
+  if (!(await aiGenerationAllowed(organizationId)) || !(await checkAiGenerationQuota(organizationId))) {
     return { ...buildDeterministicReminderEmail(context), aiGenerated: false as const };
   }
   const aiResult = await tryGenerateStructured(buildReminderEmailRequest(context), aiOverride);

@@ -4,6 +4,7 @@ import { toDateOnlyString } from "@/server/ar/dates";
 import { createInvoice, invoiceInputSchema } from "@/server/ar/invoices";
 import { DuplicateInvoiceNumberError } from "@/server/ar/errors";
 import { parseAmountInput } from "@/server/ar/money";
+import { EntitlementLimitExceededError } from "@/server/billing/entitlements";
 import { prisma } from "@/server/db/client";
 import { MAX_IMPORT_ROWS } from "./limits";
 import type { ImportSummary, NormalizedInvoiceRecord } from "./types";
@@ -66,6 +67,14 @@ export async function importInvoices(
 
   const rows: ImportSummary["rows"] = [];
   const seenNumbersInFile = new Map<string, number>();
+  // Section 7 ("bulk import limit safety") — see the identical mechanism
+  // in src/server/ingestion/customers.ts#importCustomers for the full
+  // reasoning: once the organization's open-invoice quota is hit, every
+  // remaining row that would attempt a genuinely new create fails
+  // immediately without another doomed createInvoice call. Skipped
+  // (identical re-import) and failed (conflict/validation) rows above
+  // never reach this point, so they never consume quota either way.
+  let quotaExhausted = false;
 
   for (const record of records) {
     if (record.sourceError) {
@@ -172,6 +181,16 @@ export async function importInvoices(
       continue;
     }
 
+    if (quotaExhausted) {
+      rows.push({
+        sourceRow: record.sourceRow,
+        status: "failed",
+        message: "Organization's plan open-invoice limit reached — not imported. Remaining rows are also skipped for the same reason.",
+        field: "invoiceNumber",
+      });
+      continue;
+    }
+
     try {
       const invoice = await createInvoice(organizationId, parsedInput.data);
       rows.push({ sourceRow: record.sourceRow, status: "created", message: `Created invoice "${invoice.number}"` });
@@ -188,6 +207,9 @@ export async function importInvoices(
           message: `Invoice "${number}" was just created by a concurrent import — not imported again`,
           field: "invoiceNumber",
         });
+      } else if (error instanceof EntitlementLimitExceededError) {
+        quotaExhausted = true;
+        rows.push({ sourceRow: record.sourceRow, status: "failed", message: error.message, field: "invoiceNumber" });
       } else {
         rows.push({ sourceRow: record.sourceRow, status: "failed", message: "Failed to create invoice" });
       }

@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { createCustomer } from "@/server/ar/customers";
+import { EntitlementLimitExceededError } from "@/server/billing/entitlements";
 import { prisma } from "@/server/db/client";
 import { MAX_IMPORT_ROWS } from "./limits";
 import type { ImportSummary, NormalizedCustomerRecord } from "./types";
@@ -52,6 +53,15 @@ export async function importCustomers(
 
   const rows: ImportSummary["rows"] = [];
   const seenEmailsInFile = new Map<string, number>();
+  // Section 7 ("bulk import limit safety"): once one row hits the
+  // organization's customer quota, every remaining row that would attempt
+  // a genuinely new create is failed immediately without calling
+  // createCustomer again — cheaper than repeating a doomed transaction per
+  // row, and makes the outcome deterministic regardless of row order.
+  // Duplicate/skipped rows above never reach this point at all, so they
+  // never consume quota either way — see this loop's existing skip
+  // branches.
+  let quotaExhausted = false;
 
   for (const record of records) {
     if (record.sourceError) {
@@ -92,6 +102,15 @@ export async function importCustomers(
       continue;
     }
 
+    if (quotaExhausted) {
+      rows.push({
+        sourceRow: record.sourceRow,
+        status: "failed",
+        message: "Organization's plan customer limit reached — not imported. Remaining rows are also skipped for the same reason.",
+      });
+      continue;
+    }
+
     try {
       const customer = await createCustomer(organizationId, {
         name: record.name,
@@ -109,6 +128,9 @@ export async function importCustomers(
           message: issue.message,
           field: String(issue.path[0] ?? ""),
         });
+      } else if (error instanceof EntitlementLimitExceededError) {
+        quotaExhausted = true;
+        rows.push({ sourceRow: record.sourceRow, status: "failed", message: error.message });
       } else {
         rows.push({ sourceRow: record.sourceRow, status: "failed", message: "Failed to create customer" });
       }

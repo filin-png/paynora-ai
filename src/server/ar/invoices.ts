@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 
 import { prisma } from "@/server/db/client";
+import { assertWithinResourceLimit } from "@/server/billing/entitlements";
 import { recordActivityEvent } from "./activity";
 import { currencySchema } from "./currency";
 import { dateOnlySchema, isPastDue, parseDateOnly } from "./dates";
@@ -139,6 +140,8 @@ export async function createInvoice(organizationId: string, rawInput: InvoiceInp
 
   try {
     return await prisma.$transaction(async (tx) => {
+      await assertWithinResourceLimit(tx, organizationId, "invoices");
+
       const invoice = await tx.invoice.create({
         data: {
           organizationId,

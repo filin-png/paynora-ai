@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
+import { EntitlementLimitExceededError } from "@/server/billing/entitlements";
 import { requireOrganizationRoleForPage } from "@/server/tenancy/guards";
 import {
   AlreadyOrganizationMemberError,
@@ -34,7 +35,8 @@ export async function inviteMemberAction(
     if (
       error instanceof AlreadyOrganizationMemberError ||
       error instanceof DuplicatePendingInvitationError ||
-      error instanceof RateLimitExceededError
+      error instanceof RateLimitExceededError ||
+      error instanceof EntitlementLimitExceededError
     ) {
       return { error: error.message };
     }
