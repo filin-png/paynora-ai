@@ -19,10 +19,14 @@ import { summarizeRows } from "./types";
  * trimmed, lowercased) matches, either an existing DB row or an earlier
  * row already processed from this same file. A match is always skipped,
  * never overwritten — this import path never updates an existing
- * customer's fields. A customer row with no email can never be matched
- * against anything and is always created; this is an accepted, documented
- * limitation of not having a stable external customer identifier in the
- * current schema (see docs/data-ingestion.md#customer-matching).
+ * customer's fields.
+ *
+ * Email is required for every CSV row (`CUSTOMER_CSV_REQUIRED_HEADERS` in
+ * `csv/customers.ts`), even though `Customer.email` is optional in the
+ * general AR domain and manual customer creation is unaffected — without
+ * it, a row has no deterministic identity to dedupe against, and
+ * re-importing the same file would silently create duplicate customers.
+ * See docs/data-ingestion.md#customer-matching.
  */
 export async function importCustomers(
   organizationId: string,
@@ -57,7 +61,17 @@ export async function importCustomers(
 
     const emailKey = record.email.toLowerCase();
 
-    if (emailKey && seenEmailsInFile.has(emailKey)) {
+    if (!emailKey) {
+      rows.push({
+        sourceRow: record.sourceRow,
+        status: "failed",
+        message: "Missing email — required so this row can be matched against an existing customer on re-import",
+        field: "email",
+      });
+      continue;
+    }
+
+    if (seenEmailsInFile.has(emailKey)) {
       rows.push({
         sourceRow: record.sourceRow,
         status: "skipped",
@@ -67,7 +81,7 @@ export async function importCustomers(
       continue;
     }
 
-    if (emailKey && existingEmails.has(emailKey)) {
+    if (existingEmails.has(emailKey)) {
       seenEmailsInFile.set(emailKey, record.sourceRow);
       rows.push({
         sourceRow: record.sourceRow,
@@ -81,10 +95,10 @@ export async function importCustomers(
     try {
       const customer = await createCustomer(organizationId, {
         name: record.name,
-        email: record.email || undefined,
+        email: record.email,
         phone: record.phone || undefined,
       });
-      if (emailKey) seenEmailsInFile.set(emailKey, record.sourceRow);
+      seenEmailsInFile.set(emailKey, record.sourceRow);
       rows.push({ sourceRow: record.sourceRow, status: "created", message: `Created customer "${customer.name}"` });
     } catch (error) {
       if (error instanceof z.ZodError) {

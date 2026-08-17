@@ -77,7 +77,14 @@ The `Customer` model has no stable external business identifier (no
 "customer code" field). Per this phase's explicit instruction not to
 redesign customer identity, invoice import matches customers by
 **normalized email** (trimmed, lowercased) — the same normalization
-`customerInputSchema` already applies to a manually-entered email.
+`customerInputSchema` already applies to a manually-entered email. This is
+also why customer CSV import requires an `email` column
+(`CUSTOMER_CSV_REQUIRED_HEADERS` in `src/server/ingestion/csv/customers.ts`)
+even though `Customer.email` is optional in the general AR domain and
+manual customer creation is unaffected: a row with no email would have
+no identity for a later invoice import — or a later re-import of the same
+customer file — to match against, silently producing duplicate customers.
+A row with a missing or invalid email fails outright instead.
 
 **Documented limitation:** `Customer.email` has no uniqueness constraint
 at the database level. If two customers in the same organization
@@ -91,11 +98,12 @@ disambiguating in PAYNORA first.
 
 ## Duplicate and conflict semantics
 
-**Customers:** a normalized-email match — either an existing database
-row or an earlier row in the same file — is always **skipped**, never
-updates the existing customer. A row with no email can never be matched
-against anything and is always created (an accepted trade-off of not
-having a stable identifier — see above).
+**Customers:** email is a required column for CSV import (see below) —
+a normalized-email match, either an existing database row or an earlier
+row in the same file, is always **skipped**, never updates the existing
+customer. A row with a missing or invalid email **fails** outright,
+rather than being created with no way to recognize it on a later
+re-import.
 
 **Invoices:** an existing `(organizationId, number)` — in the database or
 earlier in the same file — is:

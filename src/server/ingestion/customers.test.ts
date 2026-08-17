@@ -19,7 +19,7 @@ describe("importCustomers", () => {
 
     const summary = await importCustomers(organization.id, [
       record({ sourceRow: 1, name: "Acme Co", email: "acme@example.com", phone: "555-0100" }),
-      record({ sourceRow: 2, name: "Beta LLC" }),
+      record({ sourceRow: 2, name: "Beta LLC", email: "beta@example.com" }),
     ]);
 
     expect(summary.totalRows).toBe(2);
@@ -32,10 +32,25 @@ describe("importCustomers", () => {
     expect(customers[0]!.name).toBe("Acme Co");
     expect(customers[0]!.email).toBe("acme@example.com");
     expect(customers[1]!.name).toBe("Beta LLC");
-    expect(customers[1]!.email).toBeNull();
+    expect(customers[1]!.email).toBe("beta@example.com");
 
     const events = await prisma.activityEvent.findMany({ where: { organizationId: organization.id, type: "CUSTOMER_CREATED" } });
     expect(events).toHaveLength(2);
+  });
+
+  it("rejects a row with a missing (blank) email", async () => {
+    const { organization } = await createTestOrganization();
+
+    const summary = await importCustomers(organization.id, [record({ sourceRow: 1, name: "Acme Co", email: "" })]);
+
+    expect(summary.created).toBe(0);
+    expect(summary.failed).toBe(1);
+    expect(summary.rows[0]!.status).toBe("failed");
+    expect(summary.rows[0]!.field).toBe("email");
+    expect(summary.rows[0]!.message).toMatch(/missing email/i);
+
+    const customers = await prisma.customer.findMany({ where: { organizationId: organization.id } });
+    expect(customers).toHaveLength(0);
   });
 
   it("rejects a row with an invalid email via the same validation the manual form uses", async () => {
@@ -52,9 +67,10 @@ describe("importCustomers", () => {
   it("rejects a row with a missing name", async () => {
     const { organization } = await createTestOrganization();
 
-    const summary = await importCustomers(organization.id, [record({ sourceRow: 1, name: "" })]);
+    const summary = await importCustomers(organization.id, [record({ sourceRow: 1, name: "", email: "acme@example.com" })]);
 
     expect(summary.failed).toBe(1);
+    expect(summary.rows[0]!.field).toBe("name");
   });
 
   it("skips a second row in the same file with the same email — created once, not duplicated", async () => {
@@ -110,7 +126,7 @@ describe("importCustomers", () => {
     const summary = await importCustomers(organization.id, [
       record({ sourceRow: 1, name: "Acme Co", email: "acme@example.com" }),
       record({ sourceRow: 2, sourceError: "too many fields" }),
-      record({ sourceRow: 3, name: "Beta LLC" }),
+      record({ sourceRow: 3, name: "Beta LLC", email: "beta@example.com" }),
     ]);
 
     expect(summary.created).toBe(2);

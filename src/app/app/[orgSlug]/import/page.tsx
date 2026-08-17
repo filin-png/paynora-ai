@@ -58,7 +58,7 @@ export default async function ImportPage({
           <Card className="flex flex-col gap-2 p-5">
             <SectionHeader title="Expected CSV format" />
             <p className="text-sm text-muted">
-              A UTF-8 CSV with a header row. Required column:{" "}
+              A UTF-8 CSV with a header row. Required columns:{" "}
               <code className="rounded bg-accent-soft px-1.5 py-0.5 text-xs">
                 {CUSTOMER_CSV_REQUIRED_HEADERS.join(", ")}
               </code>
@@ -69,8 +69,9 @@ export default async function ImportPage({
               .
             </p>
             <p className="text-sm text-muted">
-              A customer already in this organization with the same email is skipped, never overwritten. A row with
-              no email can&rsquo;t be matched against an existing customer and is always created.
+              Every row needs a valid, non-empty email — it&rsquo;s how a re-imported file recognizes a customer it
+              already created and avoids making a duplicate. A customer already in this organization with the same
+              email is skipped, never overwritten.
             </p>
             <p className="text-xs text-muted-foreground">
               Up to {MAX_IMPORT_ROWS.toLocaleString()} rows, {Math.floor(MAX_IMPORT_FILE_SIZE_BYTES / (1024 * 1024))}{" "}
