@@ -58,6 +58,9 @@ model User {
   memberships             OrganizationMember[]
   decidedActionProposals  ActionProposal[]
   autoSendEnabledPolicies CollectionPolicy[]
+  passwordResetTokens     PasswordResetToken[]
+  sentInvitations         OrganizationInvitation[] @relation("InvitedBy")
+  acceptedInvitations     OrganizationInvitation[] @relation("AcceptedBy")
 
   @@map("users")
 }
@@ -96,6 +99,7 @@ model Organization {
   collectionPolicies       CollectionPolicy[]
   collectionSequences      CollectionSequence[]
   collectionStepExecutions CollectionStepExecution[]
+  invitations              OrganizationInvitation[]
 
   @@map("organizations")
 }
@@ -114,6 +118,72 @@ model OrganizationMember {
   @@unique([userId, organizationId])
   @@index([organizationId])
   @@map("organization_members")
+}
+
+// Phase 11.2: account recovery + organization member invitations. See
+// docs/account-recovery-and-invitations.md. Both token types follow the
+// same "never store the secret itself" principle as User.passwordHash: only
+// a SHA-256 digest of the token the requester actually holds (the one in
+// the emailed link) is persisted. Expiration and single-use are enforced in
+// the domain layer (src/server/auth/password-reset.ts,
+// src/server/tenancy/invitations.ts) by checking expiresAt/consumedAt or
+// status at read time — not by any database-level TTL.
+model PasswordResetToken {
+  id         String    @id @default(cuid())
+  userId     String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  // Null while usable; set the instant the token is consumed, so a reused
+  // token fails safely (see resetPassword's single-use check) instead of
+  // relying solely on deleting the row.
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+}
+
+model OrganizationInvitation {
+  id             String            @id @default(cuid())
+  organizationId String
+  // Normalized (lowercased/trimmed) the same way User.email is — see
+  // src/server/auth/email.ts's normalizeEmail, reused here.
+  email          String
+  role           OrganizationRole
+  tokenHash      String            @unique
+  status         InvitationStatus  @default(PENDING)
+  expiresAt      DateTime
+  invitedByUserId String
+  acceptedAt     DateTime?
+  // Set only once accepted; deliberately nullable and SetNull on delete —
+  // an invitation is a durable audit record of "who was invited", and
+  // losing track of who invited/accepted must never cascade-delete it.
+  acceptedByUserId String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invitedBy    User         @relation("InvitedBy", fields: [invitedByUserId], references: [id], onDelete: Cascade)
+  acceptedBy   User?        @relation("AcceptedBy", fields: [acceptedByUserId], references: [id], onDelete: SetNull)
+
+  // A per-(organizationId, email) uniqueness constraint restricted to
+  // status = 'PENDING' is hand-added in the migration SQL (Prisma has no
+  // partial/filtered unique index syntax) — see the migration file and the
+  // identical precedent for CollectionPolicy's "one default policy per
+  // org" constraint. It backs "no duplicate pending invite for the same
+  // organization/email" at the database level, not just in
+  // createInvitation's application check.
+  @@index([organizationId])
+  @@index([email])
+  @@map("organization_invitations")
 }
 
 model Customer {
@@ -263,6 +333,14 @@ enum ActivityEventType {
   COLLECTION_SEQUENCE_STOPPED
   COLLECTION_STEP_EXECUTED
   COLLECTION_STEP_SKIPPED
+  // Phase 11.2: organization member invitations — see
+  // docs/account-recovery-and-invitations.md. Deliberately no
+  // password-reset events here: PasswordResetToken has no organizationId
+  // (a user can belong to zero or many organizations), so it doesn't fit
+  // this tenant-scoped audit trail — see that model's doc comment.
+  MEMBER_INVITED
+  MEMBER_INVITATION_REVOKED
+  MEMBER_JOINED
 }
 
 model ActivityEvent {

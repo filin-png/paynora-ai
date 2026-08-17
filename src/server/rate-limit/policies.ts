@@ -44,6 +44,29 @@ export const SIGNUP_IP_POLICY: RateLimitPolicy = {
   windowMs: ONE_HOUR_MS,
 };
 
+// Phase 11.2: password reset requests. Same "fixed constant, not
+// env-configurable" reasoning as the AUTH_* policies above. The
+// account-scoped policy is deliberately stricter than sign-in's: a reset
+// request also triggers a real (or would-be) outbound email, so it bounds
+// email-bombing one inbox, not just brute-force guessing.
+export const PASSWORD_RESET_REQUEST_IP_POLICY: RateLimitPolicy = {
+  maxAttempts: 10,
+  windowMs: FIFTEEN_MINUTES_MS,
+};
+
+export const PASSWORD_RESET_REQUEST_ACCOUNT_POLICY: RateLimitPolicy = {
+  maxAttempts: 5,
+  windowMs: FIFTEEN_MINUTES_MS,
+};
+
+// Phase 11.2: organization member invitations, scoped per organization
+// (not per inviting OWNER) — bounds how many invitation emails one
+// organization can generate per hour regardless of who sends them.
+export const ORGANIZATION_INVITE_POLICY: RateLimitPolicy = {
+  maxAttempts: 20,
+  windowMs: ONE_HOUR_MS,
+};
+
 export function aiGenerationPolicy(): RateLimitPolicy {
   return { maxAttempts: env.RATE_LIMIT_AI_GENERATION_PER_HOUR, windowMs: ONE_HOUR_MS };
 }

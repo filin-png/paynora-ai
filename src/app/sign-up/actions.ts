@@ -14,6 +14,16 @@ export type SignUpFormState = { error: string } | null;
 
 const SIGNUP_IP_SCOPE = "auth:signup:ip";
 
+function safeCallbackUrl(rawCallbackUrl: FormDataEntryValue | null): string {
+  const value = typeof rawCallbackUrl === "string" ? rawCallbackUrl : "";
+  // Only ever redirect to a relative, in-app path — never follow a
+  // caller-supplied absolute URL (open-redirect prevention). Mirrors
+  // src/app/sign-in/actions.ts's identical helper — used so a new user who
+  // arrived via an invitation link ends up back on the accept-invitation
+  // page after registering, instead of always landing on /app.
+  return value.startsWith("/") && !value.startsWith("//") ? value : "/app";
+}
+
 export async function signUpAction(
   _prevState: SignUpFormState,
   formData: FormData,
@@ -21,6 +31,7 @@ export async function signUpAction(
   const email = String(formData.get("email") ?? "");
   const password = String(formData.get("password") ?? "");
   const name = String(formData.get("name") ?? "");
+  const redirectTo = safeCallbackUrl(formData.get("callbackUrl"));
 
   // Phase 9 (docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P0-1/P2-1): bounds
   // automated mass account creation / enumeration-by-signup from one
@@ -51,7 +62,7 @@ export async function signUpAction(
   }
 
   try {
-    await signIn("credentials", { email, password, redirectTo: "/app" });
+    await signIn("credentials", { email, password, redirectTo });
     return null;
   } catch (error) {
     if (error instanceof AuthError) {

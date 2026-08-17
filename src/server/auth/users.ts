@@ -3,13 +3,13 @@ import { z } from "zod";
 
 import { prisma } from "@/server/db/client";
 import { normalizeEmail } from "./email";
-import { hashPassword } from "./password";
+import { hashPassword, passwordSchema } from "./password";
 
 const UNIQUE_CONSTRAINT_VIOLATION = "P2002";
 
 export const registerUserSchema = z.object({
   email: z.string().trim().email("Enter a valid email address"),
-  password: z.string().min(8, "Password must be at least 8 characters"),
+  password: passwordSchema,
   name: z
     .string()
     .trim()

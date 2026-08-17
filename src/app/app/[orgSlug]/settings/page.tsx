@@ -7,7 +7,10 @@ import { Tabs } from "@/components/ui/tabs";
 import type { ProviderHealthStatus, ProviderRegistryEntry } from "@/server/providers/types";
 import { getProviderRegistrySnapshot, getProviderVendorBreakdown } from "@/server/providers/registry";
 import { listOrganizationMembers } from "@/server/tenancy/organizations";
+import { listPendingInvitations } from "@/server/tenancy/invitations";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
+import { InviteMemberForm } from "./invite-member-form";
+import { PendingInvitationsList } from "./pending-invitations-list";
 import { RenameOrganizationForm } from "./rename-organization-form";
 
 const CATEGORY_LABEL: Record<ProviderRegistryEntry["category"], string> = {
@@ -68,7 +71,9 @@ export default async function OrganizationSettingsPage({
       />
 
       {tab === "general" ? <GeneralTab orgSlug={orgSlug} name={context.organization.name} role={context.role} /> : null}
-      {tab === "members" ? <MembersTab organizationId={context.organization.id} /> : null}
+      {tab === "members" ? (
+        <MembersTab organizationId={context.organization.id} orgSlug={orgSlug} role={context.role} />
+      ) : null}
       {tab === "integrations" ? <IntegrationsTab /> : null}
       {tab === "security" ? <SecurityTab email={context.user.email} role={context.role} /> : null}
     </div>
@@ -87,19 +92,51 @@ async function GeneralTab({ orgSlug, name, role }: { orgSlug: string; name: stri
   );
 }
 
-async function MembersTab({ organizationId }: { organizationId: string }) {
-  const members = await listOrganizationMembers(organizationId);
+async function MembersTab({
+  organizationId,
+  orgSlug,
+  role,
+}: {
+  organizationId: string;
+  orgSlug: string;
+  role: string;
+}) {
+  const [members, pendingInvitations] = await Promise.all([
+    listOrganizationMembers(organizationId),
+    role === "OWNER" ? listPendingInvitations(organizationId) : Promise.resolve([]),
+  ]);
+
   return (
-    <Card className="overflow-hidden">
-      <ul className="divide-y divide-border">
-        {members.map((member) => (
-          <li key={member.userId} className="flex items-center justify-between px-5 py-3.5 text-sm">
-            <span className="text-foreground">{member.name ?? member.email}</span>
-            <Badge tone={member.role === "OWNER" ? "info" : "neutral"}>{member.role === "OWNER" ? "Owner" : "Member"}</Badge>
-          </li>
-        ))}
-      </ul>
-    </Card>
+    <div className="flex flex-col gap-4">
+      {role === "OWNER" ? (
+        <Card className="p-6">
+          <p className="text-sm font-semibold text-foreground">Invite a member</p>
+          <div className="mt-4">
+            <InviteMemberForm orgSlug={orgSlug} />
+          </div>
+          <PendingInvitationsList
+            orgSlug={orgSlug}
+            invitations={pendingInvitations.map((invitation) => ({
+              id: invitation.id,
+              email: invitation.email,
+              role: invitation.role,
+              expiresAt: invitation.expiresAt.toISOString(),
+            }))}
+          />
+        </Card>
+      ) : null}
+
+      <Card className="overflow-hidden">
+        <ul className="divide-y divide-border">
+          {members.map((member) => (
+            <li key={member.userId} className="flex items-center justify-between px-5 py-3.5 text-sm">
+              <span className="text-foreground">{member.name ?? member.email}</span>
+              <Badge tone={member.role === "OWNER" ? "info" : "neutral"}>{member.role === "OWNER" ? "Owner" : "Member"}</Badge>
+            </li>
+          ))}
+        </ul>
+      </Card>
+    </div>
   );
 }
 
