@@ -10,6 +10,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader, SectionHeader } from "@/components/ui/page-header";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
+import { getOrganizationEntitlements } from "@/server/billing/entitlements";
 import { getCollectionPolicySteps, listCollectionPolicies } from "@/server/collections/policy";
 import { getCollectionStatusForInvoice, listActiveCollectionSequences } from "@/server/collections/sequences";
 import { prisma } from "@/server/db/client";
@@ -53,11 +54,13 @@ export default async function AutomationPage({
   const organizationId = context.organization.id;
   const isOwner = context.role === "OWNER";
 
-  const [organization, policies, activeSequences] = await Promise.all([
+  const [organization, policies, activeSequences, { entitlements }] = await Promise.all([
     prisma.organization.findUniqueOrThrow({ where: { id: organizationId } }),
     listCollectionPolicies(organizationId),
     listActiveCollectionSequences(organizationId),
+    getOrganizationEntitlements(organizationId),
   ]);
+  const automationEntitled = entitlements.collectionsAutomationEnabled;
 
   const [sequenceStatuses, policyStepsByPolicy] = await Promise.all([
     Promise.all(activeSequences.map((sequence) => getCollectionStatusForInvoice(organizationId, sequence.invoiceId))),
@@ -105,7 +108,7 @@ export default async function AutomationPage({
                   <Switch checked={true} />
                 </button>
               </form>
-            ) : (
+            ) : automationEntitled ? (
               <ConfirmActionButton
                 trigger={
                   <button
@@ -122,9 +125,23 @@ export default async function AutomationPage({
                 confirmDescription="Every enabled collection policy for this organization — including any already set to auto-send — will start running on the next scheduled tick. Invoices matching a policy step may be emailed or messaged automatically."
                 confirmLabel="Enable automation"
               />
+            ) : (
+              <Link
+                href={`/app/${orgSlug}/settings?tab=billing`}
+                className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+              >
+                Not available on current plan
+              </Link>
             )
           ) : null}
         </div>
+
+        {organization.automationEnabled && !automationEntitled ? (
+          <Alert tone="warning" className="mt-4">
+            This organization&apos;s current plan no longer includes Collections Automation — no new steps will run
+            until the plan changes. Policies and history are preserved.
+          </Alert>
+        ) : null}
 
         <div className="mt-6 grid grid-cols-3 gap-6 border-t border-border pt-6">
           <Stat label="Active sequences" value={activeSequences.length} />

@@ -47,6 +47,15 @@ export async function createOrganization(
         role: "OWNER",
       },
     });
+    // Every organization has exactly one subscription row from the moment
+    // it exists — FREE/ACTIVE, the same default an existing pre-Phase-11.3
+    // organization was backfilled to (see that migration's doc comment).
+    // Created here, transactionally, so "an organization with no
+    // subscription row" is never a state the entitlement layer needs to
+    // handle — see src/server/billing/entitlements.ts.
+    await tx.organizationSubscription.create({
+      data: { organizationId: created.id, plan: "FREE", status: "ACTIVE" },
+    });
     return created;
   });
 

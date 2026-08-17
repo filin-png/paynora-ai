@@ -1,6 +1,9 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import { registerUser } from "@/server/auth/users";
+import { EntitlementLimitExceededError } from "@/server/billing/entitlements";
+import { setOrganizationPlan } from "@/server/billing/subscription";
+import { limitMax, PLAN_ENTITLEMENTS } from "@/server/billing/plans";
 import { prisma } from "@/server/db/client";
 import { resetDatabase } from "@/server/db/test-utils";
 import type { EmailMessage, EmailProvider } from "@/server/email/types";
@@ -48,6 +51,7 @@ describe("createInvitation", () => {
   it("an OWNER can create a pending invitation, and it emails a link", async () => {
     const owner = await createTestUser("owner");
     const org = await createOrganization(owner, "Acme");
+    await setOrganizationPlan(org.id, "STARTER"); // FREE (the default) blocks these invitation tests -- see the "member entitlement" describe block below for FREE-tier behavior itself
     const { provider, messages } = createCapturingEmailProvider();
 
     await createInvitation(org.id, owner.id, "new-member@example.com", "MEMBER", { provider });
@@ -65,6 +69,7 @@ describe("createInvitation", () => {
     const owner = await createTestUser("owner");
     const member = await createTestUser("member");
     const org = await createOrganization(owner, "Acme");
+    await setOrganizationPlan(org.id, "STARTER"); // FREE (the default) blocks these invitation tests -- see the "member entitlement" describe block below for FREE-tier behavior itself
     await prisma.organizationMember.create({ data: { organizationId: org.id, userId: member.id, role: "MEMBER" } });
 
     // This is the exact guard the invite-member Server Action calls before
@@ -77,6 +82,7 @@ describe("createInvitation", () => {
   it("never persists the raw invitation token — only its digest", async () => {
     const owner = await createTestUser("owner");
     const org = await createOrganization(owner, "Acme");
+    await setOrganizationPlan(org.id, "STARTER"); // FREE (the default) blocks these invitation tests -- see the "member entitlement" describe block below for FREE-tier behavior itself
     const { provider, messages } = createCapturingEmailProvider();
 
     await createInvitation(org.id, owner.id, "invitee@example.com", "MEMBER", { provider });
@@ -90,6 +96,7 @@ describe("createInvitation", () => {
   it("rejects a duplicate pending invite for the same organization and email", async () => {
     const owner = await createTestUser("owner");
     const org = await createOrganization(owner, "Acme");
+    await setOrganizationPlan(org.id, "STARTER"); // FREE (the default) blocks these invitation tests -- see the "member entitlement" describe block below for FREE-tier behavior itself
     const { provider } = createCapturingEmailProvider();
 
     await createInvitation(org.id, owner.id, "dupe@example.com", "MEMBER", { provider });
@@ -102,6 +109,7 @@ describe("createInvitation", () => {
   it("allows re-inviting the same email once the prior invitation is no longer pending", async () => {
     const owner = await createTestUser("owner");
     const org = await createOrganization(owner, "Acme");
+    await setOrganizationPlan(org.id, "STARTER"); // FREE (the default) blocks these invitation tests -- see the "member entitlement" describe block below for FREE-tier behavior itself
     const { provider } = createCapturingEmailProvider();
 
     await createInvitation(org.id, owner.id, "again@example.com", "MEMBER", { provider });
@@ -117,6 +125,7 @@ describe("createInvitation", () => {
     const owner = await createTestUser("owner");
     const existingMember = await createTestUser("existing");
     const org = await createOrganization(owner, "Acme");
+    await setOrganizationPlan(org.id, "STARTER"); // FREE (the default) blocks these invitation tests -- see the "member entitlement" describe block below for FREE-tier behavior itself
     await prisma.organizationMember.create({
       data: { organizationId: org.id, userId: existingMember.id, role: "MEMBER" },
     });
@@ -129,6 +138,7 @@ describe("createInvitation", () => {
   it("blocks further invitations once the per-organization hourly threshold is exceeded", async () => {
     const owner = await createTestUser("owner");
     const org = await createOrganization(owner, "Acme");
+    await setOrganizationPlan(org.id, "PRO"); // room for 20+ pending invitations — this test is about the rate limit, not the (much lower) STARTER member quota
     const { provider } = createCapturingEmailProvider();
 
     // ORGANIZATION_INVITE_POLICY.maxAttempts is 20.
@@ -154,6 +164,7 @@ describe("revokeInvitation", () => {
   it("revokes a pending invitation, and it can no longer be accepted", async () => {
     const owner = await createTestUser("owner");
     const org = await createOrganization(owner, "Acme");
+    await setOrganizationPlan(org.id, "STARTER"); // FREE (the default) blocks these invitation tests -- see the "member entitlement" describe block below for FREE-tier behavior itself
     const invitee = await createTestUser("invitee");
     const { invitation, rawToken } = await createPendingInvitation(org.id, owner.id, invitee.email);
 
@@ -165,11 +176,13 @@ describe("revokeInvitation", () => {
   it("a user from a different organization cannot revoke this invitation", async () => {
     const ownerA = await createTestUser("owner-a");
     const orgA = await createOrganization(ownerA, "Org A");
+    await setOrganizationPlan(orgA.id, "STARTER"); // FREE (the default) blocks these invitation tests -- see the "member entitlement" describe block below for FREE-tier behavior itself
     const invitee = await createTestUser("invitee");
     const { invitation } = await createPendingInvitation(orgA.id, ownerA.id, invitee.email);
 
     const ownerB = await createTestUser("owner-b");
     const orgB = await createOrganization(ownerB, "Org B");
+    await setOrganizationPlan(orgB.id, "STARTER"); // FREE (the default) blocks these invitation tests -- see the "member entitlement" describe block below for FREE-tier behavior itself
 
     // Scoped by organizationId — orgB's id can never match orgA's invitation.
     await expect(revokeInvitation(orgB.id, invitation.id)).rejects.toThrow(InvitationNotRevocableError);
@@ -182,6 +195,7 @@ describe("revokeInvitation", () => {
   it("cannot revoke an invitation that was already accepted", async () => {
     const owner = await createTestUser("owner");
     const org = await createOrganization(owner, "Acme");
+    await setOrganizationPlan(org.id, "STARTER"); // FREE (the default) blocks these invitation tests -- see the "member entitlement" describe block below for FREE-tier behavior itself
     const invitee = await createTestUser("invitee");
     const { invitation, rawToken } = await createPendingInvitation(org.id, owner.id, invitee.email);
 
@@ -201,6 +215,7 @@ describe("acceptInvitation", () => {
   it("an existing user accepts and becomes a member exactly once", async () => {
     const owner = await createTestUser("owner");
     const org = await createOrganization(owner, "Acme");
+    await setOrganizationPlan(org.id, "STARTER"); // FREE (the default) blocks these invitation tests -- see the "member entitlement" describe block below for FREE-tier behavior itself
     const invitee = await createTestUser("invitee");
     const rawToken = await createPendingInvitation(org.id, owner.id, invitee.email);
 
@@ -217,6 +232,7 @@ describe("acceptInvitation", () => {
   it("a brand-new user can accept after registering with the invited email (new-user flow)", async () => {
     const owner = await createTestUser("owner");
     const org = await createOrganization(owner, "Acme");
+    await setOrganizationPlan(org.id, "STARTER"); // FREE (the default) blocks these invitation tests -- see the "member entitlement" describe block below for FREE-tier behavior itself
     const { provider, messages } = createCapturingEmailProvider();
     const invitedEmail = `newcomer-${Math.random().toString(36).slice(2, 8)}@example.com`;
 
@@ -240,6 +256,7 @@ describe("acceptInvitation", () => {
   it("rejects an invitation token for a different signed-in account than the one invited", async () => {
     const owner = await createTestUser("owner");
     const org = await createOrganization(owner, "Acme");
+    await setOrganizationPlan(org.id, "STARTER"); // FREE (the default) blocks these invitation tests -- see the "member entitlement" describe block below for FREE-tier behavior itself
     const invitee = await createTestUser("invitee");
     const impostor = await createTestUser("impostor");
     const rawToken = await createPendingInvitation(org.id, owner.id, invitee.email);
@@ -262,6 +279,7 @@ describe("acceptInvitation", () => {
   it("rejects an expired invitation", async () => {
     const owner = await createTestUser("owner");
     const org = await createOrganization(owner, "Acme");
+    await setOrganizationPlan(org.id, "STARTER"); // FREE (the default) blocks these invitation tests -- see the "member entitlement" describe block below for FREE-tier behavior itself
     const invitee = await createTestUser("invitee");
     const rawToken = await createPendingInvitation(org.id, owner.id, invitee.email);
 
@@ -274,6 +292,7 @@ describe("acceptInvitation", () => {
   it("cannot be reused to create a second membership — re-accepting is an idempotent no-op", async () => {
     const owner = await createTestUser("owner");
     const org = await createOrganization(owner, "Acme");
+    await setOrganizationPlan(org.id, "STARTER"); // FREE (the default) blocks these invitation tests -- see the "member entitlement" describe block below for FREE-tier behavior itself
     const invitee = await createTestUser("invitee");
     const rawToken = await createPendingInvitation(org.id, owner.id, invitee.email);
 
@@ -289,6 +308,7 @@ describe("acceptInvitation", () => {
   it("if the user is already a member some other way, accepting still doesn't duplicate the membership row", async () => {
     const owner = await createTestUser("owner");
     const org = await createOrganization(owner, "Acme");
+    await setOrganizationPlan(org.id, "STARTER"); // FREE (the default) blocks these invitation tests -- see the "member entitlement" describe block below for FREE-tier behavior itself
     const invitee = await createTestUser("invitee");
     const rawToken = await createPendingInvitation(org.id, owner.id, invitee.email);
 
@@ -309,6 +329,7 @@ describe("acceptInvitation", () => {
   it("concurrent acceptance attempts for the same token are race-safe: exactly one membership row results", async () => {
     const owner = await createTestUser("owner");
     const org = await createOrganization(owner, "Acme");
+    await setOrganizationPlan(org.id, "STARTER"); // FREE (the default) blocks these invitation tests -- see the "member entitlement" describe block below for FREE-tier behavior itself
     const invitee = await createTestUser("invitee");
     const rawToken = await createPendingInvitation(org.id, owner.id, invitee.email);
 
@@ -331,11 +352,13 @@ describe("acceptInvitation", () => {
   it("a user from another organization cannot manipulate a different organization's invitation by guessing its id", async () => {
     const ownerA = await createTestUser("owner-a");
     const orgA = await createOrganization(ownerA, "Org A");
+    await setOrganizationPlan(orgA.id, "STARTER"); // FREE (the default) blocks these invitation tests -- see the "member entitlement" describe block below for FREE-tier behavior itself
     const invitee = await createTestUser("invitee");
     const rawToken = await createPendingInvitation(orgA.id, ownerA.id, invitee.email);
 
     const ownerB = await createTestUser("owner-b");
     const orgB = await createOrganization(ownerB, "Org B");
+    await setOrganizationPlan(orgB.id, "STARTER"); // FREE (the default) blocks these invitation tests -- see the "member entitlement" describe block below for FREE-tier behavior itself
 
     // ownerB has no way to reference orgA's invitation without its raw
     // token (unguessable) — attempting to revoke by id under their own
@@ -346,4 +369,84 @@ describe("acceptInvitation", () => {
     expect(result.organizationSlug).toBe(orgA.slug);
     expect(result.organizationSlug).not.toBe(orgB.slug);
   });
+});
+
+// --- Phase 11.3 (brief section 6 C): member-seat entitlement. -------------
+describe("member entitlement", () => {
+  it("a FREE organization (1 seat, already used by its OWNER) cannot create another invitation", async () => {
+    const owner = await createTestUser("owner");
+    const org = await createOrganization(owner, "Acme");
+
+    await expect(createInvitation(org.id, owner.id, "newmember@example.com", "MEMBER")).rejects.toThrow(
+      EntitlementLimitExceededError,
+    );
+  });
+
+  it("upgrading to STARTER immediately allows inviting a member", async () => {
+    const owner = await createTestUser("owner");
+    const org = await createOrganization(owner, "Acme");
+    await setOrganizationPlan(org.id, "STARTER");
+
+    await expect(createInvitation(org.id, owner.id, "newmember@example.com", "MEMBER")).resolves.toBeUndefined();
+  });
+
+  it("accepting is blocked once the member quota is reached, even for an invitation created earlier while there was room", async () => {
+    const owner = await createTestUser("owner");
+    const org = await createOrganization(owner, "Acme");
+    await setOrganizationPlan(org.id, "STARTER"); // 5 seats, 1 already used by OWNER
+
+    const { provider, messages } = createCapturingEmailProvider();
+    const invitee = await createTestUser("invitee");
+    await createInvitation(org.id, owner.id, invitee.email, "MEMBER", { provider });
+    const rawToken = extractToken(messages[0]!.text);
+
+    // 4 more members join through some other path before this invitation
+    // is accepted, filling every remaining seat.
+    for (let i = 0; i < 4; i++) {
+      const extra = await createTestUser(`extra-${i}`);
+      await prisma.organizationMember.create({ data: { organizationId: org.id, userId: extra.id, role: "MEMBER" } });
+    }
+
+    await expect(acceptInvitation(invitee, rawToken)).rejects.toThrow(EntitlementLimitExceededError);
+
+    const membership = await prisma.organizationMember.findUnique({
+      where: { userId_organizationId: { userId: invitee.id, organizationId: org.id } },
+    });
+    expect(membership).toBeNull();
+  });
+
+  it("concurrent acceptance of different invitations cannot exceed the member quota", async () => {
+    const owner = await createTestUser("owner");
+    const org = await createOrganization(owner, "Acme");
+    await setOrganizationPlan(org.id, "PRO"); // plenty of room to create 5 invitations
+
+    const invitees = await Promise.all(
+      Array.from({ length: 5 }, (_, i) => createTestUser(`invitee-${i}`)),
+    );
+    const tokens: string[] = [];
+    for (const invitee of invitees) {
+      const { provider, messages } = createCapturingEmailProvider();
+      await createInvitation(org.id, owner.id, invitee.email, "MEMBER", { provider });
+      tokens.push(extractToken(messages[0]!.text));
+    }
+
+    // Downgrade to STARTER (5 seats total) — OWNER already occupies one,
+    // so only 4 of these 5 pending invitations can ever be accepted.
+    // Existing data (all 5 pending invitations) is preserved regardless.
+    await setOrganizationPlan(org.id, "STARTER");
+    const pendingBefore = await listPendingInvitations(org.id);
+    expect(pendingBefore).toHaveLength(5);
+
+    const results = await Promise.allSettled(
+      invitees.map((invitee, i) => acceptInvitation(invitee, tokens[i]!)),
+    );
+
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter((r) => r.status === "rejected");
+    expect(fulfilled).toHaveLength(4);
+    expect(rejected).toHaveLength(1);
+
+    const memberCount = await prisma.organizationMember.count({ where: { organizationId: org.id } });
+    expect(memberCount).toBe(limitMax(PLAN_ENTITLEMENTS.STARTER.maxMembers)); // owner + 4, never over
+  }, 20000);
 });

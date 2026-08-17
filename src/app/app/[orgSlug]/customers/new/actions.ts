@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 
 import { createCustomer } from "@/server/ar/customers";
+import { EntitlementLimitExceededError } from "@/server/billing/entitlements";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
 
 export type CustomerFormState = { error: string } | null;
@@ -32,6 +33,9 @@ export async function createCustomerAction(
   } catch (error) {
     if (error instanceof z.ZodError) {
       return { error: error.issues[0]?.message ?? "Invalid customer details." };
+    }
+    if (error instanceof EntitlementLimitExceededError) {
+      return { error: error.message };
     }
     throw error;
   }

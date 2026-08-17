@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import { createTestOrganization } from "@/server/ar/test-fixtures";
+import { CollectionsAutomationNotEntitledError } from "@/server/billing/entitlements";
+import { setOrganizationPlan } from "@/server/billing/subscription";
 import { prisma } from "@/server/db/client";
 import { resetDatabase } from "@/server/db/test-utils";
 import { CollectionsResourceNotFoundError } from "./errors";
@@ -335,6 +337,7 @@ describe("renameCollectionPolicy", () => {
 describe("setOrganizationAutomationEnabled", () => {
   it("toggles the organization-level kill switch and is idempotent", async () => {
     const { organization } = await createTestOrganization();
+    await setOrganizationPlan(organization.id, "STARTER"); // FREE (the new-org default) does not entitle automation
     let org = await prisma.organization.findUniqueOrThrow({ where: { id: organization.id } });
     expect(org.automationEnabled).toBe(false);
 
@@ -348,5 +351,38 @@ describe("setOrganizationAutomationEnabled", () => {
       where: { organizationId: organization.id, type: "AUTOMATION_ENABLED" },
     });
     expect(events).toHaveLength(1);
+  });
+
+  // --- Phase 11.3 (brief section 6 E): plan entitlement gates activation.
+  it("a FREE organization cannot activate Collections Automation", async () => {
+    const { organization } = await createTestOrganization();
+    await expect(setOrganizationAutomationEnabled(organization.id, true)).rejects.toThrow(
+      CollectionsAutomationNotEntitledError,
+    );
+    const org = await prisma.organization.findUniqueOrThrow({ where: { id: organization.id } });
+    expect(org.automationEnabled).toBe(false);
+  });
+
+  it("a STARTER organization can activate Collections Automation", async () => {
+    const { organization } = await createTestOrganization();
+    await setOrganizationPlan(organization.id, "STARTER");
+    await expect(setOrganizationAutomationEnabled(organization.id, true)).resolves.toBeUndefined();
+  });
+
+  it("a PRO organization can activate Collections Automation", async () => {
+    const { organization } = await createTestOrganization();
+    await setOrganizationPlan(organization.id, "PRO");
+    await expect(setOrganizationAutomationEnabled(organization.id, true)).resolves.toBeUndefined();
+  });
+
+  it("disabling is always allowed regardless of plan — the safe direction never needs entitlement", async () => {
+    const { organization } = await createTestOrganization();
+    await setOrganizationPlan(organization.id, "STARTER");
+    await setOrganizationAutomationEnabled(organization.id, true);
+    await setOrganizationPlan(organization.id, "FREE");
+
+    await expect(setOrganizationAutomationEnabled(organization.id, false)).resolves.toBeUndefined();
+    const org = await prisma.organization.findUniqueOrThrow({ where: { id: organization.id } });
+    expect(org.automationEnabled).toBe(false);
   });
 });

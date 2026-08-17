@@ -8,6 +8,9 @@ import { createCustomer } from "@/server/ar/customers";
 import { createInvoice } from "@/server/ar/invoices";
 import { majorToMinor } from "@/server/ar/money";
 import { createTestOrganization } from "@/server/ar/test-fixtures";
+import { checkAiGenerationQuota } from "@/server/billing/entitlements";
+import { limitMax, PLAN_ENTITLEMENTS } from "@/server/billing/plans";
+import { setOrganizationPlan } from "@/server/billing/subscription";
 import { prisma } from "@/server/db/client";
 import { resetDatabase } from "@/server/db/test-utils";
 import { createFakeProvider } from "@/server/ai/providers/fake";
@@ -344,5 +347,57 @@ describe("prepareReminderCommunication — AI generation rate limit (P1-7)", () 
 
     expect(fromOrgA.aiGenerated).toBe(false); // org A exhausted its own budget
     expect(fromOrgB.aiGenerated).toBe(true); // org B's budget is untouched
+  }, 20000);
+});
+
+// --- Phase 11.3 (brief section 6 D): plan AI-generation quota — a distinct
+// concept from, and enforced alongside, the abuse-protection rate limit
+// exercised above. Both checks run before any AI provider is ever invoked.
+describe("prepareReminderCommunication — AI generation plan quota (Phase 11.3)", () => {
+  it("degrades to the deterministic template, and never calls the provider, once the plan's AI quota is exhausted", async () => {
+    const { organization, user } = await createTestOrganization();
+    const customer = await createCustomer(organization.id, { name: "Acme Co", email: "billing@acme.example" });
+    const { invoice, proposal } = await createApprovedProposal(organization.id, user.id, customer.id);
+
+    // FREE's maxAiGenerationsPerMonth is 20 — exhaust it directly against
+    // the same quota-check entitlements.ts uses, without going through
+    // this many real prepareReminderCommunication calls.
+    for (let i = 0; i < limitMax(PLAN_ENTITLEMENTS.FREE.maxAiGenerationsPerMonth); i++) {
+      await checkAiGenerationQuota(organization.id);
+    }
+
+    const { communication } = await prepareReminderCommunication(organization.id, proposal.id, {
+      enabled: true,
+      order: ["openrouter"] as AiProviderName[],
+      resolve: () => {
+        throw new Error("must never be called once the plan quota is exhausted");
+      },
+    });
+
+    expect(communication.aiGenerated).toBe(false);
+    expect(communication.body).toContain(invoice.number); // deterministic template, still correct
+  }, 20000);
+
+  it("upgrading the plan immediately restores AI generation", async () => {
+    const { organization, user } = await createTestOrganization();
+    const customer = await createCustomer(organization.id, { name: "Acme Co", email: "billing@acme.example" });
+    const { invoice, proposal } = await createApprovedProposal(organization.id, user.id, customer.id);
+
+    for (let i = 0; i < limitMax(PLAN_ENTITLEMENTS.FREE.maxAiGenerationsPerMonth); i++) {
+      await checkAiGenerationQuota(organization.id);
+    }
+    await setOrganizationPlan(organization.id, "STARTER"); // a fresh, much larger monthly quota
+
+    const provider = createFakeProvider({
+      kind: "success",
+      data: { subject: "Reminder", body: `Invoice ${invoice.number}: $500.00 due.` },
+    });
+    const { communication } = await prepareReminderCommunication(organization.id, proposal.id, {
+      enabled: true,
+      order: ["openrouter"] as AiProviderName[],
+      resolve: () => provider,
+    });
+
+    expect(communication.aiGenerated).toBe(true);
   }, 20000);
 });

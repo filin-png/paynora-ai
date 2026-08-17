@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 
+import { EntitlementLimitExceededError } from "@/server/billing/entitlements";
 import { requireUserForPage } from "@/server/tenancy/guards";
 import { acceptInvitation, InvalidOrExpiredInvitationError } from "@/server/tenancy/invitations";
 
@@ -19,7 +20,7 @@ export async function acceptInvitationAction(
     const result = await acceptInvitation(user, token);
     organizationSlug = result.organizationSlug;
   } catch (error) {
-    if (error instanceof InvalidOrExpiredInvitationError) {
+    if (error instanceof InvalidOrExpiredInvitationError || error instanceof EntitlementLimitExceededError) {
       return { error: error.message };
     }
     throw error;

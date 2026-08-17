@@ -5,6 +5,7 @@ import { createCustomer } from "@/server/ar/customers";
 import { createInvoice, getInvoiceWithFinancials } from "@/server/ar/invoices";
 import { majorToMinor } from "@/server/ar/money";
 import { createTestOrganization } from "@/server/ar/test-fixtures";
+import { limitMax, PLAN_ENTITLEMENTS } from "@/server/billing/plans";
 import { runAutomationTick } from "@/server/collections/engine";
 import { createAutomationReadyOrg } from "@/server/collections/test-fixtures";
 import { importCustomers } from "./customers";
@@ -318,4 +319,96 @@ describe("acceptance: fresh organization -> bulk import -> AR + Collections Auto
     });
     expect(sequence).not.toBeNull();
   });
+});
+
+// --- Phase 11.3 (brief section 7): bulk import must never bypass the
+// organization's plan open-invoice quota. ---------------------------------
+describe("importInvoices — plan quota safety", () => {
+  const FREE_LIMIT = limitMax(PLAN_ENTITLEMENTS.FREE.maxOpenInvoices);
+
+  it("only imports as many new invoices as remain under the quota, never exceeding it", async () => {
+    const { organization, customer } = await setupOrgWithCustomer();
+    const room = 5;
+    for (let i = 0; i < FREE_LIMIT - room; i++) {
+      await createInvoice(organization.id, {
+        customerId: customer.id,
+        number: `EXIST-${i}`,
+        currency: "USD",
+        amountMinor: majorToMinor(10),
+        issueDate: "2020-01-01",
+        dueDate: "2020-02-01",
+      });
+    }
+
+    const records = Array.from({ length: room + 5 }, (_, i) =>
+      record({ sourceRow: i + 1, invoiceNumber: `NEW-${i}`, customerEmail: customer.email!, amount: "50.00" }),
+    );
+
+    const summary = await importInvoices(organization.id, records);
+
+    expect(summary.created).toBe(room);
+    expect(summary.failed).toBe(5);
+    for (const row of summary.rows.slice(room)) {
+      expect(row.status).toBe("failed");
+      expect(row.message).toMatch(/plan/i);
+    }
+
+    const finalCount = await prisma.invoice.count({ where: { organizationId: organization.id, status: "OPEN" } });
+    expect(finalCount).toBe(FREE_LIMIT);
+  }, 20000);
+
+  it("re-importing the same file after hitting quota remains idempotent for invoices that already succeeded", async () => {
+    const { organization, customer } = await setupOrgWithCustomer();
+    const records = Array.from({ length: FREE_LIMIT + 3 }, (_, i) =>
+      record({ sourceRow: i + 1, invoiceNumber: `INV-${i}`, customerEmail: customer.email!, amount: "50.00" }),
+    );
+
+    const first = await importInvoices(organization.id, records);
+    expect(first.created).toBe(FREE_LIMIT);
+    expect(first.failed).toBe(3);
+
+    const second = await importInvoices(organization.id, records);
+    expect(second.created).toBe(0);
+    expect(second.skipped).toBe(FREE_LIMIT); // identical data, already exists
+    expect(second.failed).toBe(3); // still over quota
+
+    const finalCount = await prisma.invoice.count({ where: { organizationId: organization.id, status: "OPEN" } });
+    expect(finalCount).toBe(FREE_LIMIT);
+  }, 20000);
+
+  it("a conflicting (non-identical) duplicate row never consumes quota", async () => {
+    const { organization, customer } = await setupOrgWithCustomer();
+    for (let i = 0; i < FREE_LIMIT - 1; i++) {
+      await createInvoice(organization.id, {
+        customerId: customer.id,
+        number: `EXIST-${i}`,
+        currency: "USD",
+        amountMinor: majorToMinor(10),
+        issueDate: "2020-01-01",
+        dueDate: "2020-02-01",
+      });
+    }
+    await createInvoice(organization.id, {
+      customerId: customer.id,
+      number: "LAST-SLOT",
+      currency: "USD",
+      amountMinor: majorToMinor(10),
+      issueDate: "2020-01-01",
+      dueDate: "2020-02-01",
+    });
+    // Organization is now exactly at its limit.
+
+    const summary = await importInvoices(organization.id, [
+      record({ sourceRow: 1, invoiceNumber: "LAST-SLOT", customerEmail: customer.email!, amount: "999.00" }), // conflicts with existing data
+      record({ sourceRow: 2, invoiceNumber: "GENUINELY-NEW", customerEmail: customer.email!, amount: "50.00" }),
+    ]);
+
+    expect(summary.rows[0]!.status).toBe("failed");
+    expect(summary.rows[0]!.message).toMatch(/different data/i); // conflict, not a quota failure
+    expect(summary.rows[1]!.status).toBe("failed");
+    expect(summary.rows[1]!.message).toMatch(/plan/i);
+
+    const finalCount = await prisma.invoice.count({ where: { organizationId: organization.id, status: "OPEN" } });
+    expect(finalCount).toBe(FREE_LIMIT); // unchanged
+  }, 20000);
 });
