@@ -1,4 +1,13 @@
 import bcrypt from "bcryptjs";
+import { z } from "zod";
+
+/**
+ * The one password-strength rule for the whole app — shared by registration
+ * (src/server/auth/users.ts) and password reset (src/server/auth/password-reset.ts)
+ * so the two flows can never silently drift apart. See the Phase 11.2 brief:
+ * "Password validation must reuse current project password requirements."
+ */
+export const passwordSchema = z.string().min(8, "Password must be at least 8 characters");
 
 /**
  * bcryptjs is a pure-JS implementation: no native build step, so it installs

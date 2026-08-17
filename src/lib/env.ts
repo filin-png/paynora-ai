@@ -42,6 +42,14 @@ const baseEnvSchema = z.object({
   MISTRAL_API_KEY: z.string().trim().min(1).optional(),
   MISTRAL_MODEL: z.string().trim().min(1).optional(),
   EMAIL_PROVIDER: z.enum(["none", "smtp"]).default("none"),
+  // Phase 11.2: base URL used to build password-reset and organization-
+  // invitation links embedded in transactional emails (and returned by
+  // Server Actions for redirect purposes) — see
+  // src/server/auth/password-reset.ts and src/server/tenancy/invitations.ts.
+  // Defaults to the local dev server; a real deployment must set this to
+  // its actual public origin or every emailed link would point at
+  // localhost.
+  APP_BASE_URL: z.string().trim().url("APP_BASE_URL must be a valid URL").default("http://localhost:3000"),
   // The sender identity for every outgoing email, regardless of provider —
   // never user-supplied per-message, see docs/communications.md#sender-safety.
   PAYNORA_EMAIL_FROM: z
