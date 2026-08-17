@@ -5,6 +5,28 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Phase 10.2: Financial Data Ingestion Foundation
+
+- Bulk CSV import for customers and invoices — `/app/[orgSlug]/import`,
+  reachable via an "Import" button on the Customers/Invoices list pages.
+- `src/server/ingestion/`: a source-neutral ingestion boundary
+  (`NormalizedCustomerRecord`/`NormalizedInvoiceRecord`) so a future
+  non-CSV source (bank/accounting/ERP) can reuse the same validation and
+  write path without touching `src/server/ar/*`. CSV-specific parsing
+  lives only in `src/server/ingestion/csv/`.
+- Reuses `createCustomer`/`createInvoice` and their existing Zod schemas
+  exactly — an imported row gets the same validation, activity events,
+  and Collections Automation eligibility as a manually-entered one.
+- Deterministic decimal-string → minor-unit money conversion via the
+  existing `parseAmountInput` — no floating point.
+- Documented duplicate/conflict semantics: a customer email match is
+  always skipped, never overwritten; an existing invoice number with
+  identical data is skipped (re-importing the same file is safe), with
+  different data it's reported as a conflict and never overwritten.
+- No schema/migration changes — no import history is persisted; uploaded
+  CSV content lives only for the duration of one request.
+- New `docs/data-ingestion.md`. 49 new tests (566 total).
+
 ### Added — Production Hardening (Post-Phase-8 Audit Remediation)
 
 Closes every P0/P1 finding (plus related critical P2s) from
