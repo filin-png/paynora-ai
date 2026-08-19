@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { isEntitlementLimitMessage, UpgradePlanLink } from "@/components/billing/upgrade-hint";
 
 export type CustomerFormState = { error: string } | null;
 type CustomerFormAction = (
@@ -17,10 +18,13 @@ type CustomerFormAction = (
 
 export function CustomerForm({
   action,
+  orgSlug,
   defaultValues,
   submitLabel = "Save",
 }: {
   action: CustomerFormAction;
+  /** Only needed to build the "View plans" link shown on a plan-limit error — omit when this form can't hit a creation limit (e.g. editing). */
+  orgSlug?: string;
   defaultValues?: {
     name?: string;
     email?: string | null;
@@ -99,7 +103,14 @@ export function CustomerForm({
         </div>
       </div>
 
-      {state?.error ? <Alert tone="danger">{state.error}</Alert> : null}
+      {state?.error ? (
+        <Alert tone="danger">
+          <div className="flex flex-col items-start gap-1.5">
+            <span>{state.error}</span>
+            {orgSlug && isEntitlementLimitMessage(state.error) ? <UpgradePlanLink orgSlug={orgSlug} /> : null}
+          </div>
+        </Alert>
+      ) : null}
 
       <Button type="submit" disabled={isPending} className="mt-2 self-start">
         {isPending ? "Saving…" : submitLabel}

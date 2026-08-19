@@ -1,15 +1,20 @@
 import { CircleCheck, CircleHelp, CircleOff } from "lucide-react";
 
 import { Badge, type BadgeProps } from "@/components/ui/badge";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { ConfirmActionButton } from "@/components/ui/confirm-action-button";
 import { PageHeader } from "@/components/ui/page-header";
 import { Tabs } from "@/components/ui/tabs";
+import { cn } from "@/lib/utils";
+import { getReadinessState } from "@/server/onboarding/readiness";
 import type { ProviderHealthStatus, ProviderRegistryEntry } from "@/server/providers/types";
 import { getProviderRegistrySnapshot, getProviderVendorBreakdown } from "@/server/providers/registry";
 import { listOrganizationMembers } from "@/server/tenancy/organizations";
 import { listPendingInvitations } from "@/server/tenancy/invitations";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
 import { BillingTab } from "./billing-tab";
+import { clearDemoDataAction, seedDemoDataAction } from "./demo-data-actions";
 import { InviteMemberForm } from "./invite-member-form";
 import { PendingInvitationsList } from "./pending-invitations-list";
 import { RenameOrganizationForm } from "./rename-organization-form";
@@ -42,7 +47,7 @@ const VENDOR_GROUP_LABEL: Record<"ai" | "email" | "messaging", string> = {
   messaging: "Messaging",
 };
 
-const TABS = ["general", "members", "integrations", "security", "billing"] as const;
+const TABS = ["general", "members", "integrations", "security", "billing", "readiness"] as const;
 type SettingsTab = (typeof TABS)[number];
 
 export default async function OrganizationSettingsPage({
@@ -68,6 +73,7 @@ export default async function OrganizationSettingsPage({
           { href: `/app/${orgSlug}/settings?tab=integrations`, label: "Integrations", active: tab === "integrations" },
           { href: `/app/${orgSlug}/settings?tab=security`, label: "Security", active: tab === "security" },
           { href: `/app/${orgSlug}/settings?tab=billing`, label: "Billing", active: tab === "billing" },
+          { href: `/app/${orgSlug}/settings?tab=readiness`, label: "Readiness", active: tab === "readiness" },
         ]}
       />
 
@@ -78,6 +84,7 @@ export default async function OrganizationSettingsPage({
       {tab === "integrations" ? <IntegrationsTab /> : null}
       {tab === "security" ? <SecurityTab email={context.user.email} role={context.role} /> : null}
       {tab === "billing" ? <BillingTab organizationId={context.organization.id} /> : null}
+      {tab === "readiness" ? <ReadinessTab organizationId={context.organization.id} role={context.role} /> : null}
     </div>
   );
 }
@@ -86,11 +93,41 @@ async function GeneralTab({ orgSlug, name, role }: { orgSlug: string; name: stri
   if (role !== "OWNER") {
     return <p className="text-sm text-muted">Only an organization owner can change these settings.</p>;
   }
+  const boundSeed = seedDemoDataAction.bind(null, orgSlug);
+  const boundClear = clearDemoDataAction.bind(null, orgSlug);
   return (
-    <Card className="max-w-md p-6">
-      <p className="text-sm font-semibold text-foreground">Organization name</p>
-      <RenameOrganizationForm orgSlug={orgSlug} currentName={name} />
-    </Card>
+    <div className="flex flex-col gap-4">
+      <Card className="max-w-md p-6">
+        <p className="text-sm font-semibold text-foreground">Organization name</p>
+        <RenameOrganizationForm orgSlug={orgSlug} currentName={name} />
+      </Card>
+
+      <Card className="max-w-md p-6">
+        <p className="text-sm font-semibold text-foreground">Sample data</p>
+        <p className="mt-1 text-xs text-muted">
+          Add a handful of fictional B2B customers and invoices — current, overdue, partially paid, and paid — to try
+          out PAYNORA before importing your real data. Clearly marked and safe to remove at any time.
+        </p>
+        <div className="mt-4 flex gap-2">
+          <form action={boundSeed}>
+            <Button type="submit" variant="outline" size="sm">
+              Add sample data
+            </Button>
+          </form>
+          <ConfirmActionButton
+            trigger={
+              <button type="button" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
+                Remove sample data
+              </button>
+            }
+            action={boundClear}
+            confirmTitle="Remove sample data?"
+            confirmDescription="Archives every sample customer created by this action and cancels their still-open, unpaid sample invoices. Sample invoices that already have a recorded payment are kept as history, exactly like any other invoice."
+            confirmLabel="Remove sample data"
+          />
+        </div>
+      </Card>
+    </div>
   );
 }
 
@@ -138,6 +175,13 @@ async function MembersTab({
           ))}
         </ul>
       </Card>
+
+      {role === "OWNER" && members.length === 1 && pendingInvitations.length === 0 ? (
+        <p className="text-xs text-muted">
+          You&rsquo;re the only member of this organization. Invite a teammate above to share reviewing Action Center
+          recommendations and following up on overdue invoices.
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -230,5 +274,40 @@ function SecurityTab({ email, role }: { email: string; role: string }) {
         <Badge tone="success">Always on</Badge>
       </div>
     </Card>
+  );
+}
+
+/**
+ * OWNER-visible product-readiness summary (Phase 11.4 brief, section 6) —
+ * all computation lives in src/server/onboarding/readiness.ts so it stays
+ * unit-testable independently of this page.
+ */
+async function ReadinessTab({ organizationId, role }: { organizationId: string; role: string }) {
+  if (role !== "OWNER") {
+    return <p className="text-sm text-muted">Only an organization owner can view product readiness.</p>;
+  }
+
+  const { checks, readyCount } = await getReadinessState(organizationId);
+
+  return (
+    <div className="flex flex-col gap-4">
+      <p className="text-sm text-muted">
+        {readyCount} of {checks.length} readiness checks pass. This never shows a credential or environment value —
+        only whether something is configured. See DEPLOYMENT.md to configure a provider.
+      </p>
+      <Card className="overflow-hidden">
+        <ul className="divide-y divide-border">
+          {checks.map((check) => (
+            <li key={check.label} className="flex items-center justify-between gap-4 px-5 py-3.5 text-sm">
+              <div>
+                <p className="font-medium text-foreground">{check.label}</p>
+                <p className="text-xs text-muted-foreground">{check.detail}</p>
+              </div>
+              <Badge tone={check.ready ? "success" : "neutral"}>{check.ready ? "Ready" : "Not ready"}</Badge>
+            </li>
+          ))}
+        </ul>
+      </Card>
+    </div>
   );
 }

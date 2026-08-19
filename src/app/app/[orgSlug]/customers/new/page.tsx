@@ -25,7 +25,7 @@ export default async function NewCustomerPage({
       </Link>
       <PageHeader title="New customer" />
       <Card className="max-w-xl p-6">
-        <CustomerForm action={boundAction} submitLabel="Create customer" />
+        <CustomerForm action={boundAction} orgSlug={orgSlug} submitLabel="Create customer" />
       </Card>
     </div>
   );

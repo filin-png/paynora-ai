@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
+import { isEntitlementLimitMessage, UpgradePlanLink } from "@/components/billing/upgrade-hint";
 import { inviteMemberAction } from "./invitation-actions";
 
 export function InviteMemberForm({ orgSlug }: { orgSlug: string }) {
@@ -32,7 +33,10 @@ export function InviteMemberForm({ orgSlug }: { orgSlug: string }) {
 
       {state && "error" in state ? (
         <Alert tone="danger" className="basis-full">
-          {state.error}
+          <div className="flex flex-col items-start gap-1.5">
+            <span>{state.error}</span>
+            {isEntitlementLimitMessage(state.error) ? <UpgradePlanLink orgSlug={orgSlug} /> : null}
+          </div>
         </Alert>
       ) : null}
       {state && "success" in state ? (

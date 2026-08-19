@@ -18,6 +18,7 @@ import {
 } from "@/server/ar/summary";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
 import { getInvoiceStatusDisplay } from "./invoices/status";
+import { OnboardingChecklist } from "./onboarding-checklist";
 
 export default async function OrganizationDashboardPage({
   params,
@@ -51,6 +52,8 @@ export default async function OrganizationDashboardPage({
           </>
         }
       />
+
+      <OnboardingChecklist organizationId={context.organization.id} orgSlug={orgSlug} />
 
       {summary.length > 0 ? (
         <div className="flex flex-col gap-6">
