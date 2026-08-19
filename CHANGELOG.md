@@ -5,6 +5,38 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Phase 11.5: Production AI + Email Provider Foundation (Audit)
+
+- Audited the existing AI (`src/server/ai/`) and email (`src/server/email/`)
+  provider infrastructure against a production-readiness checklist. Found
+  that real, production-grade adapters — OpenRouter/Mistral for AI, SMTP
+  for email — plus timeout handling, request cancellation, Zod-validated
+  structured output, normalized error classes, quota-before-invocation
+  ordering, and secret-free telemetry already existed (built across
+  Phases 4, 6, and 9). No provider layer was duplicated or rebuilt; see
+  `docs/production-providers.md` for the full audit table.
+- Added `src/server/email/providers/smtp.test.ts`: the one real gap found
+  — the SMTP adapter's own request construction (transporter config,
+  message shape, idempotency header) and its rejection-vs-unknown-outcome
+  error classification (5xx/EENVELOPE/EMESSAGE vs. 4xx/connection errors)
+  were previously untested. Fully mocked `nodemailer`, no network call.
+- Settings → Readiness now reports "Sender address" (`PAYNORA_EMAIL_FROM`
+  presence) as its own signal, distinct from the email provider's health —
+  `src/server/onboarding/readiness.ts`.
+- `DEPLOYMENT.md`: added a concrete `EMAIL_PROVIDER=smtp` configuration
+  example (previously referenced by variable name only, unlike AI/
+  Telegram which already had runnable examples).
+- New `docs/production-providers.md`: an operator-facing checklist —
+  required environment variables, provider selection, local/test
+  behavior, security boundaries, known limitations (plain-text-only
+  email, no live health probe) — cross-referencing rather than
+  duplicating `docs/integration-architecture.md`.
+- No schema/migration changes — every requirement in this phase's brief
+  that implied new state (send-path re-authorization, idempotency,
+  quota-before-invocation) was already satisfied by existing, tested
+  mechanisms (the `Communication.status` compare-and-swap state machine,
+  `isAutoSendStillAuthorized`, `checkAiGenerationQuota`).
+
 ### Added — Phase 11.4: Commercial Conversion & Production Readiness
 
 - First-run onboarding checklist (`src/server/onboarding/service.ts`):

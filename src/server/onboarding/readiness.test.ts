@@ -23,6 +23,18 @@ describe("getReadinessState", () => {
     expect(email.detail).toBe("Not configured");
   });
 
+  it("reports the sender address as a distinct readiness signal from the email provider itself", async () => {
+    const { organization } = await createTestOrganization();
+    const state = await getReadinessState(organization.id);
+
+    const sender = state.checks.find((c) => c.label === "Sender address")!;
+    // PAYNORA_EMAIL_FROM is set for the whole test suite (vitest.config.mts)
+    // even though EMAIL_PROVIDER defaults to "none" — proving this is a
+    // genuinely separate signal, not derived from the provider's own health.
+    expect(sender.ready).toBe(true);
+    expect(sender.detail).toContain("@");
+  });
+
   it("reports the test environment's default APP_BASE_URL (localhost) as not production-ready", async () => {
     const { organization } = await createTestOrganization();
     const state = await getReadinessState(organization.id);
