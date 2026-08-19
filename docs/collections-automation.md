@@ -653,6 +653,25 @@ enough that a tick's own runtime (bounded by the per-organization query
 strategy above) stays well under the interval even as the organization
 count grows.
 
+### Phase 11.6 audit: this section already was the production scheduler
+
+Phase 11.6's brief asked for "a production-safe scheduled execution
+path" — a target this section, `resolveTargetOrganizations`'s bounded
+batching, `processOrganizationTick`'s per-organization failure
+isolation, and the [Concurrency](#concurrency) section's compare-and-
+swap guarantees already fully met, built in Phase 5 and hardened in
+Phase 9 (P1-4 observability, P1-5 batching). No scheduler infrastructure
+was added or duplicated in Phase 11.6; it audited this existing design
+against a production-readiness checklist and found it already correct —
+including at the exact concurrency edge cases the brief asked about (see
+`engine.test.ts`'s `"two concurrent ticks execute the same due step
+exactly once"` and `"concurrent tick invocations across the same batch
+never duplicate a send"`). The one addition: an "Automation scheduler"
+row in Settings → Readiness (`src/server/onboarding/readiness.ts`)
+reporting whether `AUTOMATION_ENABLED`/`AUTOMATION_CRON_SECRET` are
+configured for this deployment — see [Observability](#observability)
+below.
+
 ## Observability
 
 `runAutomationTick` returns and logs (`console.info`, one line per tick)
@@ -683,6 +702,16 @@ claimed, executed, or skipped, and why — the `note` field says), and any
 `Communication` on the invoice with `SENDING`/`UNCERTAIN` status (is it
 blocked) — every one of those is a normal, queryable row, not something
 only visible in a log line.
+
+Two OWNER-visible surfaces build on this, without duplicating it: `GET
+/internal/automation/health` (same bearer auth as the tick endpoint) is
+the operational heartbeat for an external monitor — see
+`src/server/collections/health.ts`. Settings → Readiness (Phase 11.4,
+extended Phase 11.6) reports a simpler, configuration-only "Automation
+scheduler: configured/disabled" signal for whoever is deciding whether to
+turn automation on for their organization — it never queries
+`AutomationTickRun` itself (that stays the health endpoint's job) and
+never exposes `AUTOMATION_CRON_SECRET`.
 
 ## Performance
 

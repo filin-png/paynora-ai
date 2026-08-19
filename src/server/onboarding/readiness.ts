@@ -72,6 +72,23 @@ export async function getReadinessState(organizationId: string): Promise<Readine
       detail: entitlements.collectionsAutomationEnabled ? "Available on this plan" : "Not available on the current plan",
     },
     {
+      // Deployment-wide, not org-specific — like "Application base URL"
+      // above. `env.ts`'s cross-field validation already guarantees
+      // AUTOMATION_CRON_SECRET is set whenever AUTOMATION_ENABLED is
+      // true, so checking both is defensive-but-honest rather than
+      // strictly necessary. This only reports whether the internal
+      // scheduler endpoint (POST /internal/automation/tick) is
+      // configured to accept requests — not whether an external
+      // scheduler is actually calling it on an interval, which is a
+      // separate, deployment-operational fact this app cannot observe;
+      // see GET /internal/automation/health for that heartbeat.
+      label: "Automation scheduler",
+      ready: env.AUTOMATION_ENABLED && Boolean(env.AUTOMATION_CRON_SECRET),
+      detail: env.AUTOMATION_ENABLED
+        ? "Enabled — configure a scheduler to call POST /internal/automation/tick on an interval"
+        : "Disabled for this deployment (AUTOMATION_ENABLED=false)",
+    },
+    {
       label: "Subscription",
       ready: status === "ACTIVE" || status === "TRIALING",
       detail: `${plan} — ${status}`,

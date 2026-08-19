@@ -5,6 +5,31 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Phase 11.6: Production Scheduler & Background Automation (Audit)
+
+- Audited the existing collections-automation scheduler
+  (`src/server/collections/engine.ts`, `POST /internal/automation/tick`,
+  `GET /internal/automation/health`) against a production-readiness
+  checklist: authenticated (constant-time bearer-secret comparison,
+  fail-closed when unconfigured), vendor-neutral (any cron-capable
+  scheduler), bounded/batched with fair rotation across organizations,
+  per-organization failure isolation, compare-and-swap idempotency proven
+  safe under concurrent/overlapping tick invocations, and plan
+  entitlement re-checked before every automated send. Found this was
+  already fully built in Phase 5 and hardened in Phase 9 (P1-4
+  observability, P1-5 batching) — no scheduler infrastructure was added
+  or duplicated. See `docs/collections-automation.md`'s new "Phase 11.6
+  audit" note for the detailed mapping of brief requirements to existing,
+  already-tested code.
+- The one addition: Settings → Readiness now reports "Automation
+  scheduler" — whether `AUTOMATION_ENABLED`/`AUTOMATION_CRON_SECRET` are
+  configured for this deployment, distinct from the per-organization
+  "Collections automation" plan-entitlement row already there. Never
+  exposes the secret — `src/server/onboarding/readiness.ts`.
+- No schema/migration changes. `AutomationTickRun`, the durable
+  heartbeat the scheduler already writes to, was untouched — it already
+  had every field this phase's observability requirements asked for.
+
 ### Added — Phase 11.5: Production AI + Email Provider Foundation (Audit)
 
 - Audited the existing AI (`src/server/ai/`) and email (`src/server/email/`)
