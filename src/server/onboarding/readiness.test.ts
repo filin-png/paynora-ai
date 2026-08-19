@@ -55,6 +55,15 @@ describe("getReadinessState", () => {
     expect(state.checks.find((c) => c.label === "Collections automation")!.ready).toBe(true);
   });
 
+  it("reports the automation scheduler as configured — AUTOMATION_ENABLED/AUTOMATION_CRON_SECRET are set for the whole test suite (vitest.config.mts)", async () => {
+    const { organization } = await createTestOrganization();
+    const state = await getReadinessState(organization.id);
+
+    const scheduler = state.checks.find((c) => c.label === "Automation scheduler")!;
+    expect(scheduler.ready).toBe(true);
+    expect(scheduler.detail).toContain("/internal/automation/tick");
+  });
+
   it("readyCount matches the number of ready checks", async () => {
     const { organization } = await createTestOrganization();
     const state = await getReadinessState(organization.id);
