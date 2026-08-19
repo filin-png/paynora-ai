@@ -2,6 +2,7 @@ import type { PlanId, SubscriptionStatus } from "@prisma/client";
 
 import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { PlanComparison } from "@/components/billing/plan-comparison";
 import { cn } from "@/lib/utils";
 import type { EntitlementLimit } from "@/server/billing/plans";
 import {
@@ -10,7 +11,7 @@ import {
   getOrganizationUsage,
 } from "@/server/billing/entitlements";
 
-const PLAN_LABEL: Record<PlanId, string> = {
+export const PLAN_LABEL: Record<PlanId, string> = {
   FREE: "Free",
   STARTER: "Starter",
   PRO: "Pro",
@@ -83,9 +84,14 @@ export async function BillingTab({ organizationId }: { organizationId: string })
         </Card>
       </div>
 
+      <div className="flex flex-col gap-2">
+        <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Compare plans</p>
+        <PlanComparison currentPlan={plan} />
+      </div>
+
       <p className="text-xs text-muted">
-        Billing setup is coming later — plans are currently managed by PAYNORA directly, and no payment method is
-        required.
+        Online billing is not connected yet — plans are currently managed by PAYNORA directly, and no payment method
+        is required. Contact PAYNORA to change your plan.
       </p>
     </div>
   );

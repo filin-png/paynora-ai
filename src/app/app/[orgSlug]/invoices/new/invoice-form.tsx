@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { isEntitlementLimitMessage, UpgradePlanLink } from "@/components/billing/upgrade-hint";
 import { SUPPORTED_CURRENCIES } from "@/server/ar/currency";
 import { createInvoiceAction, type InvoiceFormState } from "./actions";
 
@@ -18,12 +19,14 @@ type BoundAction = (
 
 export function InvoiceForm({
   action,
+  orgSlug,
   customers,
   suggestedNumber,
   defaultCustomerId,
   today,
 }: {
   action: BoundAction;
+  orgSlug: string;
   customers: { id: string; name: string }[];
   suggestedNumber: string;
   defaultCustomerId?: string;
@@ -85,7 +88,14 @@ export function InvoiceForm({
         <Textarea id="notes" name="notes" rows={3} placeholder="Optional — visible only to your team" />
       </div>
 
-      {state?.error ? <Alert tone="danger">{state.error}</Alert> : null}
+      {state?.error ? (
+        <Alert tone="danger">
+          <div className="flex flex-col items-start gap-1.5">
+            <span>{state.error}</span>
+            {isEntitlementLimitMessage(state.error) ? <UpgradePlanLink orgSlug={orgSlug} /> : null}
+          </div>
+        </Alert>
+      ) : null}
 
       <Button type="submit" disabled={isPending} className="mt-2 self-start">
         {isPending ? "Creating…" : "Create invoice"}

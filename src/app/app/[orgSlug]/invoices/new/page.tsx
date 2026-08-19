@@ -55,6 +55,7 @@ export default async function NewInvoicePage({
         <Card className="max-w-xl p-6">
           <InvoiceForm
             action={boundAction}
+            orgSlug={orgSlug}
             customers={customers}
             suggestedNumber={suggestedNumber}
             defaultCustomerId={customerId}

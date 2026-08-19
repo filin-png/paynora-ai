@@ -17,7 +17,7 @@ export function Tabs({
   className?: string;
 }) {
   return (
-    <div className={cn("flex gap-1 border-b border-border", className)} role="tablist">
+    <div className={cn("flex gap-1 overflow-x-auto border-b border-border", className)} role="tablist">
       {items.map((item) =>
         item.disabled ? (
           <span
@@ -25,7 +25,7 @@ export function Tabs({
             role="tab"
             aria-disabled="true"
             aria-selected={false}
-            className="cursor-not-allowed border-b-2 border-transparent px-3 py-2.5 text-sm font-medium text-muted-foreground/60"
+            className="shrink-0 cursor-not-allowed border-b-2 border-transparent px-3 py-2.5 text-sm font-medium whitespace-nowrap text-muted-foreground/60"
           >
             {item.label}
           </span>
@@ -36,7 +36,7 @@ export function Tabs({
             role="tab"
             aria-selected={item.active}
             className={cn(
-              "border-b-2 px-3 py-2.5 text-sm font-medium transition-colors",
+              "shrink-0 border-b-2 px-3 py-2.5 text-sm font-medium whitespace-nowrap transition-colors",
               item.active
                 ? "border-primary text-primary"
                 : "border-transparent text-muted hover:text-foreground",

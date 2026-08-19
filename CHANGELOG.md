@@ -5,6 +5,43 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Phase 11.4: Commercial Conversion & Production Readiness
+
+- First-run onboarding checklist (`src/server/onboarding/service.ts`):
+  six steps derived entirely from existing domain data (organization,
+  customer, invoice, Action Center proposal, and automation counts) —
+  no separate onboarding table, no fake completion flags. Rendered as a
+  `<details>`-based, JS-free collapsible card on the Overview page;
+  entitlement-aware step locking (collections automation is locked until
+  the plan allows it).
+- Sample/demo data mechanism (`src/server/onboarding/demo-data.ts`):
+  OWNER-only, explicit "Add sample data" / "Remove sample data" actions in
+  Settings → General. Creates a realistic mix of current, overdue,
+  partially paid, and paid B2B customers/invoices using the same
+  `createCustomer`/`createInvoice`/`recordPayment` domain functions the
+  manual UI uses — every entitlement check and activity-log entry applies.
+  Idempotent (marked via a fixed `@demo.paynora.internal` email domain);
+  removal archives/cancels rather than hard-deletes.
+- Plan comparison + upgrade UX: `src/components/billing/plan-comparison.tsx`
+  reads `PLAN_ENTITLEMENTS` directly (no duplicated hardcoded limits) and
+  renders in both Settings → Billing (current plan highlighted) and a new
+  landing-page Plans section. Limit-exceeded errors now surface a
+  "View plans →" link. No checkout — Billing states plainly that online
+  billing isn't connected yet.
+- Product readiness view (`src/server/onboarding/readiness.ts`): new
+  OWNER-only Settings → Readiness tab summarizing AI-provider, email,
+  `APP_BASE_URL`, automation-entitlement, and subscription state — built
+  on the existing secret-safe provider registry; never renders a
+  credential or raw environment value.
+- Landing page: new Plans section (same `PLAN_ENTITLEMENTS` source);
+  existing visual identity, mockups, and honest live-vs-architected
+  provider claims left unchanged.
+- Light empty-state improvement: Settings → Members now hints to invite a
+  teammate when the organization has only its owner.
+- New `docs/commercial-readiness.md`. No schema/migration changes — every
+  new state is either derived from existing tables or reuses existing
+  domain functions.
+
 ### Added — Phase 10.2: Financial Data Ingestion Foundation
 
 - Bulk CSV import for customers and invoices — `/app/[orgSlug]/import`,

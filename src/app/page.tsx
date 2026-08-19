@@ -16,6 +16,7 @@ import { HeroVisual } from "@/components/marketing/hero-visual";
 import { WorkflowStory } from "@/components/marketing/workflow-story";
 import { ActionCenterMockup, DashboardMockup } from "@/components/marketing/feature-mockups";
 import { cn } from "@/lib/utils";
+import { PLAN_ENTITLEMENTS, type EntitlementLimit, type PlanId } from "@/server/billing/plans";
 
 const trustPoints = [
   {
@@ -67,6 +68,7 @@ export default function LandingPage() {
         <CollectionsSection />
         <VisibilitySection />
         <ProvidersSection />
+        <PlansSection />
         <TrustSection />
         <FinalCta />
       </main>
@@ -344,6 +346,78 @@ function ProvidersSection() {
               <p className="mt-1.5 text-xs leading-5 text-muted">{provider.detail}</p>
             </div>
           ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+const PLAN_ORDER: PlanId[] = ["FREE", "STARTER", "PRO"];
+const PLAN_LABEL: Record<PlanId, string> = { FREE: "Free", STARTER: "Starter", PRO: "Pro" };
+const PLAN_BLURB: Record<PlanId, string> = {
+  FREE: "Get started with a small, focused book of business.",
+  STARTER: "For growing teams that want automated follow-up.",
+  PRO: "For teams that need higher limits and more seats.",
+};
+
+function formatPlanLimit(limit: EntitlementLimit): string {
+  return limit.kind === "unlimited" ? "Unlimited" : String(limit.max);
+}
+
+/**
+ * Reads `PLAN_ENTITLEMENTS` (src/server/billing/plans.ts) directly — the
+ * same authoritative catalog every server-side enforcement point and the
+ * Settings → Billing plan comparison read, so a number changed there is
+ * never out of sync with what a visitor sees here (Phase 11.4 brief,
+ * section 5/7). No checkout: every plan links to sign-up, and plan changes
+ * today are handled by PAYNORA directly — see the Settings → Billing tab
+ * once signed in.
+ */
+function PlansSection() {
+  return (
+    <section id="plans" className="border-y border-border bg-surface py-20 sm:py-24">
+      <div className="mx-auto w-full max-w-6xl px-5 sm:px-6">
+        <div className="reveal-on-scroll max-w-xl">
+          <p className="font-[family-name:var(--font-landing-mono)] text-xs font-medium tracking-wide text-primary uppercase">
+            Plans
+          </p>
+          <h2 className="mt-3 font-[family-name:var(--font-landing-display)] text-2xl font-medium tracking-tight text-foreground sm:text-3xl">
+            Start free. Grow into more as your book of business grows.
+          </h2>
+          <p className="mt-3 text-sm leading-6 text-muted">
+            No credit card required to start. Online billing isn&rsquo;t connected yet — plan changes today are
+            handled by PAYNORA directly, not through a self-serve checkout.
+          </p>
+        </div>
+
+        <div className="mt-10 grid gap-4 sm:grid-cols-3">
+          {PLAN_ORDER.map((planId, index) => {
+            const entitlements = PLAN_ENTITLEMENTS[planId];
+            return (
+              <div
+                key={planId}
+                className="reveal-on-scroll flex flex-col gap-4 rounded-2xl border border-border bg-background p-6"
+                style={{ animationDelay: `${index * 60}ms` }}
+              >
+                <div>
+                  <p className="text-sm font-semibold text-foreground">{PLAN_LABEL[planId]}</p>
+                  <p className="mt-1 text-xs leading-5 text-muted">{PLAN_BLURB[planId]}</p>
+                </div>
+                <ul className="flex flex-col gap-1.5 text-sm text-foreground">
+                  <li>{formatPlanLimit(entitlements.maxCustomers)} customers</li>
+                  <li>{formatPlanLimit(entitlements.maxOpenInvoices)} open invoices</li>
+                  <li>{formatPlanLimit(entitlements.maxMembers)} team members</li>
+                  <li>{formatPlanLimit(entitlements.maxAiGenerationsPerMonth)} AI generations / month</li>
+                  <li className={entitlements.collectionsAutomationEnabled ? undefined : "text-muted-foreground"}>
+                    {entitlements.collectionsAutomationEnabled ? "Collections automation" : "No collections automation"}
+                  </li>
+                </ul>
+                <Link href="/sign-up" className={cn(buttonVariants({ variant: "outline", size: "sm" }), "mt-2 self-start")}>
+                  Get started
+                </Link>
+              </div>
+            );
+          })}
         </div>
       </div>
     </section>
