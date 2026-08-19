@@ -47,6 +47,19 @@ export async function getReadinessState(organizationId: string): Promise<Readine
         emailEntry && emailEntry.vendor !== "none" ? `${emailEntry.vendor} — ${healthLabel(emailEntry.health)}` : "Not configured",
     },
     {
+      // A distinct signal from "Transactional email" above: env.ts's
+      // cross-field validation already guarantees PAYNORA_EMAIL_FROM is
+      // set whenever EMAIL_PROVIDER selects a real vendor (the process
+      // refuses to boot otherwise — see src/lib/env.ts), so this is
+      // never false while email is HEALTHY above; it's still worth its
+      // own row so "why is email not ready" is never ambiguous between
+      // "no provider selected" and "provider selected, sender missing"
+      // for anyone reading this before that invariant is memorized.
+      label: "Sender address",
+      ready: Boolean(env.PAYNORA_EMAIL_FROM),
+      detail: env.PAYNORA_EMAIL_FROM ? env.PAYNORA_EMAIL_FROM : "PAYNORA_EMAIL_FROM is not set",
+    },
+    {
       label: "Application base URL",
       ready: !isLocalBaseUrl,
       detail: isLocalBaseUrl

@@ -116,6 +116,32 @@ MISTRAL_API_KEY=...
 MISTRAL_MODEL=...
 ```
 
+To exercise the real SMTP email adapter (implemented since Phase 4, works
+with any SMTP relay — a self-hosted server, Yandex Mail, or any other
+SMTP-AUTH provider; see
+`docs/integration-architecture.md#email-no-new-adapter-needed` for why
+there's no vendor-specific email adapter):
+
+```bash
+# in .env.local
+EMAIL_PROVIDER=smtp
+PAYNORA_EMAIL_FROM=billing@yourdomain.example
+SMTP_HOST=smtp.yourprovider.example
+SMTP_PORT=587
+SMTP_USER=...
+SMTP_PASSWORD=...
+SMTP_SECURE=false             # true for port 465 (implicit TLS); false for STARTTLS on 587
+```
+
+`src/lib/env.ts`'s cross-field validation refuses to boot with
+`EMAIL_PROVIDER=smtp` set and any of `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/
+`SMTP_PASSWORD`/`PAYNORA_EMAIL_FROM` missing — a misconfigured deployment
+fails fast at startup with a clear message, never silently at the first
+real send attempt. Settings → Readiness (an OWNER-only view, Phase 11.4)
+reports whether a real email provider and sender address are currently
+configured for the signed-in organization, without ever exposing the
+credential values themselves.
+
 To exercise the real Telegram messaging adapter:
 
 ```bash
