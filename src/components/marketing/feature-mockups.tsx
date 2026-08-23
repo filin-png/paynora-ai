@@ -1,4 +1,6 @@
-import { CheckCheck, PenLine, X } from "lucide-react";
+import { PenLine, X } from "lucide-react";
+
+import { ApproveStampButton } from "@/components/marketing/approve-stamp-button";
 
 /**
  * Illustrative product mockups for the landing page's feature-spotlight
@@ -34,9 +36,7 @@ export function ActionCenterMockup() {
             <span className="inline-flex items-center gap-1 rounded-md border border-border-strong px-2.5 py-1 text-[11px] font-medium text-muted">
               <PenLine className="size-3" /> Edit
             </span>
-            <span className="inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-[11px] font-medium text-primary-foreground">
-              <CheckCheck className="size-3" /> Approve
-            </span>
+            <ApproveStampButton />
           </div>
         </div>
         <div className="flex items-center justify-between rounded-xl border border-border bg-background px-4 py-3">

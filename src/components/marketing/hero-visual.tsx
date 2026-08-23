@@ -1,5 +1,7 @@
 import { ArrowUpRight, Clock3, Sparkles } from "lucide-react";
 
+import { ApproveStampButton } from "@/components/marketing/approve-stamp-button";
+
 /**
  * Illustrative marketing composition — deliberately generic sample values,
  * not real user data (public, unauthenticated landing page only). One
@@ -14,10 +16,10 @@ export function HeroVisual() {
     <div className="relative mx-auto w-full max-w-md lg:mx-0 lg:max-w-none" aria-hidden="true">
       {/* Ambient glow field behind the composition */}
       <div
-        className="absolute -inset-x-10 -inset-y-16 -z-10 opacity-70 motion-safe:animate-[paynora-ambient-drift_14s_ease-in-out_infinite]"
+        className="absolute -inset-x-10 -inset-y-16 -z-10 opacity-80 motion-safe:animate-[paynora-ambient-drift_14s_ease-in-out_infinite]"
         style={{
           background:
-            "radial-gradient(closest-side, rgba(106,99,224,0.35), transparent 70%)",
+            "radial-gradient(45% 45% at 30% 25%, var(--glow-primary), transparent 70%), radial-gradient(40% 40% at 75% 70%, var(--glow-blue), transparent 70%)",
         }}
       />
       {/* Fine grid, fades toward the edges */}
@@ -122,8 +124,8 @@ function ActionCard({ compact = false }: { compact?: boolean }) {
       <p className="mt-2 text-[11px] leading-5 text-navy-muted">
         Send a firm reminder — 3rd follow-up, 12 days overdue.
       </p>
-      <div className="mt-3 flex gap-1.5">
-        <span className="rounded-md bg-primary px-2 py-1 text-[10px] font-medium text-white">Approve</span>
+      <div className="mt-3 flex items-center gap-1.5">
+        <ApproveStampButton size="xs" />
         <span className="rounded-md border border-white/15 px-2 py-1 text-[10px] font-medium text-navy-muted">Edit</span>
       </div>
     </div>

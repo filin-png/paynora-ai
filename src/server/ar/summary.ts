@@ -1,6 +1,6 @@
 import { prisma } from "@/server/db/client";
 import type { Currency } from "./currency";
-import { getBusinessToday, toDateOnlyString } from "./dates";
+import { daysBetween, getBusinessToday, toDateOnlyString } from "./dates";
 import { listInvoicesWithFinancials } from "./invoices";
 
 export type CurrencyArSummary = {
@@ -138,4 +138,112 @@ export async function getCustomerReceivablesSummaries(
     });
   }
   return result;
+}
+
+export type AgingBucket = {
+  label: string;
+  minDays: number;
+  maxDays: number | null;
+  outstandingMinor: bigint;
+  invoiceCount: number;
+};
+
+const AGING_BUCKET_DEFS: Array<{ label: string; minDays: number; maxDays: number | null }> = [
+  { label: "1-30 days", minDays: 1, maxDays: 30 },
+  { label: "31-60 days", minDays: 31, maxDays: 60 },
+  { label: "61-90 days", minDays: 61, maxDays: 90 },
+  { label: "90+ days", minDays: 91, maxDays: null },
+];
+
+/**
+ * Buckets currently-overdue outstanding balance by days overdue, for one
+ * currency (never summed across currencies — same rule as
+ * `getOrganizationArSummary`). Reuses `listInvoicesWithFinancials`'s
+ * existing overdue definition rather than recomputing it, so the Overview
+ * aging chart can never disagree with the invoice list's own "overdue"
+ * filter.
+ */
+export async function getAgingSummary(
+  organizationId: string,
+  currency: Currency,
+): Promise<{ buckets: AgingBucket[]; totalOverdueMinor: bigint }> {
+  const overdueInvoices = await listInvoicesWithFinancials(organizationId, "overdue");
+  const today = getBusinessToday();
+
+  const buckets: AgingBucket[] = AGING_BUCKET_DEFS.map((def) => ({
+    ...def,
+    outstandingMinor: 0n,
+    invoiceCount: 0,
+  }));
+  let totalOverdueMinor = 0n;
+
+  for (const { invoice, financials } of overdueInvoices) {
+    if ((invoice.currency as Currency) !== currency) continue;
+    const overdueDays = daysBetween(toDateOnlyString(invoice.dueDate), today);
+    const bucket =
+      buckets.find((b) => overdueDays >= b.minDays && (b.maxDays === null || overdueDays <= b.maxDays)) ??
+      buckets[buckets.length - 1];
+    bucket.outstandingMinor += financials.outstandingMinor;
+    bucket.invoiceCount += 1;
+    totalOverdueMinor += financials.outstandingMinor;
+  }
+
+  return { buckets, totalOverdueMinor };
+}
+
+export type ReceivablesTrendPoint = {
+  date: string;
+  outstandingMinor: bigint;
+  collectedMinor: bigint;
+};
+
+const TREND_WINDOW_DAYS = 14;
+
+/**
+ * Reconstructs a real (never fabricated) trend line from the ledger:
+ * cumulative issued-minus-collected outstanding balance, and cumulative
+ * collected, per day over the trailing 14 days — for one currency. Reads
+ * raw invoice/payment rows directly (not `listInvoicesWithFinancials`,
+ * which only answers "as of today") because a trend needs the balance as
+ * of each of several past days. Cancelled invoices are excluded, matching
+ * every other AR aggregate's treatment of cancellation as "never a real
+ * receivable".
+ */
+export async function getReceivablesTrend(
+  organizationId: string,
+  currency: Currency,
+): Promise<ReceivablesTrendPoint[]> {
+  const today = getBusinessToday();
+  const start = new Date(`${today}T00:00:00.000Z`);
+  start.setUTCDate(start.getUTCDate() - (TREND_WINDOW_DAYS - 1));
+
+  const [invoices, payments] = await Promise.all([
+    prisma.invoice.findMany({
+      where: { organizationId, currency, status: "OPEN" },
+      select: { amountMinor: true, issueDate: true },
+    }),
+    prisma.payment.findMany({
+      where: { organizationId, invoice: { currency } },
+      select: { amountMinor: true, paidAt: true },
+    }),
+  ]);
+
+  const points: ReceivablesTrendPoint[] = [];
+  const cursor = new Date(start);
+  for (let i = 0; i < TREND_WINDOW_DAYS; i += 1) {
+    const date = toDateOnlyString(cursor);
+    let issuedMinor = 0n;
+    for (const invoice of invoices) {
+      if (toDateOnlyString(invoice.issueDate) <= date) issuedMinor += invoice.amountMinor;
+    }
+    let collectedMinor = 0n;
+    for (const payment of payments) {
+      if (toDateOnlyString(payment.paidAt) <= date) collectedMinor += payment.amountMinor;
+    }
+    const outstandingMinor = issuedMinor - collectedMinor;
+    points.push({ date, outstandingMinor: outstandingMinor < 0n ? 0n : outstandingMinor, collectedMinor });
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+
+  return points;
 }

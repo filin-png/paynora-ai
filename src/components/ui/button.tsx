@@ -9,6 +9,8 @@ export const buttonVariants = cva(
     variants: {
       variant: {
         primary: "bg-primary text-primary-foreground shadow-card-sm hover:bg-primary-hover",
+        premium:
+          "bg-[linear-gradient(135deg,var(--primary),var(--secondary))] text-white shadow-[0_1px_0_rgb(255_255_255/0.16)_inset,0_10px_30px_-10px_var(--glow-primary)] hover:brightness-110",
         outline:
           "border border-border-strong bg-surface text-foreground shadow-card-sm hover:border-primary/40 hover:bg-accent-soft",
         ghost: "text-foreground hover:bg-foreground/5",

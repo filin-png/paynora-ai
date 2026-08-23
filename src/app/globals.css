@@ -1,52 +1,68 @@
 @import "tailwindcss";
 
 /**
- * PAYNORA design tokens — premium financial control system, not a generic
- * admin template. See docs/product-ui.md#design-system for the rationale
- * behind every choice here (palette restraint, navy/graphite for
- * navigation and strong accents, semantic color reserved for real
- * financial meaning).
+ * PAYNORA design tokens — "Dark Financial Intelligence" premium control
+ * system, not a generic admin template. See docs/product-ui.md#design-system
+ * for the rationale behind every choice here. Forced dark by default (not
+ * gated on prefers-color-scheme) — a premium fintech surface is a
+ * deliberate brand choice here, the same way Stripe/Linear/Frax-style
+ * financial tools default to a single considered theme rather than
+ * inheriting the OS setting. Palette restraint still applies: one violet
+ * primary + one blue secondary + rare cyan accent, semantic color reserved
+ * for real financial meaning, never decoration.
  */
 :root {
-  /* Neutral surfaces — soft, warm-white, never stark #fff-on-#fff */
-  --background: #f6f7f9;
-  --surface: #ffffff;
-  --surface-raised: #ffffff;
-  --foreground: #10162a;
-  --muted: #5b6478;
-  --muted-foreground: #5a6278;
-  --border: #e4e7ee;
-  --border-strong: #d3d8e4;
+  /* Neutral surfaces — deep navy/black, layered by elevation */
+  --background: #05070d;
+  --surface: #0e1424;
+  --surface-raised: #131b30;
+  --foreground: #f8fafc;
+  --muted: #98a1bd;
+  --muted-foreground: #8890ad;
+  --border: #1c2440;
+  --border-strong: #2c3656;
 
   /* Navy — navigation, strong brand accents, auth/landing depth */
-  --navy-950: #070b18;
-  --navy-900: #0b1122;
-  --navy-800: #10182e;
+  --navy-950: #05070d;
+  --navy-900: #080b16;
+  --navy-800: #0b1122;
   --navy-700: #172142;
   --navy-600: #223159;
   --navy-foreground: #e7eaf6;
   --navy-muted: #8b93b8;
 
-  /* Restrained indigo — the one accent color, used for primary actions and focus */
-  --primary: #3730a3;
-  --primary-hover: #2f2789;
+  /* Primary/secondary accent pair — violet + blue, financial-intelligence direction */
+  --primary: #7c3aed;
+  --primary-hover: #8b5cf6;
   --primary-foreground: #f8fafc;
-  --accent-soft: #eef0fc;
+  --accent-soft: rgb(124 58 237 / 0.14);
+  --secondary: #3b82f6;
+  --secondary-soft: rgb(59 130 246 / 0.14);
+  --accent-cyan: #22d3ee;
 
   /* Semantic financial colors — reserved for real meaning, never decoration */
-  --success: #047857;
-  --success-soft: #e7f5ef;
-  --warning: #b45309;
-  --warning-soft: #fdf3e3;
-  --danger: #b91c1c;
-  --danger-soft: #fbeaea;
+  --success: #10b981;
+  --success-soft: rgb(16 185 129 / 0.14);
+  --warning: #f59e0b;
+  --warning-soft: rgb(245 158 11 / 0.14);
+  --danger: #ef4444;
+  --danger-soft: rgb(239 68 68 / 0.14);
 
   --ring: var(--primary);
   --radius: 0.625rem;
 
-  --shadow-sm: 0 1px 2px 0 rgb(16 22 42 / 0.04);
-  --shadow-md: 0 4px 12px -2px rgb(16 22 42 / 0.08), 0 2px 4px -2px rgb(16 22 42 / 0.04);
-  --shadow-lg: 0 12px 32px -8px rgb(16 22 42 / 0.16), 0 4px 8px -4px rgb(16 22 42 / 0.06);
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+  --shadow-md: 0 4px 16px -4px rgb(0 0 0 / 0.45), 0 2px 6px -2px rgb(0 0 0 / 0.3);
+  --shadow-lg: 0 20px 50px -16px rgb(0 0 0 / 0.65), 0 6px 16px -6px rgb(0 0 0 / 0.4);
+
+  /* Glass + glow system — three surface levels, see docs/product-ui.md#design-system */
+  --glass-border: rgb(255 255 255 / 0.08);
+  --glass-2-bg: rgb(255 255 255 / 0.035);
+  --glass-3-from: rgb(124 58 237 / 0.16);
+  --glass-3-to: rgb(255 255 255 / 0.02);
+  --glow-primary: rgb(124 58 237 / 0.35);
+  --glow-blue: rgb(59 130 246 / 0.25);
+  --glow-cyan: rgb(34 211 238 / 0.22);
 }
 
 @theme inline {
@@ -71,6 +87,9 @@
   --color-primary-hover: var(--primary-hover);
   --color-primary-foreground: var(--primary-foreground);
   --color-accent-soft: var(--accent-soft);
+  --color-secondary: var(--secondary);
+  --color-secondary-soft: var(--secondary-soft);
+  --color-accent-cyan: var(--accent-cyan);
 
   --color-success: var(--success);
   --color-success-soft: var(--success-soft);
@@ -91,41 +110,46 @@
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0e1a;
-    --surface: #10162a;
-    --surface-raised: #141c34;
-    --foreground: #eef1fa;
-    --muted: #98a1bd;
-    --muted-foreground: #8890ad;
-    --border: #232c48;
-    --border-strong: #2c3656;
-
-    --navy-950: #05070f;
-    --navy-900: #080b16;
-
-    --primary: #6a63e0;
-    --primary-hover: #7d76ea;
-    --primary-foreground: #f8fafc;
-    --accent-soft: #1a1a3d;
-
-    --success: #34d399;
-    --success-soft: #0d2b23;
-    --warning: #fbbf24;
-    --warning-soft: #2e2308;
-    --danger: #f87171;
-    --danger-soft: #341414;
-
-    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
-    --shadow-md: 0 4px 12px -2px rgb(0 0 0 / 0.45);
-    --shadow-lg: 0 12px 32px -8px rgb(0 0 0 / 0.6);
-  }
-}
-
 body {
   background: var(--background);
   color: var(--foreground);
+}
+
+/* Ambient page glow — extremely restrained, radial, purple/blue only.
+   Applied via a class on the app-shell/root containers, not globally, so
+   it never stacks across nested elements. */
+.ambient-field {
+  position: relative;
+  isolation: isolate;
+}
+.ambient-field::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(60% 40% at 15% 0%, var(--glow-primary), transparent 60%),
+    radial-gradient(45% 35% at 100% 20%, var(--glow-blue), transparent 65%);
+  opacity: 0.5;
+}
+
+/* Glass surface levels — see docs/product-ui.md#design-system.
+   Level 1 = plain --surface (Card default, no class needed).
+   Level 2 = .glass-surface: translucent + blur + hairline border.
+   Level 3 = .glass-elevated: tinted gradient + stronger depth + highlight. */
+.glass-surface {
+  background: var(--glass-2-bg);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--glass-border);
+}
+.glass-elevated {
+  background: linear-gradient(155deg, var(--glass-3-from), var(--glass-3-to) 60%);
+  border: 1px solid var(--glass-border);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.06),
+    var(--shadow-lg);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -203,5 +227,46 @@ body {
   }
   50% {
     transform: translate(2%, -3%) scale(1.04);
+  }
+}
+
+/**
+ * "The Pulse" — PAYNORA's one signature motion motif (see
+ * docs/product-ui.md#design-system): a live-data heartbeat line used
+ * behind the landing hero, and the matching ring pulse used for every
+ * "live/real-time" indicator. Two keyframes, reused everywhere rather
+ * than each screen inventing its own live-indicator animation.
+ */
+@keyframes paynora-pulse-travel {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+@keyframes paynora-pulse-ring {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.9;
+  }
+  80%,
+  100% {
+    transform: scale(2.1);
+    opacity: 0;
+  }
+}
+@keyframes paynora-stamp-in {
+  0% {
+    opacity: 0;
+    transform: scale(2.4) rotate(-18deg);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(0.92) rotate(-4deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(-8deg);
   }
 }

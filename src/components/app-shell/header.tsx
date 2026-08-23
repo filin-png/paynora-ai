@@ -17,7 +17,7 @@ export function Header({
   signOutForm: React.ReactNode;
 }) {
   return (
-    <header className="flex h-16 shrink-0 items-center justify-between border-b border-border bg-surface/80 px-4 backdrop-blur sm:px-6">
+    <header className="glass-surface flex h-16 shrink-0 items-center justify-between border-x-0 border-t-0 px-4 sm:px-6">
       <div className="flex items-center gap-3">
         <MobileNav orgSlug={orgSlug} orgName={orgName} />
         <span className="hidden text-sm font-medium text-muted lg:inline">{orgName}</span>
