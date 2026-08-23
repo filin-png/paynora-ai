@@ -13,6 +13,7 @@ import { PaynoraLogo } from "@/components/brand/logo";
 import { buttonVariants } from "@/components/ui/button";
 import { bodyFont, displayFont, monoFont } from "@/components/marketing/fonts";
 import { HeroVisual } from "@/components/marketing/hero-visual";
+import { PulseDot, PulseLine } from "@/components/marketing/pulse";
 import { WorkflowStory } from "@/components/marketing/workflow-story";
 import { ActionCenterMockup, DashboardMockup } from "@/components/marketing/feature-mockups";
 import { cn } from "@/lib/utils";
@@ -80,7 +81,7 @@ export default function LandingPage() {
 function SiteNav() {
   return (
     <header className="sticky top-3 z-30 px-4 sm:top-4 sm:px-6">
-      <div className="mx-auto flex w-full max-w-6xl items-center justify-between rounded-2xl border border-border/70 bg-surface/90 px-4 py-2.5 shadow-card-md backdrop-blur-md sm:px-5">
+      <div className="glass-surface mx-auto flex w-full max-w-6xl items-center justify-between rounded-2xl px-4 py-2.5 shadow-card-md sm:px-5">
         <PaynoraLogo size={24} />
         <nav className="flex items-center gap-2 sm:gap-4">
           <Link
@@ -89,7 +90,7 @@ function SiteNav() {
           >
             Sign in
           </Link>
-          <Link href="/sign-up" className={cn(buttonVariants({ size: "sm" }))}>
+          <Link href="/sign-up" className={cn(buttonVariants({ variant: "premium", size: "sm" }))}>
             Get started
           </Link>
         </nav>
@@ -117,21 +118,23 @@ function Hero() {
       <div className="relative mx-auto grid w-full max-w-6xl gap-14 px-5 pt-16 pb-20 sm:px-6 sm:pt-20 sm:pb-28 lg:grid-cols-[1.05fr_1fr] lg:items-center lg:gap-10 lg:py-32">
         <div className="flex flex-col gap-6">
           <span className="inline-flex w-fit items-center gap-2 rounded-full border border-white/15 bg-white/5 px-3 py-1 text-xs font-medium text-navy-muted">
-            <span className="size-1.5 rounded-full bg-success motion-safe:animate-pulse" />
-            Accounts receivable, under control
+            <PulseDot />
+            AI-powered accounts receivable intelligence
           </span>
-          <h1 className="max-w-xl font-[family-name:var(--font-landing-display)] text-4xl font-medium tracking-tight text-balance text-white sm:text-5xl lg:text-[3.25rem] lg:leading-[1.08]">
-            Get paid faster.
-            <br />
-            Chase invoices less.
+          <h1 className="max-w-xl font-[family-name:var(--font-landing-display)] text-4xl font-medium tracking-tight text-balance text-white sm:text-5xl lg:text-[3.4rem] lg:leading-[1.06]">
+            Know where your{" "}
+            <span className="bg-[linear-gradient(120deg,var(--primary-hover),var(--secondary)_65%,var(--accent-cyan))] bg-clip-text text-transparent">
+              money
+            </span>{" "}
+            is going.
           </h1>
           <p className="max-w-lg text-lg leading-8 text-navy-muted">
-            PAYNORA gives B2B companies one place to see what&rsquo;s outstanding, catch what&rsquo;s
-            overdue, and know exactly what to do next — with a human approving every follow-up
-            PAYNORA recommends, or automating it on your terms.
+            AI collection intelligence that helps B2B teams see what&rsquo;s outstanding, catch
+            what&rsquo;s overdue, and know exactly what to do next — with a human approving every
+            follow-up PAYNORA recommends, or automating it on your terms.
           </p>
           <div className="flex flex-wrap items-center gap-3 pt-2">
-            <Link href="/sign-up" className={cn(buttonVariants({ size: "lg" }))}>
+            <Link href="/sign-up" className={cn(buttonVariants({ variant: "premium", size: "lg" }))}>
               Get started
               <ArrowRight className="size-4" />
             </Link>
@@ -154,6 +157,11 @@ function Hero() {
 
         <HeroVisual />
       </div>
+      {/* "The Pulse" — PAYNORA's signature live-data trace, see
+          docs/product-ui.md#design-system. Runs along the empty margin
+          below the hero content (not behind the composition's near-opaque
+          cards, where it would be invisible). */}
+      <PulseLine className="inset-x-0 bottom-2 h-28 opacity-90" />
     </section>
   );
 }
@@ -265,7 +273,7 @@ function CollectionsSection() {
               </p>
             </div>
           </div>
-          <div className="reveal-on-scroll rounded-2xl border border-border bg-background p-6 shadow-card-md">
+          <div className="reveal-on-scroll glass-surface rounded-2xl p-6 shadow-card-md">
             <ol className="relative flex flex-col gap-6 pl-6">
               <span aria-hidden="true" className="absolute top-1 bottom-1 left-[7px] w-px bg-border-strong" />
               {[
@@ -339,7 +347,7 @@ function ProvidersSection() {
           {providers.map((provider, index) => (
             <div
               key={provider.name}
-              className="reveal-on-scroll rounded-xl border border-border bg-background p-5"
+              className="reveal-on-scroll glass-surface rounded-xl p-5 transition-colors hover:border-primary/30"
               style={{ animationDelay: `${index * 60}ms` }}
             >
               <p className="text-sm font-semibold text-foreground">{provider.name}</p>
@@ -396,7 +404,7 @@ function PlansSection() {
             return (
               <div
                 key={planId}
-                className="reveal-on-scroll flex flex-col gap-4 rounded-2xl border border-border bg-background p-6"
+                className="reveal-on-scroll glass-elevated flex flex-col gap-4 rounded-2xl p-6"
                 style={{ animationDelay: `${index * 60}ms` }}
               >
                 <div>
@@ -467,7 +475,7 @@ function FinalCta() {
           Create an account and see your outstanding invoices in one place — no credit
           card required.
         </p>
-        <Link href="/sign-up" className={cn(buttonVariants({ size: "lg" }))}>
+        <Link href="/sign-up" className={cn(buttonVariants({ variant: "premium", size: "lg" }))}>
           Create your account
           <ArrowRight className="size-4" />
         </Link>

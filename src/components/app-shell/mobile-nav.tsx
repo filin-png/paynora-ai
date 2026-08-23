@@ -34,8 +34,8 @@ export function MobileNav({ orgSlug, orgName }: { orgSlug: string; orgName: stri
 
       {open ? (
         <div className="fixed inset-0 z-40 lg:hidden">
-          <div className="absolute inset-0 bg-navy-950/50" onClick={() => setOpen(false)} aria-hidden="true" />
-          <div className="absolute inset-y-0 left-0 flex w-72 flex-col bg-navy-900 shadow-card-lg">
+          <div className="absolute inset-0 bg-navy-950/70 backdrop-blur-sm" onClick={() => setOpen(false)} aria-hidden="true" />
+          <div className="absolute inset-y-0 left-0 flex w-72 flex-col border-r border-white/[0.06] bg-navy-900 shadow-card-lg">
             <div className="flex h-16 items-center justify-between px-5">
               <PaynoraLogo tone="dark" size={24} />
               <button

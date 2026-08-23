@@ -16,15 +16,20 @@ export function Sidebar({
   const navItems = getNavItems(`/app/${orgSlug}`);
 
   return (
-    <aside className="hidden w-64 shrink-0 flex-col bg-navy-900 lg:flex">
-      <div className="flex h-16 items-center px-5">
+    <aside className="relative hidden w-64 shrink-0 flex-col overflow-hidden border-r border-white/[0.06] bg-navy-900 lg:flex">
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute -top-24 -left-16 -z-10 size-64 rounded-full opacity-60 blur-3xl"
+        style={{ background: "var(--glow-primary)" }}
+      />
+      <div className="relative flex h-16 items-center px-5">
         <Link href={`/app/${orgSlug}`}>
           <PaynoraLogo tone="dark" size={24} />
         </Link>
       </div>
 
-      <div className="mx-3 mb-3 flex items-center gap-2.5 rounded-lg bg-white/5 px-3 py-2.5">
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-white/10 text-xs font-semibold text-white">
+      <div className="relative mx-3 mb-3 flex items-center gap-2.5 rounded-lg border border-white/[0.06] bg-white/[0.04] px-3 py-2.5">
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-[linear-gradient(135deg,var(--primary),var(--secondary))] text-xs font-semibold text-white">
           {orgName.slice(0, 2).toUpperCase()}
         </span>
         <div className="min-w-0">

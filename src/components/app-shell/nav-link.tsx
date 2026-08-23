@@ -38,12 +38,18 @@ export function NavLink({
       onClick={onNavigate}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+        "relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-150",
         active
-          ? "bg-white/10 text-white"
-          : "text-navy-muted hover:bg-white/5 hover:text-white",
+          ? "border border-primary/25 bg-primary/15 text-white shadow-[0_0_0_1px_rgb(255_255_255/0.03)_inset,0_0_24px_-6px_var(--glow-primary)]"
+          : "border border-transparent text-navy-muted hover:bg-white/5 hover:text-white",
       )}
     >
+      {active ? (
+        <span
+          aria-hidden="true"
+          className="absolute top-1.5 bottom-1.5 left-0 w-[3px] rounded-full bg-[linear-gradient(180deg,var(--primary-hover),var(--secondary))]"
+        />
+      ) : null}
       {icon}
       {label}
     </Link>
