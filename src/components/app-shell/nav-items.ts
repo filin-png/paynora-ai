@@ -5,6 +5,7 @@ import {
   Settings,
   Sparkles,
   Users,
+  WalletIcon,
   Zap,
 } from "lucide-react";
 
@@ -16,6 +17,7 @@ export function getNavItems(base: string) {
     { href: `${base}/customers`, label: "Customers", icon: Users },
     { href: `${base}/actions`, label: "Action Center", icon: Sparkles },
     { href: `${base}/automation`, label: "Automation", icon: Zap },
+    { href: `${base}/wallet`, label: "Wallet", icon: WalletIcon },
     { href: `${base}/settings`, label: "Settings", icon: Settings },
   ];
 }

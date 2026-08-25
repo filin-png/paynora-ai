@@ -22,6 +22,13 @@ export async function resetDatabase(): Promise<void> {
     prisma.collectionSequence.deleteMany(),
     prisma.collectionPolicyStep.deleteMany(),
     prisma.collectionPolicy.deleteMany(),
+    // Phase 13: wallet domain — walletTransaction/cryptoPaymentRequest must
+    // be deleted before wallet/invoice/user (both hold RESTRICT foreign
+    // keys into those tables) — see prisma/schema.prisma's Wallet Foundation
+    // section.
+    prisma.walletTransaction.deleteMany(),
+    prisma.cryptoPaymentRequest.deleteMany(),
+    prisma.wallet.deleteMany(),
     prisma.activityEvent.deleteMany(),
     prisma.payment.deleteMany(),
     prisma.invoice.deleteMany(),

@@ -18,7 +18,7 @@
 export type DeploymentProfile = "RU" | "GLOBAL" | "LOCAL_TEST";
 
 /** The provider categories this registry currently knows about. Storage/Accounting/CRM/Banking have no TypeScript interface yet — see docs/integration-architecture.md#not-implemented-boundaries. */
-export type ProviderCategory = "ai" | "email" | "messaging" | "billing";
+export type ProviderCategory = "ai" | "email" | "messaging" | "billing" | "wallet";
 
 /**
  * Vendor-neutral health status. Phase 6 never performs a live network

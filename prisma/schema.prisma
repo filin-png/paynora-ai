@@ -55,26 +55,27 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  memberships             OrganizationMember[]
-  decidedActionProposals  ActionProposal[]
-  autoSendEnabledPolicies CollectionPolicy[]
-  passwordResetTokens     PasswordResetToken[]
-  sentInvitations         OrganizationInvitation[] @relation("InvitedBy")
-  acceptedInvitations     OrganizationInvitation[] @relation("AcceptedBy")
+  memberships                  OrganizationMember[]
+  decidedActionProposals       ActionProposal[]
+  autoSendEnabledPolicies      CollectionPolicy[]
+  passwordResetTokens          PasswordResetToken[]
+  sentInvitations              OrganizationInvitation[] @relation("InvitedBy")
+  acceptedInvitations          OrganizationInvitation[] @relation("AcceptedBy")
+  createdCryptoPaymentRequests CryptoPaymentRequest[]
 
   @@map("users")
 }
 
 model Organization {
-  id                String   @id @default(cuid())
-  name              String
-  slug              String   @unique
+  id                   String    @id @default(cuid())
+  name                 String
+  slug                 String    @unique
   // Phase 5 global kill switch. Automation is OFF by default for every
   // organization, including newly created ones — see
   // docs/collections-automation.md#kill-switch. Flipping this to true does
   // not by itself send anything: it only allows runAutomationTick to look
   // at this org's enabled CollectionPolicy/CollectionSequence rows at all.
-  automationEnabled Boolean  @default(false)
+  automationEnabled    Boolean   @default(false)
   // Phase 9: the scheduler's fair-rotation cursor — see
   // src/server/collections/engine.ts#resolveTargetOrganizationIds and
   // docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-5. Null means "never
@@ -83,8 +84,8 @@ model Organization {
   // regardless of that org's own success/failure, so one broken
   // organization never blocks others from rotating through.
   automationLastTickAt DateTime?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
   members                  OrganizationMember[]
   customers                Customer[]
@@ -101,6 +102,9 @@ model Organization {
   collectionStepExecutions CollectionStepExecution[]
   invitations              OrganizationInvitation[]
   subscription             OrganizationSubscription?
+  wallets                  Wallet[]
+  cryptoPaymentRequests    CryptoPaymentRequest[]
+  walletTransactions       WalletTransaction[]
 
   @@map("organizations")
 }
@@ -153,23 +157,23 @@ enum InvitationStatus {
 }
 
 model OrganizationInvitation {
-  id             String            @id @default(cuid())
-  organizationId String
+  id               String           @id @default(cuid())
+  organizationId   String
   // Normalized (lowercased/trimmed) the same way User.email is — see
   // src/server/auth/email.ts's normalizeEmail, reused here.
-  email          String
-  role           OrganizationRole
-  tokenHash      String            @unique
-  status         InvitationStatus  @default(PENDING)
-  expiresAt      DateTime
-  invitedByUserId String
-  acceptedAt     DateTime?
+  email            String
+  role             OrganizationRole
+  tokenHash        String           @unique
+  status           InvitationStatus @default(PENDING)
+  expiresAt        DateTime
+  invitedByUserId  String
+  acceptedAt       DateTime?
   // Set only once accepted; deliberately nullable and SetNull on delete —
   // an invitation is a durable audit record of "who was invited", and
   // losing track of who invited/accepted must never cascade-delete it.
   acceptedByUserId String?
-  createdAt      DateTime          @default(now())
-  updatedAt      DateTime          @updatedAt
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   invitedBy    User         @relation("InvitedBy", fields: [invitedByUserId], references: [id], onDelete: Cascade)
@@ -216,12 +220,12 @@ enum SubscriptionStatus {
 }
 
 model OrganizationSubscription {
-  id             String             @id @default(cuid())
-  organizationId String             @unique
-  plan           PlanId             @default(FREE)
-  status         SubscriptionStatus @default(ACTIVE)
-  currentPeriodStart DateTime?
-  currentPeriodEnd   DateTime?
+  id                     String             @id @default(cuid())
+  organizationId         String             @unique
+  plan                   PlanId             @default(FREE)
+  status                 SubscriptionStatus @default(ACTIVE)
+  currentPeriodStart     DateTime?
+  currentPeriodEnd       DateTime?
   // Nullable future integration points only — populated by a future
   // billing adapter applying a verified webhook event, never by domain
   // code in this phase. See src/server/billing/types.ts's
@@ -232,8 +236,8 @@ model OrganizationSubscription {
   billingProvider        String?
   externalCustomerId     String?
   externalSubscriptionId String?
-  createdAt      DateTime           @default(now())
-  updatedAt      DateTime           @updatedAt
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
@@ -241,19 +245,19 @@ model OrganizationSubscription {
 }
 
 model Customer {
-  id             String    @id @default(cuid())
-  organizationId String
-  name           String
-  email          String?
-  phone          String?
-  companyName    String?
-  notes          String?
+  id                            String                @id @default(cuid())
+  organizationId                String
+  name                          String
+  email                         String?
+  phone                         String?
+  companyName                   String?
+  notes                         String?
   // Phase 8: Telegram chat destination (see docs/communications.md#channel-model).
   // A numeric chat id or "@channelusername" — the same identifier shape
   // MessagingMessage.to already expects. Never itself proof of identity;
   // always resolved server-side from this column, never accepted as
   // client input at send time.
-  telegramChatId String?
+  telegramChatId                String?
   // Phase 8: explicit channel selection when a customer has more than one
   // usable destination configured — see
   // src/server/communications/channel.ts#resolveCommunicationDestination.
@@ -261,9 +265,9 @@ model Customer {
   // one destination exists, and requires this to be set explicitly the
   // moment a second one is added.
   preferredCommunicationChannel CommunicationChannel?
-  archivedAt     DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  archivedAt                    DateTime?
+  createdAt                     DateTime              @default(now())
+  updatedAt                     DateTime              @updatedAt
 
   organization        Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   invoices            Invoice[]
@@ -298,15 +302,16 @@ model Invoice {
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
-  organization        Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  customer            Customer             @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  payments            Payment[]
-  activityEvents      ActivityEvent[]
-  businessEvents      BusinessEvent[]
-  operatorInsights    OperatorInsight[]
-  actionProposals     ActionProposal[]
-  communications      Communication[]
-  collectionSequences CollectionSequence[]
+  organization          Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer              Customer               @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  payments              Payment[]
+  activityEvents        ActivityEvent[]
+  businessEvents        BusinessEvent[]
+  operatorInsights      OperatorInsight[]
+  actionProposals       ActionProposal[]
+  communications        Communication[]
+  collectionSequences   CollectionSequence[]
+  cryptoPaymentRequests CryptoPaymentRequest[]
 
   // Invoice numbers are unique per organization, not globally — see
   // docs/accounts-receivable.md#invoice-numbering.
@@ -337,8 +342,15 @@ model Payment {
   idempotencyKey String?
   createdAt      DateTime @default(now())
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  invoice      Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoice           Invoice            @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  // Phase 13: set only when this Payment was created by wallet
+  // reconciliation rather than manual entry — see
+  // docs/wallet-architecture.md#reconciliation. The FK itself lives on
+  // WalletTransaction (reconciledPaymentId); this is Prisma's required
+  // opposite side of that named relation, not a new column driving any
+  // logic of its own.
+  walletTransaction WalletTransaction?
 
   @@unique([invoiceId, idempotencyKey])
   @@index([organizationId])
@@ -400,6 +412,17 @@ enum ActivityEventType {
   // actually changes (setOrganizationPlan), never on every quota check —
   // that would be pure noise (see this phase's brief, section 13).
   PLAN_CHANGED
+  // Phase 13: Wallet Foundation — see docs/wallet-architecture.md#audit.
+  // Exactly the seven safe event kinds that phase calls for; never a
+  // private key, seed phrase, provider secret, or auth header in any of
+  // these rows' summary/metadata.
+  WALLET_CONNECTED
+  WALLET_DISCONNECTED
+  WALLET_TRANSACTION_DETECTED
+  WALLET_TRANSACTION_CONFIRMED
+  WALLET_PAYMENT_RECONCILED
+  WALLET_RECONCILIATION_REJECTED
+  WALLET_WEBHOOK_REJECTED
 }
 
 model ActivityEvent {
@@ -935,4 +958,238 @@ model AutomationTickRun {
 
   @@index([startedAt])
   @@map("automation_tick_runs")
+}
+
+// --- Phase 13: Wallet Foundation & Crypto Payments -----------------------
+// See docs/wallet-architecture.md for the full design (ownership model,
+// provider abstraction, transaction state machine, reconciliation rules,
+// webhook pipeline, and documented financial-ambiguity decisions). No
+// private key, seed phrase, or signing secret is ever stored by this
+// schema — a Wallet row is an *address* PAYNORA is told to watch, never a
+// credential PAYNORA holds. `network`/`asset` are free-string columns
+// (like Customer.telegramChatId and OrganizationSubscription.billingProvider)
+// validated against an allowlist at the domain layer
+// (src/server/wallet/network.ts) rather than a Prisma enum, so recognizing
+// a new chain or token never requires a migration — the same reasoning as
+// Currency (src/server/ar/currency.ts).
+
+enum WalletStatus {
+  // Connected but ownership not yet verified by the provider — see
+  // WalletProvider.verifyOwnership in src/server/wallet/provider-types.ts.
+  PENDING_VERIFICATION
+  ACTIVE
+  // Terminal. A "reconnected" wallet is a new row, not a resurrected one —
+  // same precedent as CollectionSequence.STOPPED — so history of who was
+  // connected when is never silently overwritten.
+  DISCONNECTED
+}
+
+/// A blockchain address PAYNORA has been told to watch for one organization
+/// — an identifier, never a credential. `@@unique([network, address])` is
+/// deliberately global, not organization-scoped: unlike every other unique
+/// constraint in this schema, a real on-chain address is one external fact
+/// shared by nobody else, not PAYNORA-issued data that could legitimately
+/// repeat per tenant — this is also what makes cross-tenant transaction
+/// misattribution structurally impossible (see
+/// docs/wallet-architecture.md#tenant-isolation).
+model Wallet {
+  id               String       @id @default(cuid())
+  organizationId   String
+  network          String
+  address          String
+  label            String?
+  // Provider-neutral vendor name ("test" in this phase; future:
+  // "coinbase", "privy", ...) — mirrors
+  // OrganizationSubscription.billingProvider's discipline of staying a
+  // plain string, never a vendor-typed column.
+  providerName     String
+  // Opaque provider-assigned id for this connection, if the provider has
+  // one. Never a secret — an API key or signing credential must never be
+  // stored here or anywhere in this schema; see
+  // docs/wallet-architecture.md#security-model.
+  providerWalletId String?
+  status           WalletStatus @default(PENDING_VERIFICATION)
+  connectedAt      DateTime?
+  disconnectedAt   DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  organization    Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  paymentRequests CryptoPaymentRequest[]
+  transactions    WalletTransaction[]
+
+  @@unique([network, address])
+  @@index([organizationId])
+  @@index([organizationId, status])
+  @@map("wallets")
+}
+
+enum CryptoPaymentRequestStatus {
+  OPEN
+  // Set the instant a WalletTransaction is matched and its Payment is
+  // recorded — see reconcileWalletTransaction. Terminal.
+  FULFILLED
+  CANCELLED
+  EXPIRED
+}
+
+/// The pre-registered expectation that lets reconciliation match an
+/// anonymous on-chain event back to a specific invoice — blockchain
+/// transactions carry no PAYNORA invoice id, so without this row a
+/// received transaction has nothing to be reconciled against (see
+/// docs/wallet-architecture.md#reconciliation). `requestedAmountMinor` is
+/// the fiat amount (in the invoice's own currency) this request settles on
+/// success; `expectedAssetAmountMinor` is the crypto amount, in the
+/// asset's own smallest unit, that was quoted for it. The exchange rate
+/// between the two is fixed at creation time by whoever creates the
+/// request — this phase has no live FX-rate provider, so that rate is a
+/// deliberate, documented manual input, never computed here. See
+/// docs/wallet-architecture.md#known-limitations.
+model CryptoPaymentRequest {
+  id                       String                     @id @default(cuid())
+  organizationId           String
+  invoiceId                String
+  walletId                 String
+  network                  String
+  asset                    String
+  assetDecimals            Int
+  expectedAssetAmountMinor BigInt
+  requestedAmountMinor     BigInt
+  status                   CryptoPaymentRequestStatus @default(OPEN)
+  createdByUserId          String
+  createdAt                DateTime                   @default(now())
+  updatedAt                DateTime                   @updatedAt
+
+  organization  Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoice       Invoice             @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  wallet        Wallet              @relation(fields: [walletId], references: [id], onDelete: Restrict)
+  createdByUser User                @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
+  transactions  WalletTransaction[]
+
+  @@index([organizationId])
+  // Backs reconcileWalletTransaction's FIFO "oldest open request for this
+  // wallet+network+asset" match query — see
+  // docs/wallet-architecture.md#reconciliation.
+  @@index([walletId, network, asset, status, createdAt])
+  @@index([invoiceId])
+  @@map("crypto_payment_requests")
+}
+
+enum WalletTransactionDirection {
+  INCOMING
+  OUTGOING
+}
+
+/// DETECTED -> CONFIRMING -> CONFIRMED, with FAILED/EXPIRED as failure
+/// paths — derived from the actual requirement (only a CONFIRMED,
+/// INCOMING transaction may ever be reconciled into a Payment), not copied
+/// from a generic template. No PENDING state: a webhook-observed event is
+/// either still awaiting its first confirmation (DETECTED) or already has
+/// one (CONFIRMING) — an extra intermediate state added nothing. See
+/// docs/wallet-architecture.md#transaction-state-machine for the full
+/// transition table and src/server/wallet/transaction-state-machine.ts for
+/// the code that enforces it (illegal transitions are rejected, never
+/// silently applied).
+enum WalletTransactionStatus {
+  DETECTED
+  CONFIRMING
+  CONFIRMED
+  FAILED
+  EXPIRED
+}
+
+enum ReconciliationOutcome {
+  MATCHED
+  // Never automatically reconciled into a Payment — see
+  // reconciliationRejectionReason. Not necessarily an error: e.g. UNDERPAID
+  // means a human must decide, not that anything is invalid.
+  REJECTED
+}
+
+/// See docs/wallet-architecture.md#reconciliation for the exact rule
+/// behind each value. NO_MATCHING_WALLET and NO_OPEN_PAYMENT_REQUEST
+/// together cover "wrong network"/"wrong asset"/"wrong destination" from
+/// the phase brief — network is part of Wallet's own unique key and
+/// asset/network are part of the open-request match key, so a transaction
+/// that's wrong on any of those axes simply fails to find a match rather
+/// than needing its own separate rejection reason. Duplicate transactions
+/// are prevented at ingestion (WalletTransaction.@@unique([network,
+/// txHash])), not at reconciliation — a duplicate can never reach this
+/// enum because it can never become a second row.
+enum ReconciliationRejectionReason {
+  NO_MATCHING_WALLET
+  NO_OPEN_PAYMENT_REQUEST
+  // The matched invoice's outstanding balance was already zero by the
+  // time this transaction was reconciled (e.g. paid another way in the
+  // meantime) — never creates a zero/negative Payment.
+  INVOICE_ALREADY_SETTLED
+  // Received asset amount is below the matched request's
+  // expectedAssetAmountMinor. Deliberately never auto-converted into a
+  // partial fiat Payment — see docs/wallet-architecture.md#underpayment
+  // for why that would require inventing an exchange rate PAYNORA does
+  // not have. The request stays OPEN; a human may record a manual payment
+  // via the existing payment form, exactly as they would for a short bank
+  // wire today.
+  UNDERPAID
+  TRANSACTION_FAILED
+}
+
+/// One row per real on-chain event, independent of any specific provider —
+/// see WalletProvider.verifyAndParseWebhookEvent
+/// (src/server/wallet/provider-types.ts), the only place a raw provider
+/// payload is turned into this shape. `@@unique([network, txHash])` is the
+/// core idempotency guarantee required by the phase brief: a repeated
+/// webhook delivery for the same on-chain transaction always resolves to
+/// this same row (create-or-find, same precedent as
+/// BusinessEvent.@@unique/Payment.@@unique) — a duplicate financial record
+/// is structurally impossible, not just discouraged. `amountMinor` is the
+/// asset's own smallest unit (see `assetDecimals`), never a float — same
+/// bigint discipline as Invoice/Payment.amountMinor. This model
+/// deliberately does NOT duplicate the fiat Payment model — see
+/// docs/wallet-architecture.md#transaction-vs-payment for the boundary;
+/// `reconciledPaymentId` is the one link between the two, set only once
+/// reconciliation actually creates a Payment.
+model WalletTransaction {
+  id                            String                         @id @default(cuid())
+  organizationId                String
+  walletId                      String
+  network                       String
+  txHash                        String
+  direction                     WalletTransactionDirection
+  asset                         String
+  assetDecimals                 Int
+  amountMinor                   BigInt
+  fromAddress                   String?
+  toAddress                     String
+  status                        WalletTransactionStatus        @default(DETECTED)
+  confirmations                 Int                            @default(0)
+  requiredConfirmations         Int                            @default(1)
+  detectedAt                    DateTime                       @default(now())
+  confirmedAt                   DateTime?
+  failureReason                 String?
+  providerName                  String
+  providerEventId               String?
+  matchedRequestId              String?
+  reconciliationOutcome         ReconciliationOutcome?
+  reconciliationRejectionReason ReconciliationRejectionReason?
+  reconciledPaymentId           String?                        @unique
+  // Safe, non-secret provider metadata only (e.g. block number, gas fee) —
+  // never a private key, signing secret, or raw Authorization header. See
+  // docs/wallet-architecture.md#security-model.
+  metadata                      Json?
+  createdAt                     DateTime                       @default(now())
+  updatedAt                     DateTime                       @updatedAt
+
+  organization      Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  wallet            Wallet                @relation(fields: [walletId], references: [id], onDelete: Restrict)
+  matchedRequest    CryptoPaymentRequest? @relation(fields: [matchedRequestId], references: [id], onDelete: SetNull)
+  reconciledPayment Payment?              @relation(fields: [reconciledPaymentId], references: [id], onDelete: SetNull)
+
+  // Deliberately global, not organization-scoped — see the model doc
+  // comment above and docs/wallet-architecture.md#tenant-isolation.
+  @@unique([network, txHash])
+  @@index([organizationId])
+  @@index([organizationId, status])
+  @@index([walletId])
+  @@map("wallet_transactions")
 }

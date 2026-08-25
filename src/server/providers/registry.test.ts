@@ -7,7 +7,7 @@ describe("getProviderRegistrySnapshot", () => {
     const snapshot = getProviderRegistrySnapshot();
 
     expect(snapshot.deploymentProfile).toBe("LOCAL_TEST");
-    expect(snapshot.entries).toHaveLength(4);
+    expect(snapshot.entries).toHaveLength(5);
 
     const ai = snapshot.entries.find((e) => e.category === "ai")!;
     expect(ai.vendor).toBe("none");
@@ -18,6 +18,11 @@ describe("getProviderRegistrySnapshot", () => {
     const billing = snapshot.entries.find((e) => e.category === "billing")!;
     expect(billing.vendor).toBe("none");
     expect(billing.implemented).toBe(true); // "none" itself is always a valid, working selection
+
+    const wallet = snapshot.entries.find((e) => e.category === "wallet")!;
+    expect(wallet.vendor).toBe("none");
+    expect(wallet.enabled).toBe(false);
+    expect(wallet.health).toBe("DISABLED");
   });
 
   it("never returns DEGRADED or DOWN — those are reserved for a future live health-check mechanism", () => {

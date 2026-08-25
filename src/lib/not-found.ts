@@ -14,6 +14,7 @@ const RESOURCE_NOT_FOUND_ERROR_NAMES = new Set([
   "OperatorResourceNotFoundError",
   "CollectionsResourceNotFoundError",
   "CommunicationResourceNotFoundError",
+  "WalletResourceNotFoundError",
 ]);
 
 export function isResourceNotFoundError(error: unknown): boolean {
