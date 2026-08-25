@@ -69,83 +69,115 @@ export type PaymentInput = z.input<typeof paymentInputSchema>;
  * that branch unreachable in practice, but the unique constraint (not the
  * lock) is the thing actually guaranteeing correctness if that assumption
  * is ever wrong.
+ *
+ * Extracted from `recordPayment` (below) so a caller that must record a
+ * payment atomically alongside its own other writes — Phase 13's wallet
+ * reconciliation (src/server/wallet/reconciliation.ts) is the first — can
+ * pass in its own already-open `tx` instead of this opening a second,
+ * unrelated transaction (Prisma's interactive transactions don't nest).
+ * `recordPayment` is unchanged behavior: it only parses input and opens
+ * the transaction.
  */
+export async function recordPaymentInTransaction(
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+  invoiceId: string,
+  input: z.output<typeof paymentInputSchema>,
+) {
+  const invoice = await lockInvoiceForUpdate(tx, organizationId, invoiceId);
+
+  const existing = await tx.payment.findUnique({
+    where: {
+      invoiceId_idempotencyKey: {
+        invoiceId: invoice.id,
+        idempotencyKey: input.idempotencyKey,
+      },
+    },
+  });
+  if (existing) return existing;
+
+  if (invoice.status === "CANCELLED") throw new InvoiceCancelledError();
+
+  const paidAgg = await tx.payment.aggregate({
+    where: { invoiceId: invoice.id },
+    _sum: { amountMinor: true },
+  });
+  const paidSoFar = paidAgg._sum.amountMinor ?? 0n;
+  const outstandingMinor = invoice.amountMinor - paidSoFar;
+
+  if (input.amountMinor > outstandingMinor) {
+    throw new OverpaymentError(outstandingMinor);
+  }
+
+  let payment;
+  try {
+    payment = await tx.payment.create({
+      data: {
+        organizationId,
+        invoiceId: invoice.id,
+        amountMinor: input.amountMinor,
+        paidAt: parseDateOnly(input.paidAt),
+        note: input.note,
+        idempotencyKey: input.idempotencyKey,
+      },
+    });
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === UNIQUE_CONSTRAINT_VIOLATION
+    ) {
+      const raced = await tx.payment.findUniqueOrThrow({
+        where: {
+          invoiceId_idempotencyKey: {
+            invoiceId: invoice.id,
+            idempotencyKey: input.idempotencyKey,
+          },
+        },
+      });
+      return raced;
+    }
+    throw error;
+  }
+
+  const currency = invoice.currency as Parameters<typeof formatMoney>[1];
+  await recordActivityEvent(tx, {
+    organizationId,
+    type: "PAYMENT_RECORDED",
+    summary: `Payment of ${formatMoney(payment.amountMinor, currency)} recorded for invoice ${invoice.number}`,
+    customerId: invoice.customerId,
+    invoiceId: invoice.id,
+    metadata: { amountMinor: payment.amountMinor.toString() },
+  });
+
+  const remainingAfterPayment = outstandingMinor - input.amountMinor;
+  if (remainingAfterPayment <= 0n) {
+    await recordActivityEvent(tx, {
+      organizationId,
+      type: "INVOICE_PAID",
+      summary: `Invoice ${invoice.number} fully paid`,
+      customerId: invoice.customerId,
+      invoiceId: invoice.id,
+    });
+  }
+
+  return payment;
+}
+
 export async function recordPayment(
   organizationId: string,
   invoiceId: string,
   rawInput: PaymentInput,
 ) {
   const input = paymentInputSchema.parse(rawInput);
-
-  return prisma.$transaction(async (tx) => {
-    const invoice = await lockInvoiceForUpdate(tx, organizationId, invoiceId);
-
-    const existing = await tx.payment.findUnique({
-      where: { invoiceId_idempotencyKey: { invoiceId: invoice.id, idempotencyKey: input.idempotencyKey } },
-    });
-    if (existing) return existing;
-
-    if (invoice.status === "CANCELLED") throw new InvoiceCancelledError();
-
-    const paidAgg = await tx.payment.aggregate({
-      where: { invoiceId: invoice.id },
-      _sum: { amountMinor: true },
-    });
-    const paidSoFar = paidAgg._sum.amountMinor ?? 0n;
-    const outstandingMinor = invoice.amountMinor - paidSoFar;
-
-    if (input.amountMinor > outstandingMinor) {
-      throw new OverpaymentError(outstandingMinor);
-    }
-
-    let payment;
-    try {
-      payment = await tx.payment.create({
-        data: {
-          organizationId,
-          invoiceId: invoice.id,
-          amountMinor: input.amountMinor,
-          paidAt: parseDateOnly(input.paidAt),
-          note: input.note,
-          idempotencyKey: input.idempotencyKey,
-        },
-      });
-    } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === UNIQUE_CONSTRAINT_VIOLATION) {
-        const raced = await tx.payment.findUniqueOrThrow({
-          where: { invoiceId_idempotencyKey: { invoiceId: invoice.id, idempotencyKey: input.idempotencyKey } },
-        });
-        return raced;
-      }
-      throw error;
-    }
-
-    const currency = invoice.currency as Parameters<typeof formatMoney>[1];
-    await recordActivityEvent(tx, {
-      organizationId,
-      type: "PAYMENT_RECORDED",
-      summary: `Payment of ${formatMoney(payment.amountMinor, currency)} recorded for invoice ${invoice.number}`,
-      customerId: invoice.customerId,
-      invoiceId: invoice.id,
-      metadata: { amountMinor: payment.amountMinor.toString() },
-    });
-
-    const remainingAfterPayment = outstandingMinor - input.amountMinor;
-    if (remainingAfterPayment <= 0n) {
-      await recordActivityEvent(tx, {
-        organizationId,
-        type: "INVOICE_PAID",
-        summary: `Invoice ${invoice.number} fully paid`,
-        customerId: invoice.customerId,
-        invoiceId: invoice.id,
-      });
-    }
-
-    return payment;
-  });
+  return prisma.$transaction((tx) =>
+    recordPaymentInTransaction(tx, organizationId, invoiceId, input),
+  );
 }
 
-export async function listPaymentsForInvoice(organizationId: string, invoiceId: string) {
+export async function listPaymentsForInvoice(
+  organizationId: string,
+  invoiceId: string,
+) {
   return prisma.payment.findMany({
     where: { organizationId, invoiceId },
     orderBy: { paidAt: "desc" },

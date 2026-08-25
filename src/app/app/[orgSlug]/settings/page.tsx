@@ -24,6 +24,7 @@ const CATEGORY_LABEL: Record<ProviderRegistryEntry["category"], string> = {
   email: "Email",
   messaging: "Messaging",
   billing: "PAYNORA subscription billing",
+  wallet: "Wallet / crypto payments",
 };
 
 const HEALTH_DISPLAY: Record<ProviderHealthStatus, { label: string; tone: NonNullable<BadgeProps["tone"]>; icon: typeof CircleCheck }> = {
@@ -230,30 +231,34 @@ async function IntegrationsTab() {
         </div>
       ))}
 
-      <div className="flex flex-col gap-2">
-        <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Billing</p>
-        <Card className="overflow-hidden">
-          <ul className="divide-y divide-border">
-            {snapshot.entries
-              .filter((entry) => entry.category === "billing")
-              .map((entry) => {
-                const health = HEALTH_DISPLAY[entry.health];
-                return (
-                  <li key={entry.category} className="flex items-center justify-between gap-4 px-5 py-3.5 text-sm">
-                    <div>
-                      <p className="font-medium text-foreground">{CATEGORY_LABEL[entry.category]}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {entry.vendor === "none" ? "Not connected" : entry.vendor}
-                        {!entry.implemented && entry.vendor !== "none" ? " — not implemented yet" : ""}
-                      </p>
-                    </div>
-                    <Badge tone={health.tone}>{health.label}</Badge>
-                  </li>
-                );
-              })}
-          </ul>
-        </Card>
-      </div>
+      {(["billing", "wallet"] as const).map((category) => (
+        <div key={category} className="flex flex-col gap-2">
+          <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+            {category === "billing" ? "Billing" : "Wallet"}
+          </p>
+          <Card className="overflow-hidden">
+            <ul className="divide-y divide-border">
+              {snapshot.entries
+                .filter((entry) => entry.category === category)
+                .map((entry) => {
+                  const health = HEALTH_DISPLAY[entry.health];
+                  return (
+                    <li key={entry.category} className="flex items-center justify-between gap-4 px-5 py-3.5 text-sm">
+                      <div>
+                        <p className="font-medium text-foreground">{CATEGORY_LABEL[entry.category]}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {entry.vendor === "none" ? "Not connected" : entry.vendor}
+                          {!entry.implemented && entry.vendor !== "none" ? " — not implemented yet" : ""}
+                        </p>
+                      </div>
+                      <Badge tone={health.tone}>{health.label}</Badge>
+                    </li>
+                  );
+                })}
+            </ul>
+          </Card>
+        </div>
+      ))}
     </div>
   );
 }

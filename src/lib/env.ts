@@ -93,6 +93,16 @@ const baseEnvSchema = z.object({
   // clear "not implemented yet" error, the same precedent as AI_PROVIDER's
   // unimplemented values — see docs/integration-architecture.md#billing.
   BILLING_PROVIDER: z.enum(["none", "stripe", "yookassa"]).default("none"),
+  // Phase 13: WalletProvider boundary (src/server/wallet/*) — interface
+  // and normalized types only, same precedent as BILLING_PROVIDER above.
+  // Selecting "coinbase"/"privy" resolves to a clear "not implemented yet"
+  // error — no real vendor SDK, no production credentials, in this phase.
+  // See docs/wallet-architecture.md#production-integration-point.
+  WALLET_PROVIDER: z.enum(["none", "coinbase", "privy"]).default("none"),
+  // Phase 13: shared HMAC secret this deployment's real wallet-webhook
+  // adapter would use to verify inbound provider deliveries — mirrors
+  // AUTOMATION_CRON_SECRET's role. Unused while WALLET_PROVIDER=none.
+  WALLET_WEBHOOK_SECRET: z.string().trim().min(20).optional(),
   // Purely descriptive metadata consumed by the provider registry
   // (src/server/providers/registry.ts) to annotate which vendor set a
   // deployment is expected to use — never enforced as a hard restriction;

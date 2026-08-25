@@ -21,6 +21,10 @@ const IMPLEMENTED_VENDORS: Record<ProviderCategory, Record<string, boolean>> = {
   email: { none: true, smtp: true },
   messaging: { none: true, telegram: true },
   billing: { none: true, stripe: false, yookassa: false },
+  // Phase 13 — see docs/wallet-architecture.md#production-integration-point.
+  // "test" is deliberately absent here: it is never a WALLET_PROVIDER
+  // value, only a direct test-only import (src/server/wallet/providers/fake.ts).
+  wallet: { none: true, coinbase: false, privy: false },
 };
 
 const CAPABILITIES: Record<ProviderCategory, Record<string, readonly string[]>> = {
@@ -34,6 +38,7 @@ const CAPABILITIES: Record<ProviderCategory, Record<string, readonly string[]>> 
   email: { none: [], smtp: ["send"] },
   messaging: { none: [], telegram: ["send"] },
   billing: { none: [], stripe: [], yookassa: [] },
+  wallet: { none: [], coinbase: [], privy: [] },
 };
 
 /** Exported for direct unit testing — see registry.test.ts. */
@@ -77,6 +82,7 @@ export function getProviderRegistrySnapshot(): ProviderRegistrySnapshot {
       entry("email", env.EMAIL_PROVIDER),
       entry("messaging", env.MESSAGING_PROVIDER),
       entry("billing", env.BILLING_PROVIDER),
+      entry("wallet", env.WALLET_PROVIDER),
     ],
   };
 }

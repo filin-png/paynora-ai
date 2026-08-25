@@ -19,6 +19,9 @@ import { formatMoney } from "@/server/ar/money";
 import { listPaymentsForInvoice } from "@/server/ar/payments";
 import { getCollectionStatusForInvoice, type CollectionStatusView } from "@/server/collections/sequences";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
+import { listCryptoPaymentRequestsForInvoice } from "@/server/wallet/payment-requests";
+import { isWalletEnabled } from "@/server/wallet/service";
+import { listWallets } from "@/server/wallet/wallets";
 import { getCollectionsBadgeView } from "../../collections-badge";
 import { getInvoiceStatusDisplay } from "../status";
 import {
@@ -49,13 +52,17 @@ export default async function InvoiceDetailPage({
       throw error;
     },
   );
-  const [payments, activityPage, collectionsStatus] = await Promise.all([
+  const canRecordPayment = invoice.status === "OPEN" && financials.outstandingMinor > 0n;
+
+  const [payments, activityPage, collectionsStatus, cryptoRequests, activeWallets] = await Promise.all([
     listPaymentsForInvoice(context.organization.id, invoiceId),
     listInvoiceActivity(context.organization.id, invoiceId, {
       cursor: activityCursor,
       take: ACTIVITY_PAGE_SIZE + 1,
     }),
     getCollectionStatusForInvoice(context.organization.id, invoiceId),
+    canRecordPayment ? listCryptoPaymentRequestsForInvoice(context.organization.id, invoiceId) : Promise.resolve([]),
+    canRecordPayment ? listWallets(context.organization.id, { status: "ACTIVE" }) : Promise.resolve([]),
   ]);
   const activityHasMore = activityPage.length > ACTIVITY_PAGE_SIZE;
   const activity = activityHasMore ? activityPage.slice(0, ACTIVITY_PAGE_SIZE) : activityPage;
@@ -63,9 +70,9 @@ export default async function InvoiceDetailPage({
 
   const currency = invoice.currency as Currency;
   const status = getInvoiceStatusDisplay(invoice, financials);
-  const canRecordPayment = invoice.status === "OPEN" && financials.outstandingMinor > 0n;
   const canCancel = invoice.status === "OPEN" && financials.paidMinor === 0n;
   const overdueDays = financials.isOverdue ? daysBetween(toDateOnlyString(invoice.dueDate), getBusinessToday()) : 0;
+  const cryptoAvailable = isWalletEnabled() && activeWallets.length > 0;
 
   const boundRecordPayment = recordPaymentAction.bind(null, orgSlug, invoiceId);
   const boundCancel = cancelInvoiceAction.bind(null, orgSlug, invoiceId);
@@ -149,11 +156,54 @@ export default async function InvoiceDetailPage({
       />
 
       {canRecordPayment ? (
-        <div>
-          <SectionHeader title="Record a payment" />
-          <Card className="mt-3 max-w-md p-5">
-            <RecordPaymentForm action={boundRecordPayment} today={getBusinessToday()} />
-          </Card>
+        <div className="flex flex-col gap-6">
+          <SectionHeader title="Payment methods" />
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Bank / card</p>
+              <Card className="mt-2 p-5">
+                <RecordPaymentForm action={boundRecordPayment} today={getBusinessToday()} />
+              </Card>
+            </div>
+            <div>
+              <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Crypto</p>
+              <Card className="mt-2 p-5">
+                {cryptoAvailable ? (
+                  cryptoRequests.length > 0 ? (
+                    <ul className="flex flex-col gap-2.5 text-sm">
+                      {cryptoRequests.map((request) => (
+                        <li key={request.id} className="flex items-center justify-between gap-3">
+                          <span className="text-foreground">
+                            {request.asset} on {request.network}
+                          </span>
+                          <Badge tone={request.status === "OPEN" ? "info" : request.status === "FULFILLED" ? "success" : "neutral"}>
+                            {request.status}
+                          </Badge>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-sm text-muted">
+                      No crypto payment request has been created for this invoice yet. Create one from{" "}
+                      <Link href={`/app/${orgSlug}/wallet`} className="font-medium text-primary hover:underline">
+                        Wallet
+                      </Link>
+                      .
+                    </p>
+                  )
+                ) : (
+                  <p className="text-sm text-muted">
+                    Crypto payments aren&rsquo;t available yet — no wallet provider is connected in this deployment.
+                    See{" "}
+                    <Link href={`/app/${orgSlug}/wallet`} className="font-medium text-primary hover:underline">
+                      Wallet
+                    </Link>{" "}
+                    for details.
+                  </p>
+                )}
+              </Card>
+            </div>
+          </div>
         </div>
       ) : null}
 
