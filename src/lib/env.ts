@@ -93,16 +93,45 @@ const baseEnvSchema = z.object({
   // clear "not implemented yet" error, the same precedent as AI_PROVIDER's
   // unimplemented values — see docs/integration-architecture.md#billing.
   BILLING_PROVIDER: z.enum(["none", "stripe", "yookassa"]).default("none"),
-  // Phase 13: WalletProvider boundary (src/server/wallet/*) — interface
-  // and normalized types only, same precedent as BILLING_PROVIDER above.
-  // Selecting "coinbase"/"privy" resolves to a clear "not implemented yet"
-  // error — no real vendor SDK, no production credentials, in this phase.
-  // See docs/wallet-architecture.md#production-integration-point.
-  WALLET_PROVIDER: z.enum(["none", "coinbase", "privy"]).default("none"),
+  // Phase 13 introduced the WalletProvider boundary; Phase 14 adds the
+  // first real adapter — "alchemy" (src/server/wallet/providers/alchemy.ts),
+  // a non-custodial address-monitoring provider — see
+  // docs/production-integrations.md#wallet. "coinbase"/"privy" remain
+  // recognized-but-not-implemented, same precedent as AI_PROVIDER's
+  // gigachat/yandex.
+  WALLET_PROVIDER: z.enum(["none", "alchemy", "coinbase", "privy"]).default("none"),
   // Phase 13: shared HMAC secret this deployment's real wallet-webhook
   // adapter would use to verify inbound provider deliveries — mirrors
   // AUTOMATION_CRON_SECRET's role. Unused while WALLET_PROVIDER=none.
   WALLET_WEBHOOK_SECRET: z.string().trim().min(20).optional(),
+  // Phase 14: real Alchemy WalletProvider adapter — see
+  // docs/production-integrations.md#wallet. ALCHEMY_API_KEY authenticates
+  // JSON-RPC/enhanced-API calls; ALCHEMY_AUTH_TOKEN authenticates the
+  // separate Notify (webhook-management) API; ALCHEMY_WEBHOOK_SIGNING_KEY
+  // is the per-webhook HMAC key Alchemy issues when a webhook is created —
+  // three different credentials for three different Alchemy surfaces,
+  // never interchangeable.
+  ALCHEMY_API_KEY: z.string().trim().min(1).optional(),
+  ALCHEMY_AUTH_TOKEN: z.string().trim().min(1).optional(),
+  // The id of a pre-created Alchemy "Address Activity" webhook (created
+  // once via the Alchemy dashboard, pointed at this deployment's webhook
+  // route) that connectWallet adds/removes addresses from.
+  ALCHEMY_WEBHOOK_ID: z.string().trim().min(1).optional(),
+  ALCHEMY_WEBHOOK_SIGNING_KEY: z.string().trim().min(1).optional(),
+  // Phase 14: real product-analytics provider — see
+  // docs/production-integrations.md#analytics.
+  ANALYTICS_PROVIDER: z.enum(["none", "posthog"]).default("none"),
+  POSTHOG_API_KEY: z.string().trim().min(1).optional(),
+  // EU-hosted PostHog cloud is https://eu.i.posthog.com — see
+  // docs/production-integrations.md#european-access.
+  POSTHOG_HOST: z.string().trim().url().default("https://us.i.posthog.com"),
+  // Phase 14: WebSearchProvider — separate from AI_PROVIDER, see
+  // docs/production-integrations.md#web-intelligence. "yandex" is
+  // recognized but not implemented in this phase (same precedent as
+  // AI_PROVIDER's gigachat/yandex values).
+  WEB_SEARCH_PROVIDER: z.enum(["none", "anthropic", "yandex"]).default("none"),
+  ANTHROPIC_API_KEY: z.string().trim().min(1).optional(),
+  ANTHROPIC_MODEL: z.string().trim().min(1).default("claude-opus-5"),
   // Purely descriptive metadata consumed by the provider registry
   // (src/server/providers/registry.ts) to annotate which vendor set a
   // deployment is expected to use — never enforced as a hard restriction;
@@ -125,6 +154,7 @@ const baseEnvSchema = z.object({
   RATE_LIMIT_AI_GENERATION_PER_HOUR: z.coerce.number().int().positive().default(50),
   RATE_LIMIT_COMMUNICATION_SEND_PER_HOUR: z.coerce.number().int().positive().default(100),
   RATE_LIMIT_OPERATOR_RUN_PER_HOUR: z.coerce.number().int().positive().default(20),
+  RATE_LIMIT_WEB_SEARCH_PER_HOUR: z.coerce.number().int().positive().default(20),
   // Phase 9: `pg.Pool`'s max connections per process — see
   // src/server/db/client.ts and DEPLOYMENT.md#connection-pooling. The
   // default (10) matches node-postgres's own default; deployments running
@@ -187,6 +217,34 @@ export const envSchema = baseEnvSchema.superRefine((data, ctx) => {
       code: "custom",
       path: ["TELEGRAM_BOT_TOKEN"],
       message: 'TELEGRAM_BOT_TOKEN is required when MESSAGING_PROVIDER="telegram"',
+    });
+  }
+
+  if (data.WALLET_PROVIDER === "alchemy") {
+    const required = [
+      "ALCHEMY_API_KEY",
+      "ALCHEMY_AUTH_TOKEN",
+      "ALCHEMY_WEBHOOK_ID",
+      "ALCHEMY_WEBHOOK_SIGNING_KEY",
+    ] as const;
+    for (const key of required) {
+      if (!data[key]) {
+        ctx.addIssue({ code: "custom", path: [key], message: `${key} is required when WALLET_PROVIDER="alchemy"` });
+      }
+    }
+  }
+  if (data.ANALYTICS_PROVIDER === "posthog" && !data.POSTHOG_API_KEY) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["POSTHOG_API_KEY"],
+      message: 'POSTHOG_API_KEY is required when ANALYTICS_PROVIDER="posthog"',
+    });
+  }
+  if (data.WEB_SEARCH_PROVIDER === "anthropic" && !data.ANTHROPIC_API_KEY) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["ANTHROPIC_API_KEY"],
+      message: 'ANTHROPIC_API_KEY is required when WEB_SEARCH_PROVIDER="anthropic"',
     });
   }
 });

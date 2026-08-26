@@ -6,9 +6,11 @@ import { Card } from "@/components/ui/card";
 import { ConfirmActionButton } from "@/components/ui/confirm-action-button";
 import { PageHeader } from "@/components/ui/page-header";
 import { Tabs } from "@/components/ui/tabs";
+import { getDictionary } from "@/lib/i18n";
+import { getLocale } from "@/lib/i18n/get-locale";
 import { cn } from "@/lib/utils";
 import { getReadinessState } from "@/server/onboarding/readiness";
-import type { ProviderHealthStatus, ProviderRegistryEntry } from "@/server/providers/types";
+import type { ProviderHealthStatus } from "@/server/providers/types";
 import { getProviderRegistrySnapshot, getProviderVendorBreakdown } from "@/server/providers/registry";
 import { listOrganizationMembers } from "@/server/tenancy/organizations";
 import { listPendingInvitations } from "@/server/tenancy/invitations";
@@ -18,14 +20,6 @@ import { clearDemoDataAction, seedDemoDataAction } from "./demo-data-actions";
 import { InviteMemberForm } from "./invite-member-form";
 import { PendingInvitationsList } from "./pending-invitations-list";
 import { RenameOrganizationForm } from "./rename-organization-form";
-
-const CATEGORY_LABEL: Record<ProviderRegistryEntry["category"], string> = {
-  ai: "AI generation",
-  email: "Email",
-  messaging: "Messaging",
-  billing: "PAYNORA subscription billing",
-  wallet: "Wallet / crypto payments",
-};
 
 const HEALTH_DISPLAY: Record<ProviderHealthStatus, { label: string; tone: NonNullable<BadgeProps["tone"]>; icon: typeof CircleCheck }> = {
   HEALTHY: { label: "Configured", tone: "success", icon: CircleCheck },
@@ -40,6 +34,8 @@ const VENDOR_LABEL: Record<string, string> = {
   mistral: "Mistral",
   smtp: "SMTP",
   telegram: "Telegram",
+  posthog: "PostHog",
+  anthropic: "Anthropic",
 };
 
 const VENDOR_GROUP_LABEL: Record<"ai" | "email" | "messaging", string> = {
@@ -194,6 +190,8 @@ async function MembersTab({
  * See docs/integration-architecture.md#provider-registry.
  */
 async function IntegrationsTab() {
+  const dict = getDictionary(await getLocale());
+  const categoryLabel = dict.settingsIntegrations;
   const snapshot = getProviderRegistrySnapshot();
   const vendors = getProviderVendorBreakdown();
   const vendorsByGroup = {
@@ -231,11 +229,9 @@ async function IntegrationsTab() {
         </div>
       ))}
 
-      {(["billing", "wallet"] as const).map((category) => (
+      {(["billing", "wallet", "analytics", "webSearch"] as const).map((category) => (
         <div key={category} className="flex flex-col gap-2">
-          <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-            {category === "billing" ? "Billing" : "Wallet"}
-          </p>
+          <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">{categoryLabel[category]}</p>
           <Card className="overflow-hidden">
             <ul className="divide-y divide-border">
               {snapshot.entries
@@ -245,7 +241,7 @@ async function IntegrationsTab() {
                   return (
                     <li key={entry.category} className="flex items-center justify-between gap-4 px-5 py-3.5 text-sm">
                       <div>
-                        <p className="font-medium text-foreground">{CATEGORY_LABEL[entry.category]}</p>
+                        <p className="font-medium text-foreground">{categoryLabel[entry.category]}</p>
                         <p className="text-xs text-muted-foreground">
                           {entry.vendor === "none" ? "Not connected" : entry.vendor}
                           {!entry.implemented && entry.vendor !== "none" ? " — not implemented yet" : ""}

@@ -1,5 +1,7 @@
 import { Header, SignOutButton } from "@/components/app-shell/header";
 import { Sidebar } from "@/components/app-shell/sidebar";
+import { getDictionary } from "@/lib/i18n";
+import { getLocale } from "@/lib/i18n/get-locale";
 import { signOut } from "@/server/auth/config";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
 
@@ -22,16 +24,20 @@ export default async function OrganizationLayout({
 }) {
   const { orgSlug } = await params;
   const context = await requireOrganizationMembershipForPage(orgSlug);
+  const locale = await getLocale();
+  const dict = getDictionary(locale);
 
   return (
     <div className="flex min-h-screen bg-background">
-      <Sidebar orgSlug={orgSlug} orgName={context.organization.name} role={context.role} />
+      <Sidebar orgSlug={orgSlug} orgName={context.organization.name} role={context.role} dict={dict} />
       <div className="flex min-w-0 flex-1 flex-col">
         <Header
           orgSlug={orgSlug}
           orgName={context.organization.name}
           userEmail={context.user.email}
           userName={context.user.name}
+          locale={locale}
+          dict={dict}
           signOutForm={
             <form
               action={async () => {

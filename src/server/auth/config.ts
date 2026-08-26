@@ -1,6 +1,7 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 
+import { trackEvent } from "@/server/analytics/events";
 import { authenticateCredentials } from "./authenticate";
 import { extractClientIp } from "./request-ip";
 
@@ -19,6 +20,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     }),
   ],
   callbacks: {
+    async signIn({ user }) {
+      if (user.id) trackEvent("user_signed_in", { userId: user.id });
+      return true;
+    },
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id;

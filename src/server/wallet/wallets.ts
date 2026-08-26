@@ -1,6 +1,7 @@
 import { Prisma, type WalletStatus } from "@prisma/client";
 import { z } from "zod";
 
+import { trackEvent } from "@/server/analytics/events";
 import { recordActivityEvent } from "@/server/ar/activity";
 import { prisma } from "@/server/db/client";
 import { DuplicateWalletAddressError, InvalidWalletTransitionError, WalletResourceNotFoundError } from "./errors";
@@ -90,7 +91,7 @@ export async function verifyWalletOwnership(
     return { verified: false, reason: verification.reason };
   }
 
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     const claim = await tx.wallet.updateMany({
       where: { id: walletId, organizationId, status: "PENDING_VERIFICATION" },
       data: { status: "ACTIVE", connectedAt: new Date() },
@@ -107,8 +108,10 @@ export async function verifyWalletOwnership(
       summary: `Wallet ${updated.address} connected on ${updated.network}`,
       metadata: { walletId, network: updated.network, providerName: updated.providerName },
     });
-    return { verified: true, wallet: updated };
+    return { verified: true as const, wallet: updated };
   });
+  trackEvent("wallet_connected", { organizationId, properties: { network: result.wallet.network, providerName: result.wallet.providerName } });
+  return result;
 }
 
 /**

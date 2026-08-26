@@ -5,12 +5,22 @@ import Link from "next/link";
 import { Menu, X } from "lucide-react";
 
 import { PaynoraLogo } from "@/components/brand/logo";
+import { en } from "@/lib/i18n/dictionaries/en";
+import type { Dictionary } from "@/lib/i18n";
 import { getNavItems } from "./nav-items";
 import { NavLink } from "./nav-link";
 
-export function MobileNav({ orgSlug, orgName }: { orgSlug: string; orgName: string }) {
+export function MobileNav({
+  orgSlug,
+  orgName,
+  dict = en,
+}: {
+  orgSlug: string;
+  orgName: string;
+  dict?: Dictionary;
+}) {
   const [open, setOpen] = React.useState(false);
-  const navItems = getNavItems(`/app/${orgSlug}`);
+  const navItems = getNavItems(`/app/${orgSlug}`, dict.nav);
 
   React.useEffect(() => {
     if (!open) return;
@@ -25,7 +35,7 @@ export function MobileNav({ orgSlug, orgName }: { orgSlug: string; orgName: stri
       <button
         type="button"
         onClick={() => setOpen(true)}
-        aria-label="Open navigation"
+        aria-label={dict.common.openNavigation}
         aria-expanded={open}
         className="flex size-9 items-center justify-center rounded-md text-foreground lg:hidden"
       >
@@ -41,7 +51,7 @@ export function MobileNav({ orgSlug, orgName }: { orgSlug: string; orgName: stri
               <button
                 type="button"
                 onClick={() => setOpen(false)}
-                aria-label="Close navigation"
+                aria-label={dict.common.closeNavigation}
                 className="flex size-9 items-center justify-center rounded-md text-white/80 hover:text-white"
               >
                 <X className="size-5" />
@@ -66,7 +76,7 @@ export function MobileNav({ orgSlug, orgName }: { orgSlug: string; orgName: stri
                 onClick={() => setOpen(false)}
                 className="flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-navy-muted hover:bg-white/5 hover:text-white"
               >
-                Switch organization
+                {dict.common.switchOrganization}
               </Link>
             </div>
           </div>

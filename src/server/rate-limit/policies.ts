@@ -78,3 +78,11 @@ export function communicationSendPolicy(): RateLimitPolicy {
 export function operatorRunPolicy(): RateLimitPolicy {
   return { maxAttempts: env.RATE_LIMIT_OPERATOR_RUN_PER_HOUR, windowMs: ONE_HOUR_MS };
 }
+
+// Phase 14: web search calls are billed per-search ($10/1,000 on the
+// Anthropic adapter) — see docs/production-integrations.md#cost-control.
+// Deliberately stricter than aiGenerationPolicy's default: a search is a
+// distinct, additional cost on top of the tokens it also consumes.
+export function webSearchPolicy(): RateLimitPolicy {
+  return { maxAttempts: env.RATE_LIMIT_WEB_SEARCH_PER_HOUR, windowMs: ONE_HOUR_MS };
+}

@@ -9,16 +9,19 @@ import {
   Zap,
 } from "lucide-react";
 
-/** The single source of truth for primary navigation — sidebar (desktop) and drawer (mobile) both render from this. */
-export function getNavItems(base: string) {
+import { en } from "@/lib/i18n/dictionaries/en";
+import type { Dictionary } from "@/lib/i18n";
+
+/** The single source of truth for primary navigation — sidebar (desktop) and drawer (mobile) both render from this. `nav` defaults to English so every existing call site keeps working unchanged; pass a translated dictionary's `nav` to localize. */
+export function getNavItems(base: string, nav: Dictionary["nav"] = en.nav) {
   return [
-    { href: base, label: "Overview", icon: LayoutDashboard, exact: true },
-    { href: `${base}/invoices`, label: "Invoices", icon: Receipt },
-    { href: `${base}/customers`, label: "Customers", icon: Users },
-    { href: `${base}/actions`, label: "Action Center", icon: Sparkles },
-    { href: `${base}/automation`, label: "Automation", icon: Zap },
-    { href: `${base}/wallet`, label: "Wallet", icon: WalletIcon },
-    { href: `${base}/settings`, label: "Settings", icon: Settings },
+    { href: base, label: nav.overview, icon: LayoutDashboard, exact: true },
+    { href: `${base}/invoices`, label: nav.invoices, icon: Receipt },
+    { href: `${base}/customers`, label: nav.customers, icon: Users },
+    { href: `${base}/actions`, label: nav.actionCenter, icon: Sparkles },
+    { href: `${base}/automation`, label: nav.automation, icon: Zap },
+    { href: `${base}/wallet`, label: nav.wallet, icon: WalletIcon },
+    { href: `${base}/settings`, label: nav.settings, icon: Settings },
   ];
 }
 
