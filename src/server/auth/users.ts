@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 
+import { trackEvent } from "@/server/analytics/events";
 import { prisma } from "@/server/db/client";
 import { normalizeEmail } from "./email";
 import { hashPassword, passwordSchema } from "./password";
@@ -40,6 +41,7 @@ export async function registerUser(input: RegisterUserInput) {
     const user = await prisma.user.create({
       data: { email, passwordHash, name: parsed.name },
     });
+    trackEvent("user_signed_up", { userId: user.id });
     return { id: user.id, email: user.email, name: user.name };
   } catch (error) {
     // Two concurrent signups for the same email can both pass the

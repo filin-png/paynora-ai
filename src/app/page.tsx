@@ -10,12 +10,15 @@ import {
 } from "lucide-react";
 
 import { PaynoraLogo } from "@/components/brand/logo";
+import { LocaleSwitcher } from "@/components/locale-switcher";
 import { buttonVariants } from "@/components/ui/button";
 import { bodyFont, displayFont, monoFont } from "@/components/marketing/fonts";
 import { HeroVisual } from "@/components/marketing/hero-visual";
 import { PulseDot, PulseLine } from "@/components/marketing/pulse";
 import { WorkflowStory } from "@/components/marketing/workflow-story";
 import { ActionCenterMockup, DashboardMockup } from "@/components/marketing/feature-mockups";
+import { getDictionary, type Dictionary, type Locale } from "@/lib/i18n";
+import { getLocale } from "@/lib/i18n/get-locale";
 import { cn } from "@/lib/utils";
 import { PLAN_ENTITLEMENTS, type EntitlementLimit, type PlanId } from "@/server/billing/plans";
 
@@ -49,7 +52,10 @@ const providers = [
   { name: "Billing", detail: "Stripe, YooKassa — coming" },
 ];
 
-export default function LandingPage() {
+export default async function LandingPage() {
+  const locale = await getLocale();
+  const dict = getDictionary(locale);
+
   return (
     <div
       className={cn(
@@ -60,9 +66,9 @@ export default function LandingPage() {
       )}
       style={{ fontFamily: "var(--font-landing-body), var(--font-sans)" }}
     >
-      <SiteNav />
+      <SiteNav locale={locale} dict={dict} />
       <main className="flex flex-1 flex-col">
-        <Hero />
+        <Hero dict={dict} />
         <ProblemSection />
         <WorkflowSection />
         <ActionCenterSection />
@@ -78,20 +84,21 @@ export default function LandingPage() {
   );
 }
 
-function SiteNav() {
+function SiteNav({ locale, dict }: { locale: Locale; dict: Dictionary }) {
   return (
     <header className="sticky top-3 z-30 px-4 sm:top-4 sm:px-6">
       <div className="glass-surface mx-auto flex w-full max-w-6xl items-center justify-between rounded-2xl px-4 py-2.5 shadow-card-md sm:px-5">
         <PaynoraLogo size={24} />
         <nav className="flex items-center gap-2 sm:gap-4">
+          <LocaleSwitcher locale={locale} />
           <Link
             href="/sign-in"
             className="hidden text-sm font-medium text-foreground hover:text-primary sm:inline"
           >
-            Sign in
+            {dict.common.signIn}
           </Link>
           <Link href="/sign-up" className={cn(buttonVariants({ variant: "premium", size: "sm" }))}>
-            Get started
+            {dict.common.getStarted}
           </Link>
         </nav>
       </div>
@@ -99,7 +106,7 @@ function SiteNav() {
   );
 }
 
-function Hero() {
+function Hero({ dict }: { dict: Dictionary }) {
   return (
     <section className="relative overflow-hidden bg-navy-950">
       <div
@@ -119,23 +126,19 @@ function Hero() {
         <div className="flex flex-col gap-6">
           <span className="inline-flex w-fit items-center gap-2 rounded-full border border-white/15 bg-white/5 px-3 py-1 text-xs font-medium text-navy-muted">
             <PulseDot />
-            AI-powered accounts receivable intelligence
+            {dict.landing.badge}
           </span>
           <h1 className="max-w-xl font-[family-name:var(--font-landing-display)] text-4xl font-medium tracking-tight text-balance text-white sm:text-5xl lg:text-[3.4rem] lg:leading-[1.06]">
-            Know where your{" "}
+            {dict.landing.heroTitlePrefix}{" "}
             <span className="bg-[linear-gradient(120deg,var(--primary-hover),var(--secondary)_65%,var(--accent-cyan))] bg-clip-text text-transparent">
-              money
-            </span>{" "}
-            is going.
+              {dict.landing.heroTitleHighlight}
+            </span>
+            {dict.landing.heroTitleSuffix}
           </h1>
-          <p className="max-w-lg text-lg leading-8 text-navy-muted">
-            AI collection intelligence that helps B2B teams see what&rsquo;s outstanding, catch
-            what&rsquo;s overdue, and know exactly what to do next — with a human approving every
-            follow-up PAYNORA recommends, or automating it on your terms.
-          </p>
+          <p className="max-w-lg text-lg leading-8 text-navy-muted">{dict.landing.heroSubtitle}</p>
           <div className="flex flex-wrap items-center gap-3 pt-2">
             <Link href="/sign-up" className={cn(buttonVariants({ variant: "premium", size: "lg" }))}>
-              Get started
+              {dict.common.getStarted}
               <ArrowRight className="size-4" />
             </Link>
             <Link

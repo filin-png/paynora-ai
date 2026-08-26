@@ -1,6 +1,8 @@
 import Link from "next/link";
 
 import { PaynoraLogo } from "@/components/brand/logo";
+import { en } from "@/lib/i18n/dictionaries/en";
+import type { Dictionary } from "@/lib/i18n";
 import { getNavItems } from "./nav-items";
 import { NavLink } from "./nav-link";
 
@@ -8,12 +10,14 @@ export function Sidebar({
   orgSlug,
   orgName,
   role,
+  dict = en,
 }: {
   orgSlug: string;
   orgName: string;
   role: string;
+  dict?: Dictionary;
 }) {
-  const navItems = getNavItems(`/app/${orgSlug}`);
+  const navItems = getNavItems(`/app/${orgSlug}`, dict.nav);
 
   return (
     <aside className="relative hidden w-64 shrink-0 flex-col overflow-hidden border-r border-white/[0.06] bg-navy-900 lg:flex">
@@ -49,7 +53,7 @@ export function Sidebar({
           href="/app"
           className="flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-navy-muted transition-colors hover:bg-white/5 hover:text-white"
         >
-          Switch organization
+          {dict.common.switchOrganization}
         </Link>
       </div>
     </aside>

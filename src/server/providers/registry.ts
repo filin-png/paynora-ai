@@ -21,10 +21,14 @@ const IMPLEMENTED_VENDORS: Record<ProviderCategory, Record<string, boolean>> = {
   email: { none: true, smtp: true },
   messaging: { none: true, telegram: true },
   billing: { none: true, stripe: false, yookassa: false },
-  // Phase 13 — see docs/wallet-architecture.md#production-integration-point.
-  // "test" is deliberately absent here: it is never a WALLET_PROVIDER
-  // value, only a direct test-only import (src/server/wallet/providers/fake.ts).
-  wallet: { none: true, coinbase: false, privy: false },
+  // Phase 14 — see docs/production-integrations.md#wallet. "test" is
+  // deliberately absent here: it is never a WALLET_PROVIDER value, only a
+  // direct test-only import (src/server/wallet/providers/fake.ts).
+  wallet: { none: true, alchemy: true, coinbase: false, privy: false },
+  // Phase 14 — see docs/production-integrations.md#analytics and
+  // #web-intelligence.
+  analytics: { none: true, posthog: true },
+  webSearch: { none: true, anthropic: true, yandex: false },
 };
 
 const CAPABILITIES: Record<ProviderCategory, Record<string, readonly string[]>> = {
@@ -38,7 +42,9 @@ const CAPABILITIES: Record<ProviderCategory, Record<string, readonly string[]>> 
   email: { none: [], smtp: ["send"] },
   messaging: { none: [], telegram: ["send"] },
   billing: { none: [], stripe: [], yookassa: [] },
-  wallet: { none: [], coinbase: [], privy: [] },
+  wallet: { none: [], alchemy: ["address-monitoring", "webhooks", "balances"], coinbase: [], privy: [] },
+  analytics: { none: [], posthog: ["event-capture"] },
+  webSearch: { none: [], anthropic: ["search", "citations"], yandex: [] },
 };
 
 /** Exported for direct unit testing — see registry.test.ts. */
@@ -83,6 +89,8 @@ export function getProviderRegistrySnapshot(): ProviderRegistrySnapshot {
       entry("messaging", env.MESSAGING_PROVIDER),
       entry("billing", env.BILLING_PROVIDER),
       entry("wallet", env.WALLET_PROVIDER),
+      entry("analytics", env.ANALYTICS_PROVIDER),
+      entry("webSearch", env.WEB_SEARCH_PROVIDER),
     ],
   };
 }
@@ -172,6 +180,20 @@ export function getProviderVendorBreakdown(): readonly VendorConfigurationStatus
       configured: Boolean(env.TELEGRAM_BOT_TOKEN),
       implemented: IMPLEMENTED_VENDORS.messaging.telegram,
       active: env.MESSAGING_PROVIDER === "telegram",
+    },
+    {
+      category: "analytics",
+      vendor: "posthog",
+      configured: Boolean(env.POSTHOG_API_KEY),
+      implemented: IMPLEMENTED_VENDORS.analytics.posthog,
+      active: env.ANALYTICS_PROVIDER === "posthog",
+    },
+    {
+      category: "webSearch",
+      vendor: "anthropic",
+      configured: Boolean(env.ANTHROPIC_API_KEY),
+      implemented: IMPLEMENTED_VENDORS.webSearch.anthropic,
+      active: env.WEB_SEARCH_PROVIDER === "anthropic",
     },
   ];
 }

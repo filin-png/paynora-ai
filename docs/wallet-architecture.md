@@ -356,22 +356,28 @@ apologetically hidden — that crypto isn't available in this deployment.
 ```
 PAYNORA domain code
         |
-   WalletProvider interface        <- stable, already shipped
+   WalletProvider interface        <- stable, shipped Phase 13
         |
-   resolveWalletProvider()         <- already dispatches on WALLET_PROVIDER
+   resolveWalletProvider()         <- dispatches on WALLET_PROVIDER
         |
-   Real Wallet Provider adapter    <- NOT built in this phase
+   AlchemyWalletProvider           <- real adapter, added Phase 14
 ```
 
-A future phase adds exactly one thing here: a real adapter class
-implementing `WalletProvider` (e.g. `CoinbaseWalletProvider`), wired into
-`resolveWalletProvider()`, plus a real per-organization webhook route
-calling `ingestWalletWebhookEvent`. **No other file in the wallet domain
-needs to change** — `wallets.ts`, `payment-requests.ts`,
+**Phase 14 built the real adapter predicted here**:
+`createAlchemyWalletProvider` (`src/server/wallet/providers/alchemy.ts`)
+implements `WalletProvider` against Alchemy's Enhanced APIs (balances,
+transaction lookups), Notify API (address-activity webhooks), and EIP-191
+signature recovery (ownership verification) — wired into
+`resolveWalletProvider()` when `WALLET_PROVIDER=alchemy`. A real
+per-organization webhook route, `POST /api/webhooks/wallet/[orgSlug]`
+(`src/app/api/webhooks/wallet/[orgSlug]/route.ts`), now calls
+`ingestWalletWebhookEvent`. **No other file in the wallet domain
+changed** — `wallets.ts`, `payment-requests.ts`,
 `transaction-state-machine.ts`, `transactions.ts`, and
-`reconciliation.ts` are all already provider-agnostic. This is the
-concrete meaning of "structurally ready for the next phase" from the
-brief.
+`reconciliation.ts` remained untouched, exactly as this section
+predicted. See `docs/production-integrations.md#wallet` for credentials,
+webhook configuration, cost, and exactly which networks/vendors remain
+unimplemented (`coinbase`, `privy` — still recognized-but-not-built).
 
 ## 13. Known limitations
 
@@ -395,20 +401,26 @@ brief.
   requires deciding an asset amount, which in turn requires the FX
   question above — left for the phase that adds a real provider/rate
   source).
-- **No real webhook route.** `ingestWalletWebhookEvent` is a complete,
-  tested pipeline, but no `app/api/webhooks/wallet/...` route calls it
-  yet — see `§12`.
 - **`getBalances`/`inspectTransaction` are defined on the interface but
-  have no UI surface yet** (the wallet detail page doesn't call them,
-  since `WALLET_PROVIDER=none` would only throw); they exist so a real
-  adapter has something to implement against from day one.
+  have no UI surface yet** — the wallet detail page doesn't call them.
+  Both are exercised by the real Alchemy adapter's tests and by
+  `npm run smoke -- wallet` (Phase 14), just not yet rendered anywhere.
+- **Only `ETHEREUM`/`POLYGON`/`BSC` are supported by the real adapter.**
+  `WalletNetwork` also allows values Alchemy's Notify/Enhanced APIs don't
+  cover the same way in this adapter (e.g. Bitcoin/Solana/Tron are
+  different products) — selecting an unsupported network throws a clear
+  error rather than silently no-oping. See
+  `docs/production-integrations.md#wallet`.
 
 ---
 
 ## Future Phase Wallet: architectural plan (documentation only)
 
 Not implemented in this phase — recorded here per the brief's request for
-a short forward-looking plan, nothing more:
+a short forward-looking plan, nothing more. **Update (Phase 14): the
+first two bullets below are now real** — see `§12` and
+`docs/production-integrations.md#wallet`. The rest remains an accurate
+description of what's still ahead.
 
 - **`WalletProvider` abstraction** — already shipped (`§3`); a future
   phase implements one real adapter against it.

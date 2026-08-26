@@ -7,7 +7,7 @@ describe("getProviderRegistrySnapshot", () => {
     const snapshot = getProviderRegistrySnapshot();
 
     expect(snapshot.deploymentProfile).toBe("LOCAL_TEST");
-    expect(snapshot.entries).toHaveLength(5);
+    expect(snapshot.entries).toHaveLength(7);
 
     const ai = snapshot.entries.find((e) => e.category === "ai")!;
     expect(ai.vendor).toBe("none");
@@ -52,7 +52,7 @@ describe("getProviderVendorBreakdown", () => {
   it("reports every known vendor as not configured in the test environment (no secrets set)", () => {
     const vendors = getProviderVendorBreakdown();
     const names = vendors.map((v) => v.vendor).sort();
-    expect(names).toEqual(["mistral", "openrouter", "smtp", "telegram"]);
+    expect(names).toEqual(["anthropic", "mistral", "openrouter", "posthog", "smtp", "telegram"]);
     for (const vendor of vendors) {
       expect(vendor.configured).toBe(false);
       expect(vendor.active).toBe(false);

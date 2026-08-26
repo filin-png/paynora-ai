@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 
+import { trackEvent } from "@/server/analytics/events";
 import { prisma } from "@/server/db/client";
 import { recordActivityEvent } from "./activity";
 import { dateOnlySchema, parseDateOnly } from "./dates";
@@ -169,9 +170,11 @@ export async function recordPayment(
   rawInput: PaymentInput,
 ) {
   const input = paymentInputSchema.parse(rawInput);
-  return prisma.$transaction((tx) =>
+  const payment = await prisma.$transaction((tx) =>
     recordPaymentInTransaction(tx, organizationId, invoiceId, input),
   );
+  trackEvent("payment_recorded", { organizationId });
+  return payment;
 }
 
 export async function listPaymentsForInvoice(

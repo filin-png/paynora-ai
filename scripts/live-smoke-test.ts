@@ -16,6 +16,9 @@
  *   npm run smoke -- ai mistral --confirm
  *   npm run smoke -- email --to=you@example.com --confirm
  *   npm run smoke -- telegram --to=<chat-id> --confirm
+ *   npm run smoke -- analytics --confirm
+ *   npm run smoke -- wallet --address=0x... --confirm
+ *   npm run smoke -- websearch --confirm
  *
  * Every target requires --confirm — there is no default recipient and no
  * implicit send. Nothing here prints a secret: API keys, bot tokens, and
@@ -43,21 +46,24 @@ if (process.env.VITEST) {
   fail("refusing to run: invoked from inside the Vitest runner. This script is not a test.");
 }
 
-type Target = "ai" | "email" | "telegram";
+type Target = "ai" | "email" | "telegram" | "analytics" | "wallet" | "websearch";
 
 function parseArgs(argv: string[]): {
   target: Target;
   vendor?: string;
   to?: string;
+  address?: string;
   confirm: boolean;
 } {
   const [target, ...rest] = argv;
-  if (target !== "ai" && target !== "email" && target !== "telegram") {
-    fail(`unknown target ${JSON.stringify(target)} — expected "ai", "email", or "telegram".`);
+  const knownTargets: Target[] = ["ai", "email", "telegram", "analytics", "wallet", "websearch"];
+  if (!knownTargets.includes(target as Target)) {
+    fail(`unknown target ${JSON.stringify(target)} — expected one of ${knownTargets.map((t) => `"${t}"`).join(", ")}.`);
   }
 
   let vendor: string | undefined;
   let to: string | undefined;
+  let address: string | undefined;
   let confirm = false;
 
   for (const arg of rest) {
@@ -65,6 +71,8 @@ function parseArgs(argv: string[]): {
       confirm = true;
     } else if (arg.startsWith("--to=")) {
       to = arg.slice("--to=".length).trim();
+    } else if (arg.startsWith("--address=")) {
+      address = arg.slice("--address=".length).trim();
     } else if (target === "ai" && !arg.startsWith("--")) {
       vendor = arg;
     } else {
@@ -72,7 +80,7 @@ function parseArgs(argv: string[]): {
     }
   }
 
-  return { target, vendor, to, confirm };
+  return { target: target as Target, vendor, to, address, confirm };
 }
 
 async function runAiSmoke(vendor: string | undefined, confirm: boolean): Promise<void> {
@@ -156,12 +164,59 @@ async function runTelegramSmoke(to: string | undefined, confirm: boolean): Promi
   console.info(`[smoke] telegram OK — provider=${result.provider}${result.providerMessageId ? ` providerMessageId=${result.providerMessageId}` : ""}`);
 }
 
+async function runAnalyticsSmoke(confirm: boolean): Promise<void> {
+  if (!confirm) fail("refusing to send a real analytics event without --confirm.");
+
+  const { resolveAnalyticsProvider } = await import("../src/server/analytics/service");
+  const provider = resolveAnalyticsProvider();
+
+  console.info(`[smoke] sending a real event via ${provider.name}...`);
+  await provider.capture({
+    name: "invoice_created", // a real, allowlisted event name — see src/server/analytics/events.ts
+    organizationId: "smoke-test-org",
+    properties: { source: "live-smoke-test" },
+  });
+  // capture() never throws or returns a result (analytics is best-effort
+  // by design — see docs/production-integrations.md#analytics), so a
+  // clean return here only proves the call was accepted for dispatch, not
+  // that the vendor received it. Check the vendor's live events view to
+  // confirm receipt.
+  console.info(`[smoke] analytics dispatch OK — provider=${provider.name} (verify receipt in your PostHog project)`);
+}
+
+async function runWalletSmoke(address: string | undefined, confirm: boolean): Promise<void> {
+  if (!confirm) fail("refusing to make a real wallet-provider call without --confirm.");
+
+  const { resolveWalletProvider } = await import("../src/server/wallet/service");
+  const provider = resolveWalletProvider();
+  const target = address ?? "0x0000000000000000000000000000000000000000";
+
+  console.info(`[smoke] reading real balances via ${provider.name} for ${target} on ETHEREUM (read-only, no write)...`);
+  const balances = await provider.getBalances("ETHEREUM", target);
+  console.info(`[smoke] wallet OK — provider=${provider.name} balances=${balances.length}`);
+}
+
+async function runWebSearchSmoke(confirm: boolean): Promise<void> {
+  if (!confirm) fail("refusing to run a real (billed) web search without --confirm.");
+
+  const { resolveWebSearchProvider } = await import("../src/server/websearch/service");
+  const provider = resolveWebSearchProvider();
+
+  console.info(`[smoke] running a real web search via ${provider.name} — this is a billed vendor call...`);
+  const result = await provider.search({ query: "What is the current year?", maxUses: 1 });
+  console.info(`[smoke] websearch OK — searchesUsed=${result.searchesUsed} citations=${result.citations.length}`);
+  console.info(`[smoke] answer: ${result.answer}`);
+}
+
 async function main(): Promise<void> {
-  const { target, vendor, to, confirm } = parseArgs(process.argv.slice(2));
+  const { target, vendor, to, address, confirm } = parseArgs(process.argv.slice(2));
 
   if (target === "ai") await runAiSmoke(vendor, confirm);
   else if (target === "email") await runEmailSmoke(to, confirm);
-  else await runTelegramSmoke(to, confirm);
+  else if (target === "telegram") await runTelegramSmoke(to, confirm);
+  else if (target === "analytics") await runAnalyticsSmoke(confirm);
+  else if (target === "wallet") await runWalletSmoke(address, confirm);
+  else await runWebSearchSmoke(confirm);
 }
 
 main().catch((error: unknown) => {

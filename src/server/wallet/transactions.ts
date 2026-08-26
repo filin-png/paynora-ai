@@ -1,5 +1,6 @@
 import { Prisma, type WalletTransaction } from "@prisma/client";
 
+import { trackEvent } from "@/server/analytics/events";
 import { recordActivityEvent } from "@/server/ar/activity";
 import { prisma } from "@/server/db/client";
 import { WalletResourceNotFoundError, WalletWebhookVerificationError } from "./errors";
@@ -71,7 +72,7 @@ export async function ingestWalletWebhookEvent(
     return { outcome: "rejected", reason: "unknown_wallet" };
   }
 
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     let transaction: WalletTransaction;
     let isNewTransaction = false;
     let justConfirmed = false;
@@ -161,6 +162,25 @@ export async function ingestWalletWebhookEvent(
 
     return { outcome: "ingested" as const, transaction, isNewTransaction };
   });
+
+  if (result.outcome === "ingested") {
+    if (result.isNewTransaction) {
+      trackEvent("crypto_transaction_detected", {
+        organizationId,
+        properties: { network: result.transaction.network, asset: result.transaction.asset },
+      });
+    }
+    if (result.transaction.status === "CONFIRMED") {
+      trackEvent("crypto_transaction_confirmed", {
+        organizationId,
+        properties: { network: result.transaction.network, asset: result.transaction.asset },
+      });
+    }
+    if (result.transaction.reconciliationOutcome === "MATCHED") {
+      trackEvent("payment_recorded", { organizationId, properties: { source: "crypto" } });
+    }
+  }
+  return result;
 }
 
 export async function getWalletTransaction(organizationId: string, transactionId: string) {

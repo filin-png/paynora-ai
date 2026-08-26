@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 
+import { trackEvent } from "@/server/analytics/events";
 import { prisma } from "@/server/db/client";
 import { assertWithinResourceLimit } from "@/server/billing/entitlements";
 import { recordActivityEvent } from "./activity";
@@ -139,7 +140,7 @@ export async function createInvoice(organizationId: string, rawInput: InvoiceInp
   const customer = await getCustomer(organizationId, input.customerId);
 
   try {
-    return await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
       await assertWithinResourceLimit(tx, organizationId, "invoices");
 
       const invoice = await tx.invoice.create({
@@ -163,6 +164,8 @@ export async function createInvoice(organizationId: string, rawInput: InvoiceInp
       });
       return invoice;
     });
+    trackEvent("invoice_created", { organizationId, properties: { currency: input.currency } });
+    return result;
   } catch (error) {
     if (
       error instanceof Prisma.PrismaClientKnownRequestError &&

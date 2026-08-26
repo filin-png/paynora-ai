@@ -5,6 +5,55 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Phase 14: Production Integrations & Real Intelligence
+
+- Real `WalletProvider` adapter: Alchemy (`src/server/wallet/providers/alchemy.ts`)
+  — Enhanced/JSON-RPC APIs for balances/transaction lookups, the Notify
+  API for address-activity webhooks, and client-side EIP-191 signature
+  recovery for ownership verification. A real per-organization webhook
+  route (`POST /api/webhooks/wallet/[orgSlug]`) now calls Phase 13's
+  already-tested `ingestWalletWebhookEvent` pipeline unchanged. Supports
+  `ETHEREUM`/`POLYGON`/`BSC`; `coinbase`/`privy` remain
+  recognized-but-not-implemented.
+- New `AnalyticsProvider` abstraction + real PostHog adapter
+  (`src/server/analytics/`) — an allowlisted, PII-redacting `trackEvent()`
+  wired into signup/sign-in/invoice-created/invoice-sent/payment-recorded/
+  wallet-connected/crypto-payment-requested/crypto-transaction-detected/
+  crypto-transaction-confirmed, firing only after each event's own
+  transaction actually commits. Never throws; disableable via
+  `ANALYTICS_PROVIDER=none` (default).
+- New `WebSearchProvider` abstraction + real Anthropic web-search adapter
+  (`src/server/websearch/`) — deliberately separate from `AIProvider`.
+  `tryWebSearch`/`runDeepResearch` gateways enforce a hard search-count
+  ceiling, an hourly rate limit, and a fixed prompt-injection-resistant
+  system prompt that treats all retrieved web content as untrusted data.
+  Real citations only — never a fabricated source.
+- Provider registry (`src/server/providers/`) extended from 5 to 7
+  categories (`analytics`, `webSearch`); Settings → Integrations now
+  renders both alongside the existing AI/Email/Messaging/Billing/Wallet
+  rows, using the same configuration-derived HEALTHY/DISABLED/UNKNOWN
+  states (never a live network probe, never a fabricated "Connected").
+- i18n foundation (`src/lib/i18n/`) — a real EN/RU resource-dictionary
+  architecture with a cookie-persisted locale, a Server Action + client
+  `LocaleSwitcher`, and a `dictionaries.test.ts` parity check. Wired into
+  the app-shell navigation, the landing page's nav/hero, and Settings →
+  Integrations category labels; every other screen remains English-only
+  — see `docs/production-integrations.md#internationalization-status`
+  for the honest scope boundary.
+- Sandbox-opt-in integration test layer (`*.sandbox.test.ts`, gated by
+  `RUN_EXTERNAL_INTEGRATION_TESTS=true`) for PostHog/Alchemy/Anthropic
+  web search, alongside the existing mocked-network unit tests and the
+  extended `npm run smoke` CLI (new `analytics`/`wallet`/`websearch`
+  targets). CI never requires a production credential.
+- New `docs/production-integrations.md` — provider/purpose/adapter/env
+  vars/sandbox+production setup/webhook config/cost/failure behavior/
+  security boundaries per integration, plus a cost matrix, an honest
+  European-access review, and the four-layer test strategy. Updated
+  `docs/wallet-architecture.md` §12/§13 to reflect the real adapter.
+- No Prisma schema or migration changes this phase — every new
+  capability composes with Phase 13's existing wallet schema and prior
+  phases' schema unchanged.
+
 ### Added — Phase 11.6: Production Scheduler & Background Automation (Audit)
 
 - Audited the existing collections-automation scheduler

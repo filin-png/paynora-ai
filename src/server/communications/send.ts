@@ -7,6 +7,7 @@ import {
   type DeliveryFailureCategory,
 } from "@prisma/client";
 
+import { trackEvent } from "@/server/analytics/events";
 import { recordActivityEvent } from "@/server/ar/activity";
 import { prisma } from "@/server/db/client";
 import { EmailProviderRejectedError } from "@/server/email/errors";
@@ -445,7 +446,7 @@ async function finalizeSuccess(
   actorSource: CommunicationActorSource,
 ): Promise<SendCommunicationResult> {
   const channelLabel = communication.channel === "EMAIL" ? "email" : "Telegram message";
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     const attemptClaim = await tx.deliveryAttempt.updateMany({
       where: { id: deliveryAttempt.id, status: "PENDING" },
       data: { status: "SUCCESS", providerMessageId, completedAt: new Date() },
@@ -502,6 +503,10 @@ async function finalizeSuccess(
 
     return { communication: updatedCommunication, deliveryAttempt: updatedAttempt, actionProposal };
   });
+  if (result.communication.status === "SENT") {
+    trackEvent("invoice_sent", { organizationId, properties: { channel: communication.channel } });
+  }
+  return result;
 }
 
 async function finalizeTerminal(

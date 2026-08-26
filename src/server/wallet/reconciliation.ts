@@ -1,5 +1,6 @@
 import { Prisma, type ReconciliationRejectionReason, type WalletTransaction } from "@prisma/client";
 
+import { trackEvent } from "@/server/analytics/events";
 import { recordActivityEvent } from "@/server/ar/activity";
 import { getBusinessToday } from "@/server/ar/dates";
 import { recordPaymentInTransaction } from "@/server/ar/payments";
@@ -158,5 +159,11 @@ export async function reconcileWalletTransactionInTransaction(
 }
 
 export async function reconcileWalletTransaction(organizationId: string, transactionId: string): Promise<WalletTransaction> {
-  return prisma.$transaction((tx) => reconcileWalletTransactionInTransaction(tx, organizationId, transactionId));
+  const result = await prisma.$transaction((tx) =>
+    reconcileWalletTransactionInTransaction(tx, organizationId, transactionId),
+  );
+  if (result.reconciliationOutcome === "MATCHED") {
+    trackEvent("payment_recorded", { organizationId, properties: { source: "crypto" } });
+  }
+  return result;
 }

@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { trackEvent } from "@/server/analytics/events";
 import { getInvoiceWithFinancials } from "@/server/ar/invoices";
 import { amountMinorSchema } from "@/server/ar/money";
 import { prisma } from "@/server/db/client";
@@ -56,7 +57,7 @@ export async function createCryptoPaymentRequest(
     throw new ExceedsOutstandingBalanceError(financials.outstandingMinor);
   }
 
-  return prisma.cryptoPaymentRequest.create({
+  const request = await prisma.cryptoPaymentRequest.create({
     data: {
       organizationId,
       invoiceId: input.invoiceId,
@@ -70,6 +71,8 @@ export async function createCryptoPaymentRequest(
       status: "OPEN",
     },
   });
+  trackEvent("crypto_payment_requested", { organizationId, properties: { network: input.network, asset: input.asset } });
+  return request;
 }
 
 export async function getCryptoPaymentRequest(organizationId: string, requestId: string) {
