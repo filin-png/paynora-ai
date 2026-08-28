@@ -6,6 +6,7 @@ import {
   createOrganization,
   listOrganizationMembers,
   listUserOrganizations,
+  setOrganizationAnalyticsEnabled,
   updateOrganizationName,
 } from "./organizations";
 
@@ -82,6 +83,32 @@ describe("updateOrganizationName", () => {
       where: { id: organization.id },
     });
     expect(updated.name).toBe("New Name");
+  });
+});
+
+describe("setOrganizationAnalyticsEnabled", () => {
+  it("persists the opt-out and is reflected by a real read", async () => {
+    const user = await createTestUser("owner");
+    const organization = await createOrganization(user, "Analytics Test Org");
+    expect((await prisma.organization.findUniqueOrThrow({ where: { id: organization.id } })).analyticsEnabled).toBe(
+      true,
+    );
+
+    await setOrganizationAnalyticsEnabled(organization.id, false);
+
+    const updated = await prisma.organization.findUniqueOrThrow({ where: { id: organization.id } });
+    expect(updated.analyticsEnabled).toBe(false);
+  });
+
+  it("can be turned back on", async () => {
+    const user = await createTestUser("owner");
+    const organization = await createOrganization(user, "Analytics Test Org 2");
+    await setOrganizationAnalyticsEnabled(organization.id, false);
+
+    await setOrganizationAnalyticsEnabled(organization.id, true);
+
+    const updated = await prisma.organization.findUniqueOrThrow({ where: { id: organization.id } });
+    expect(updated.analyticsEnabled).toBe(true);
   });
 });
 

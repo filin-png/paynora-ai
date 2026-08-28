@@ -9,16 +9,20 @@ import { Tabs } from "@/components/ui/tabs";
 import { getDictionary } from "@/lib/i18n";
 import { getLocale } from "@/lib/i18n/get-locale";
 import { cn } from "@/lib/utils";
+import { getCookieConsent } from "@/lib/privacy/get-cookie-consent";
 import { getReadinessState } from "@/server/onboarding/readiness";
+import { getAccountDeletionWarnings } from "@/server/auth/account-deletion";
 import type { ProviderHealthStatus } from "@/server/providers/types";
 import { getProviderRegistrySnapshot, getProviderVendorBreakdown } from "@/server/providers/registry";
-import { listOrganizationMembers } from "@/server/tenancy/organizations";
+import { getOrganizationPrivacySettings, listOrganizationMembers } from "@/server/tenancy/organizations";
 import { listPendingInvitations } from "@/server/tenancy/invitations";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
 import { BillingTab } from "./billing-tab";
 import { clearDemoDataAction, seedDemoDataAction } from "./demo-data-actions";
 import { InviteMemberForm } from "./invite-member-form";
 import { PendingInvitationsList } from "./pending-invitations-list";
+import { deleteAccountAction } from "./account-actions";
+import { setAnalyticsEnabledAction } from "./privacy-actions";
 import { RenameOrganizationForm } from "./rename-organization-form";
 
 const HEALTH_DISPLAY: Record<ProviderHealthStatus, { label: string; tone: NonNullable<BadgeProps["tone"]>; icon: typeof CircleCheck }> = {
@@ -44,7 +48,7 @@ const VENDOR_GROUP_LABEL: Record<"ai" | "email" | "messaging", string> = {
   messaging: "Messaging",
 };
 
-const TABS = ["general", "members", "integrations", "security", "billing", "readiness"] as const;
+const TABS = ["general", "members", "integrations", "security", "privacy", "billing", "readiness"] as const;
 type SettingsTab = (typeof TABS)[number];
 
 export default async function OrganizationSettingsPage({
@@ -69,6 +73,7 @@ export default async function OrganizationSettingsPage({
           { href: `/app/${orgSlug}/settings?tab=members`, label: "Members", active: tab === "members" },
           { href: `/app/${orgSlug}/settings?tab=integrations`, label: "Integrations", active: tab === "integrations" },
           { href: `/app/${orgSlug}/settings?tab=security`, label: "Security", active: tab === "security" },
+          { href: `/app/${orgSlug}/settings?tab=privacy`, label: "Privacy", active: tab === "privacy" },
           { href: `/app/${orgSlug}/settings?tab=billing`, label: "Billing", active: tab === "billing" },
           { href: `/app/${orgSlug}/settings?tab=readiness`, label: "Readiness", active: tab === "readiness" },
         ]}
@@ -80,6 +85,9 @@ export default async function OrganizationSettingsPage({
       ) : null}
       {tab === "integrations" ? <IntegrationsTab /> : null}
       {tab === "security" ? <SecurityTab email={context.user.email} role={context.role} /> : null}
+      {tab === "privacy" ? (
+        <PrivacyTab orgSlug={orgSlug} organizationId={context.organization.id} userId={context.user.id} role={context.role} />
+      ) : null}
       {tab === "billing" ? <BillingTab organizationId={context.organization.id} /> : null}
       {tab === "readiness" ? <ReadinessTab organizationId={context.organization.id} role={context.role} /> : null}
     </div>
@@ -275,6 +283,107 @@ function SecurityTab({ email, role }: { email: string; role: string }) {
         <Badge tone="success">Always on</Badge>
       </div>
     </Card>
+  );
+}
+
+/**
+ * Real controls, never fake toggles (Phase 15A) — Analytics reads and
+ * writes `Organization.analyticsEnabled`, the exact column
+ * `src/server/analytics/events.ts#trackEvent` checks before every event
+ * fires. Cookie consent status is read-only display here — the actual
+ * choice is made via the banner (`src/components/cookie-consent-banner.tsx`);
+ * this only shows what was last recorded. See
+ * docs/privacy-data-inventory.md and docs/privacy-policy.md.
+ */
+async function PrivacyTab({
+  orgSlug,
+  organizationId,
+  userId,
+  role,
+}: {
+  orgSlug: string;
+  organizationId: string;
+  userId: string;
+  role: string;
+}) {
+  const [{ analyticsEnabled }, cookieConsent, { soleOwnerOfOrganizations }] = await Promise.all([
+    getOrganizationPrivacySettings(organizationId),
+    getCookieConsent(),
+    getAccountDeletionWarnings(userId),
+  ]);
+  const cookieConsentLabel =
+    cookieConsent === "accepted" ? "Accepted" : cookieConsent === "rejected" ? "Rejected" : "Not yet decided";
+  const deleteConfirmDescription =
+    soleOwnerOfOrganizations.length > 0
+      ? `This permanently anonymizes your account and signs you out. You are the sole owner of ${soleOwnerOfOrganizations
+          .map((org) => org.name)
+          .join(", ")} — deleting your account leaves that organization with no owner. This cannot be undone.`
+      : "This permanently anonymizes your account (email and password are replaced and can never be used to sign in again) and signs you out. This cannot be undone.";
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Card className="max-w-md p-6">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-semibold text-foreground">Analytics</p>
+            <p className="mt-1 text-xs text-muted">
+              Product usage events (e.g. invoice sent, payment recorded) sent to PostHog when configured for this
+              deployment. Never includes secrets, passwords, or full customer records — see
+              docs/privacy-data-inventory.md.
+            </p>
+          </div>
+          <Badge tone={analyticsEnabled ? "success" : "neutral"}>{analyticsEnabled ? "Enabled" : "Disabled"}</Badge>
+        </div>
+        {role === "OWNER" ? (
+          <form action={setAnalyticsEnabledAction.bind(null, orgSlug, !analyticsEnabled)} className="mt-4">
+            <Button type="submit" variant="outline" size="sm">
+              {analyticsEnabled ? "Disable analytics" : "Enable analytics"}
+            </Button>
+          </form>
+        ) : (
+          <p className="mt-4 text-xs text-muted">Only an organization owner can change this.</p>
+        )}
+      </Card>
+
+      <Card className="max-w-md p-6">
+        <p className="text-sm font-semibold text-foreground">Cookies</p>
+        <p className="mt-1 text-xs text-muted">
+          PAYNORA sets a strictly necessary session cookie and a language-preference cookie — neither requires
+          consent. Your analytics-cookie-consent choice (currently not technically enforced — see
+          docs/privacy-data-inventory.md#technical-data) is recorded below.
+        </p>
+        <div className="mt-4 flex items-center justify-between text-sm">
+          <span className="text-muted-foreground">Analytics cookie consent</span>
+          <Badge tone={cookieConsent === "accepted" ? "success" : cookieConsent === "rejected" ? "neutral" : "warning"}>
+            {cookieConsentLabel}
+          </Badge>
+        </div>
+      </Card>
+
+      <Card className="max-w-md p-6">
+        <p className="text-sm font-semibold text-foreground">Data & account</p>
+        <p className="mt-1 text-xs text-muted">
+          Export a copy of your account data, or permanently delete your account. See docs/privacy-policy.md for what
+          each of these does and does not include.
+        </p>
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <a href="/api/account/export" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
+            Export my data
+          </a>
+          <ConfirmActionButton
+            trigger={
+              <Button type="button" variant="destructive" size="sm">
+                Delete my account
+              </Button>
+            }
+            action={deleteAccountAction}
+            confirmTitle="Delete your account?"
+            confirmDescription={deleteConfirmDescription}
+            confirmLabel="Delete account"
+          />
+        </div>
+      </Card>
+    </div>
   );
 }
 

@@ -84,6 +84,13 @@ model Organization {
   // regardless of that org's own success/failure, so one broken
   // organization never blocks others from rotating through.
   automationLastTickAt DateTime?
+  // Phase 15A: per-organization analytics opt-out (Settings -> Privacy).
+  // Defaults to true so existing deployments' analytics behavior is
+  // unchanged by this column's addition — the real on/off switch remains
+  // ANALYTICS_PROVIDER (deployment-wide, src/lib/env.ts); this is a
+  // second, narrower gate an organization can additionally flip off for
+  // itself. See docs/privacy-data-inventory.md#analytics.
+  analyticsEnabled     Boolean   @default(true)
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 

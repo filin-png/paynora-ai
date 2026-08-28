@@ -90,6 +90,25 @@ export async function updateOrganizationName(
   });
 }
 
+/**
+ * A real toggle, not a fake one (Settings -> Privacy, Phase 15A) —
+ * `src/server/analytics/events.ts#trackEvent` checks this exact column
+ * before every event fires. See docs/privacy-data-inventory.md#analytics.
+ */
+export async function setOrganizationAnalyticsEnabled(organizationId: string, enabled: boolean): Promise<void> {
+  await prisma.organization.update({
+    where: { id: organizationId },
+    data: { analyticsEnabled: enabled },
+  });
+}
+
+export async function getOrganizationPrivacySettings(organizationId: string): Promise<{ analyticsEnabled: boolean }> {
+  return prisma.organization.findUniqueOrThrow({
+    where: { id: organizationId },
+    select: { analyticsEnabled: true },
+  });
+}
+
 export async function listOrganizationMembers(organizationId: string) {
   const members = await prisma.organizationMember.findMany({
     where: { organizationId },

@@ -128,4 +128,130 @@ describe("createAlchemyWalletProvider — network calls", () => {
     await expect(provider.connectWallet({ network: "BITCOIN", address: "0xabc" })).rejects.toThrow();
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  const ADDR = "0xba604dd4a9ba94f5752d7f313e66c582c15e682e"; // a syntactically valid, arbitrary EVM address
+
+  it("getBalances merges the native asset balance alongside ERC-20 token balances", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (_url: string, init: RequestInit) => {
+      const parsed = JSON.parse(init.body as string) as { method: string };
+      if (parsed.method === "eth_getBalance") {
+        return { ok: true, json: async () => ({ result: "0xde0b6b3a7640000" }) }; // 1 ETH in wei
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          result: {
+            tokenBalances: [
+              { contractAddress: "0xtoken1", tokenBalance: "0x64" },
+              { contractAddress: "0xtoken2", tokenBalance: "0x0" }, // zero balance, must be filtered out
+            ],
+          },
+        }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = createAlchemyWalletProvider(CONFIG);
+    const balances = await provider.getBalances("ETHEREUM", ADDR);
+
+    expect(balances).toEqual([
+      { assetType: "native", asset: "ETH", assetDecimals: 18, amountMinor: 1000000000000000000n, chain: "ETHEREUM" },
+      { assetType: "token", asset: "0xtoken1", assetDecimals: 18, amountMinor: 100n, chain: "ETHEREUM" },
+    ]);
+  });
+
+  it("getBalances handles a very large wei amount without precision loss (exceeds Number.MAX_SAFE_INTEGER)", async () => {
+    // 1,000,000 ETH in wei — well beyond Number.MAX_SAFE_INTEGER (~9.007e15), which real wei
+    // amounts exceed at well under 1 ETH. Asserting a bigint equality here is itself the
+    // precision-loss guard: BigInt(hex) never rounds, unlike a Number conversion would.
+    const largeWei = 1_000_000n * 10n ** 18n;
+    const fetchMock = vi.fn().mockImplementation(async (_url: string, init: RequestInit) => {
+      const parsed = JSON.parse(init.body as string) as { method: string };
+      if (parsed.method === "eth_getBalance") {
+        return { ok: true, json: async () => ({ result: `0x${largeWei.toString(16)}` }) };
+      }
+      return { ok: true, json: async () => ({ result: { tokenBalances: [] } }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = createAlchemyWalletProvider(CONFIG);
+    const balances = await provider.getBalances("ETHEREUM", ADDR);
+
+    expect(balances[0]!.amountMinor).toBe(largeWei);
+    expect(largeWei > BigInt(Number.MAX_SAFE_INTEGER)).toBe(true);
+  });
+
+  it("getBalances omits the native asset entry when the balance is zero", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (_url: string, init: RequestInit) => {
+      const parsed = JSON.parse(init.body as string) as { method: string };
+      if (parsed.method === "eth_getBalance") {
+        return { ok: true, json: async () => ({ result: "0x0" }) };
+      }
+      return { ok: true, json: async () => ({ result: { tokenBalances: [] } }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = createAlchemyWalletProvider(CONFIG);
+    const balances = await provider.getBalances("ETHEREUM", ADDR);
+
+    expect(balances).toEqual([]);
+  });
+
+  it("getBalances uses the network's own native asset symbol (MATIC on Polygon)", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (_url: string, init: RequestInit) => {
+      const parsed = JSON.parse(init.body as string) as { method: string };
+      if (parsed.method === "eth_getBalance") {
+        return { ok: true, json: async () => ({ result: "0x1" }) };
+      }
+      return { ok: true, json: async () => ({ result: { tokenBalances: [] } }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = createAlchemyWalletProvider(CONFIG);
+    const balances = await provider.getBalances("POLYGON", ADDR);
+
+    expect(balances).toEqual([{ assetType: "native", asset: "MATIC", assetDecimals: 18, amountMinor: 1n, chain: "POLYGON" }]);
+  });
+
+  it("getBalances rejects an unsupported network before making any network call", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = createAlchemyWalletProvider(CONFIG);
+
+    await expect(provider.getBalances("BITCOIN", ADDR)).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("getBalances rejects a malformed address before making any network call", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = createAlchemyWalletProvider(CONFIG);
+
+    await expect(provider.getBalances("ETHEREUM", "not-an-address")).rejects.toThrow(/valid EVM address/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("getBalances rejects when the underlying request errors", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 500, statusText: "Internal Server Error" });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = createAlchemyWalletProvider(CONFIG);
+
+    await expect(provider.getBalances("ETHEREUM", ADDR)).rejects.toThrow();
+  });
+
+  it("getBalances rejects when the request times out", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(new Error("The operation was aborted")));
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = createAlchemyWalletProvider(CONFIG);
+
+    const assertion = expect(provider.getBalances("ETHEREUM", ADDR)).rejects.toThrow();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await assertion;
+    vi.useRealTimers();
+  });
 });

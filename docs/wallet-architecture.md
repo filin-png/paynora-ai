@@ -401,10 +401,24 @@ unimplemented (`coinbase`, `privy` — still recognized-but-not-built).
   requires deciding an asset amount, which in turn requires the FX
   question above — left for the phase that adds a real provider/rate
   source).
-- **`getBalances`/`inspectTransaction` are defined on the interface but
-  have no UI surface yet** — the wallet detail page doesn't call them.
-  Both are exercised by the real Alchemy adapter's tests and by
-  `npm run smoke -- wallet` (Phase 14), just not yet rendered anywhere.
+- **`getBalances` has a real UI surface (Phase 15A)**: the wallet detail
+  page (`src/app/app/[orgSlug]/wallet/[walletId]/page.tsx`) renders a
+  "Balances" section via `src/server/wallet/balances.ts#getWalletBalances`
+  — a tenant-scoped, never-throws domain wrapper (`not_connected`/
+  `error`/`ok` states) around `WalletProvider.getBalances`, with the
+  provider resolved by the page itself (mirroring the webhook route's own
+  resolution pattern) so "no provider configured" is a distinct rendered
+  state, not a crash. `getBalances` returns both the chain's native (gas)
+  asset balance (`eth_getBalance`, labeled `ETH`/`MATIC`/`BNB` per
+  network, `assetType: "native"`) and ERC-20 token balances
+  (`alchemy_getTokenBalances`, `assetType: "token"`) — never conflated,
+  each balance also carries its own `chain`. Amounts are formatted for
+  display via `src/server/wallet/amount.ts#formatAssetAmount`, pure
+  bigint arithmetic with no `Number` conversion at any point — unlike
+  fiat's `formatMoney`, which is only safe up to
+  `Number.MAX_SAFE_INTEGER`, a bound real wei amounts exceed at well
+  under 1 ETH. `inspectTransaction` still has no UI surface — exercised
+  only by the real Alchemy adapter's tests and `npm run smoke -- wallet`.
 - **Only `ETHEREUM`/`POLYGON`/`BSC` are supported by the real adapter.**
   `WalletNetwork` also allows values Alchemy's Notify/Enhanced APIs don't
   cover the same way in this adapter (e.g. Bitcoin/Solana/Tron are

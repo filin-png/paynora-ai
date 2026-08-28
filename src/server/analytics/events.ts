@@ -1,3 +1,4 @@
+import { prisma } from "@/server/db/client";
 import { resolveAnalyticsProvider } from "./service";
 import type { AnalyticsEvent, AnalyticsProvider } from "./types";
 
@@ -43,22 +44,50 @@ function sanitizeProperties(
 }
 
 /**
+ * Real per-organization gate (Settings -> Privacy, Phase 15A) alongside
+ * the deployment-wide ANALYTICS_PROVIDER switch — an organization can opt
+ * itself out even when the deployment has analytics configured. Defaults
+ * to allowed (`true`) so a lookup failure never silently over-collects;
+ * see docs/privacy-data-inventory.md#analytics. Events with no
+ * `organizationId` (e.g. `user_signed_in`, which can fire before an
+ * org is resolved) have no per-org preference to check and always pass —
+ * an intentional, documented scope boundary, not an oversight.
+ */
+async function isAnalyticsAllowedForOrganization(organizationId: string | undefined): Promise<boolean> {
+  if (!organizationId) return true;
+  try {
+    const organization = await prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { analyticsEnabled: true },
+    });
+    return organization?.analyticsEnabled ?? true;
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Fire-and-forget, never throws, never awaited by callers for correctness
  * (a slow/broken analytics vendor must never delay or fail a real
  * financial or auth action) — errors are swallowed here as a second layer
- * on top of each provider's own never-throw contract.
+ * on top of each provider's own never-throw contract. The per-organization
+ * opt-out check happens inside this same fire-and-forget chain, not before
+ * it, so it never adds latency to the caller either.
  */
 export function trackEvent(
   name: AnalyticsEventName,
   input: { organizationId?: string; userId?: string; properties?: AnalyticsEvent["properties"] } = {},
   provider: AnalyticsProvider = resolveAnalyticsProvider(),
 ): void {
-  void provider
-    .capture({
-      name,
-      organizationId: input.organizationId,
-      userId: input.userId,
-      properties: sanitizeProperties(input.properties),
+  void isAnalyticsAllowedForOrganization(input.organizationId)
+    .then((allowed) => {
+      if (!allowed) return;
+      return provider.capture({
+        name,
+        organizationId: input.organizationId,
+        userId: input.userId,
+        properties: sanitizeProperties(input.properties),
+      });
     })
     .catch(() => {
       // Swallowed — see the function doc comment above.

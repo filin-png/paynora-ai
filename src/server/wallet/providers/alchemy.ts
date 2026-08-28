@@ -30,6 +30,13 @@ const ALCHEMY_NETWORK_SLUG: Partial<Record<WalletNetwork, string>> = {
   BSC: "bnb-mainnet",
 };
 
+/** Each EVM chain's own native (gas) asset — never returned by `alchemy_getTokenBalances`, which only covers ERC-20 tokens; see `getBalances` below. */
+const NATIVE_ASSET_SYMBOL: Partial<Record<WalletNetwork, string>> = {
+  ETHEREUM: "ETH",
+  POLYGON: "MATIC",
+  BSC: "BNB",
+};
+
 function requireNetworkSlug(network: WalletNetwork): string {
   const slug = ALCHEMY_NETWORK_SLUG[network];
   if (!slug) {
@@ -38,6 +45,15 @@ function requireNetworkSlug(network: WalletNetwork): string {
     );
   }
   return slug;
+}
+
+const EVM_ADDRESS_PATTERN = /^0x[0-9a-fA-F]{40}$/;
+
+/** Every network this adapter supports is EVM-based — a single shared shape check, not one that would generalize to BITCOIN/TRON/SOLANA if this adapter ever grew to cover them. */
+function requireEvmAddress(address: string): void {
+  if (!EVM_ADDRESS_PATTERN.test(address)) {
+    throw new Error(`"${address}" is not a valid EVM address (expected 0x followed by 40 hex characters)`);
+  }
 }
 
 function safeEqual(a: string, b: string): boolean {
@@ -125,26 +141,54 @@ export function createAlchemyWalletProvider(config: {
 
     async getBalances(network: WalletNetwork, address: string): Promise<WalletBalance[]> {
       const slug = requireNetworkSlug(network);
-      const body = await fetchJson(`https://${slug}.g.alchemy.com/v2/${config.apiKey}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "alchemy_getTokenBalances",
-          params: [address],
+      requireEvmAddress(address);
+      const rpcUrl = `https://${slug}.g.alchemy.com/v2/${config.apiKey}`;
+
+      // Two separate JSON-RPC methods: `alchemy_getTokenBalances` only
+      // covers ERC-20 tokens, never the chain's own native (gas) asset —
+      // that requires the standard `eth_getBalance` call instead. Both
+      // requested in parallel; a real wallet's balance is meaningless
+      // without its native balance alongside any token balances.
+      const [tokenBody, nativeBody] = await Promise.all([
+        fetchJson(rpcUrl, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "alchemy_getTokenBalances", params: [address] }),
         }),
-      });
-      const balances = (body as { result?: { tokenBalances?: { contractAddress: string; tokenBalance: string }[] } })
+        fetchJson(rpcUrl, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "eth_getBalance", params: [address, "latest"] }),
+        }),
+      ]);
+
+      const balances: WalletBalance[] = [];
+
+      const nativeHex = (nativeBody as { result?: string }).result;
+      const nativeAsset = NATIVE_ASSET_SYMBOL[network];
+      if (nativeHex && nativeAsset) {
+        const amountMinor = BigInt(nativeHex);
+        if (amountMinor > 0n) {
+          balances.push({ assetType: "native", asset: nativeAsset, assetDecimals: 18, amountMinor, chain: network });
+        }
+      }
+
+      const tokenBalances = (tokenBody as { result?: { tokenBalances?: { contractAddress: string; tokenBalance: string }[] } })
         .result?.tokenBalances;
-      if (!balances) return [];
-      return balances
-        .filter((entry) => entry.tokenBalance && entry.tokenBalance !== "0x0")
-        .map((entry) => ({
-          asset: entry.contractAddress,
-          assetDecimals: 18,
-          amountMinor: BigInt(entry.tokenBalance),
-        }));
+      if (tokenBalances) {
+        for (const entry of tokenBalances) {
+          if (!entry.tokenBalance || entry.tokenBalance === "0x0") continue;
+          balances.push({
+            assetType: "token",
+            asset: entry.contractAddress,
+            assetDecimals: 18,
+            amountMinor: BigInt(entry.tokenBalance),
+            chain: network,
+          });
+        }
+      }
+
+      return balances;
     },
 
     async inspectTransaction(network: WalletNetwork, txHash: string): Promise<RawWalletEvent | null> {
