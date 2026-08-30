@@ -14,6 +14,15 @@ const CAPTURE_TIMEOUT_MS = 5_000;
  * the event. A failed capture is swallowed here, after a bounded timeout
  * (AbortController, mirrors src/server/ai/gateway.ts's discipline) so a
  * slow/unreachable vendor can never hang the caller.
+ *
+ * Privacy minimization (Phase 15A, see docs/privacy-data-inventory.md#analytics):
+ * this call is always made server-side, from PAYNORA's own backend — the
+ * connecting IP PostHog's Capture API would otherwise see and geolocate
+ * is PAYNORA's own hosting infrastructure, never an end customer's real
+ * IP (no browser SDK is ever loaded, so no request originates from a
+ * customer's device). `$geoip_disable: true` is set explicitly anyway,
+ * so PostHog never attempts geolocation from that connecting IP at all —
+ * belt-and-suspenders, not a fix for an actual leak.
  */
 export function createPostHogAnalyticsProvider(apiKey: string, apiHost = "https://us.i.posthog.com"): AnalyticsProvider {
   return {
@@ -33,6 +42,7 @@ export function createPostHogAnalyticsProvider(apiKey: string, apiHost = "https:
               ...event.properties,
               organization_id: event.organizationId,
               $process_person_profile: Boolean(event.userId),
+              $geoip_disable: true,
             },
             timestamp: new Date().toISOString(),
           }),

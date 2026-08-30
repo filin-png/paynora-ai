@@ -23,6 +23,33 @@ describe("createPostHogAnalyticsProvider", () => {
     expect(body.properties.currency).toBe("USD");
   });
 
+  it("disables PostHog's IP-based geolocation on every event (Phase 15A privacy minimization)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = createPostHogAnalyticsProvider("phc_test");
+    await provider.capture({ name: "user_signed_in", userId: "user_1" });
+
+    const [, init] = fetchMock.mock.calls[0]!;
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.properties.$geoip_disable).toBe(true);
+  });
+
+  it("never sends an event name outside what the caller passed — no client IP or cookie ever included in the payload", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = createPostHogAnalyticsProvider("phc_test");
+    await provider.capture({ name: "user_signed_in", userId: "user_1" });
+
+    const [, init] = fetchMock.mock.calls[0]!;
+    const body = JSON.parse((init as RequestInit).body as string);
+    const keys = Object.keys(body.properties);
+    expect(keys).not.toContain("ip");
+    expect(keys).not.toContain("$ip");
+    expect(keys).not.toContain("cookie");
+  });
+
   it("never throws when the network call fails", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
     const provider = createPostHogAnalyticsProvider("phc_test");

@@ -40,10 +40,25 @@ export type WalletOwnershipVerification = {
   reason?: string;
 };
 
+/**
+ * "native" is a chain's own gas asset (ETH on Ethereum, MATIC on Polygon,
+ * BNB on BSC — never fetched by an ERC-20-style token-balance call);
+ * "token" is a contract-based asset (ERC-20 and equivalents). Kept as an
+ * explicit field rather than inferred from `asset`'s spelling — a
+ * network's native symbol and a token's ticker can collide, so identity
+ * must never be guessed from the string alone. See
+ * docs/production-integrations.md#wallet.
+ */
+export type WalletAssetType = "native" | "token";
+
 export type WalletBalance = {
+  assetType: WalletAssetType;
+  /** Human-readable symbol (e.g. "ETH", "MATIC", or a token's own symbol/contract address) — display only, never used to infer assetType. */
   asset: string;
   assetDecimals: number;
   amountMinor: bigint;
+  /** Which network this balance was read from — a provider spanning multiple chains must never leave this implicit. */
+  chain: WalletNetwork;
 };
 
 export type WalletEventStatus = "DETECTED" | "CONFIRMING" | "CONFIRMED" | "FAILED";

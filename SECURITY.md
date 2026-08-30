@@ -312,6 +312,88 @@ path. See DEPLOYMENT.md's "Backups & point-in-time recovery" section for
 the only real mitigation available today (a database-level backup),
 since the application itself has no undo for this.
 
+## Privacy & Third-Party Data Boundaries (Phase 15A)
+
+This section documents the real, working privacy/data-protection mechanisms
+in this codebase. **It is a technical description, not a legal claim.**
+PAYNORA does not claim to be "GDPR compliant" or "fully GDPR compliant" as
+a result of this phase's work — see `docs/privacy-policy.md`,
+`docs/data-retention.md`, and `docs/data-flows.md` for the honest,
+`NEEDS LEGAL REVIEW`-marked state of the actual legal foundation.
+
+**Analytics has no field a secret, password, or full PII value could
+occupy.** `trackEvent` (`src/server/analytics/events.ts`) and the PostHog
+adapter (`src/server/analytics/providers/posthog.ts`) only ever forward the
+fixed, narrow event shapes already enforced structurally elsewhere in this
+codebase (see [Provider telemetry](#previously-established-phase-6) above
+for the same pattern applied to `ProviderTelemetryEvent`) — there is no
+code path that serializes a `User`, `Wallet`, or raw request body into an
+analytics call. Every PostHog Capture API call sets `$geoip_disable: true`
+as a defense-in-depth measure, even though the connecting IP is always
+PAYNORA's own server, never an end customer's (the integration is 100%
+server-side; no browser analytics script is ever loaded).
+
+**Analytics is a real, per-organization opt-out, not cosmetic.**
+`Organization.analyticsEnabled` (default `true`) is checked by
+`isAnalyticsAllowedForOrganization` inside `trackEvent`'s existing
+fire-and-forget chain — disabling it from Settings → Privacy
+(`OWNER`-only, `src/app/app/[orgSlug]/settings/privacy-actions.ts`) means
+no further event for that organization reaches the configured provider,
+verified with tests in `src/server/analytics/events.test.ts`, not merely
+asserted.
+
+**The cookie-consent mechanism is honest about what it currently gates.**
+`src/lib/privacy/cookie-consent.ts` and the banner
+(`src/components/cookie-consent-banner.tsx`) record a real
+Accept/Reject/undecided choice in a cookie, mirroring the existing
+`src/lib/i18n/` locale-cookie pattern. Because PostHog has no browser SDK
+in this codebase, there is currently no browser analytics cookie for this
+choice to technically gate — this is documented, not hidden, in
+`docs/privacy-data-inventory.md#technical-data`. The real, working
+analytics on/off control is `Organization.analyticsEnabled` above; the
+cookie-consent record exists as the UI/legal-foundation piece for when (if
+ever) a client-side analytics script is introduced.
+
+**Account deletion never orphans a foreign key or touches organization
+financial data.** `anonymizeUserAccount`
+(`src/server/auth/account-deletion.ts`) overwrites `User.email`/`name`/
+`passwordHash` in place and never deletes the `User` row — every foreign
+key referencing that user's id (`OrganizationMember`,
+`ActionProposal.decidedByUserId`, `CollectionPolicy.autoSendEnabledByUserId`,
+...) stays valid. `Customer`/`Invoice`/`Payment` belong to the
+organization (`organizationId`), never to an individual member, so
+deleting one member's account can never remove or corrupt another
+member's view of the organization's financial history. See
+`getAccountDeletionWarnings` for the one thing deletion does surface
+(informational only, never blocking): leaving an organization with no
+remaining `OWNER`.
+
+**Data export is scoped to the requesting user's own account data only.**
+`exportUserData` (`src/server/auth/data-export.ts`), served by the
+session-authenticated `GET /api/account/export` route, returns the user's
+own identity fields and organization memberships — never
+`Customer`/`Invoice`/`Payment` records, which are organization-owned and
+already visible to every member through the product's own tenant-scoped
+pages. A single member exporting an entire organization's financial
+history unilaterally would itself be a privacy/authorization problem, not
+a privacy feature — this boundary is deliberate, covered by tests in
+`src/server/auth/data-export.test.ts` (a user's export never includes
+another user's memberships, and never includes `passwordHash`).
+
+**Financial and audit data is never auto-deleted "for GDPR."**
+`docs/data-retention.md` is explicit that `Invoice`/`Payment`/wallet
+transaction/`ActivityEvent` records are retained, not purged, on account
+or organization changes — inventing an automatic deletion policy for
+records that may carry a real accounting/audit retention obligation would
+be a compliance risk, not a compliance feature. See that document for the
+full reasoning and its `NEEDS LEGAL REVIEW` markers on retention *periods*
+specifically (as opposed to the retention *behavior*, which is a real,
+already-implemented decision).
+
+See `docs/privacy-data-inventory.md`, `docs/data-flows.md`, and
+`docs/data-retention.md` for the full design and the honest gaps this
+phase does not close.
+
 ## Previously established (Phase 6)
 
 - **Secrets are never sent to the client, logged, or included in an
