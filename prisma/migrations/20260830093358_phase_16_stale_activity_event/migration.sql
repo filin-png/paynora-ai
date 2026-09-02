@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "ActivityEventType" ADD VALUE 'ACTION_PROPOSAL_MARKED_STALE';

@@ -430,6 +430,10 @@ enum ActivityEventType {
   WALLET_PAYMENT_RECONCILED
   WALLET_RECONCILIATION_REJECTED
   WALLET_WEBHOOK_REJECTED
+  // Phase 16: an ActionProposal the system marked STALE — the underlying
+  // situation resolved before a human decided. See
+  // src/server/operator/stale.ts and docs/proactive-financial-operations.md#stale-actions.
+  ACTION_PROPOSAL_MARKED_STALE
 }
 
 model ActivityEvent {
@@ -466,6 +470,22 @@ enum BusinessEventType {
   // INVOICE_OVERDUE (deduped once per invoice, forever), this is deduped
   // per sequence+step — see docs/collections-automation.md#why-a-new-event-type.
   COLLECTION_STEP_DUE
+  // Phase 16: a good-news, insight-only event (never produces an
+  // ActionProposal) — deduped once per Payment row via dedupeKey =
+  // payment.id, so recording one payment can never generate more than one
+  // event. See docs/proactive-financial-operations.md#business-events.
+  PAYMENT_RECEIVED
+  // Phase 16: an already-overdue invoice crosses into a higher severity
+  // bucket (e.g. 7d -> 30d) for the first time. Deduped per
+  // invoice+bucket (dedupeKey = "<invoiceId>:<bucket>"), so re-detecting
+  // the same invoice at the same bucket on a later run never duplicates —
+  // it only fires again when the invoice crosses into a *new* bucket.
+  INVOICE_RISK_ESCALATED
+  // Phase 16: a customer's recent payment delay trend has deteriorated
+  // materially versus their own prior history. Deduped per customer+week
+  // (dedupeKey = "<customerId>:<isoWeek>"), so this can fire at most once
+  // per customer per week even if the detector runs many times that week.
+  CUSTOMER_PAYMENT_BEHAVIOR_DETERIORATED
 }
 
 /// A deterministically detected fact about the business — never an AI
@@ -555,6 +575,13 @@ enum ActionProposalStatus {
   // proposal itself. Reserved for a future phase that needs a distinct
   // "this proposal can never be executed" terminal state.
   FAILED
+  // Phase 16: the underlying situation resolved on its own before a human
+  // decided (e.g. the invoice got paid, or is no longer overdue) — see
+  // src/server/operator/stale.ts. Only reachable from PENDING, via the
+  // same atomic compare-and-swap transition as APPROVED/DISMISSED, so a
+  // proposal already decided by a human can never be silently
+  // overwritten. Terminal, auditable, never deleted.
+  STALE
 }
 
 /// A proposed action a human must approve before anything happens.

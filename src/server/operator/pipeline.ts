@@ -1,9 +1,23 @@
+import type { BusinessEvent } from "@prisma/client";
+
 import { RateLimitExceededError } from "@/server/rate-limit/errors";
 import { operatorRunPolicy } from "@/server/rate-limit/policies";
 import { checkRateLimit } from "@/server/rate-limit/service";
-import { detectInvoiceOverdueEvents } from "./events";
-import { ensureInsightForInvoiceOverdueEvent } from "./insights";
+import {
+  detectCustomerBehaviorDeterioratedEvents,
+  detectInvoiceOverdueEvents,
+  detectInvoiceRiskEscalationEvents,
+  detectPaymentReceivedEvents,
+  type DetectedBusinessEvent,
+} from "./events";
+import {
+  ensureInsightForCustomerBehaviorEvent,
+  ensureInsightForInvoiceOverdueEvent,
+  ensureInsightForPaymentReceivedEvent,
+  type EnsuredInsight,
+} from "./insights";
 import { ensureReminderProposalForInsight } from "./proposals";
+import { markStaleActionProposals } from "./stale";
 
 export type OperatorRunSummary = {
   eventsDetected: number;
@@ -12,6 +26,8 @@ export type OperatorRunSummary = {
   proposalsCreated: number;
   aiGeneratedInsights: number;
   failures: number;
+  /** Phase 16: proposals automatically marked STALE this run — see stale.ts. */
+  proposalsMarkedStale: number;
 };
 
 /**
@@ -57,11 +73,12 @@ export async function runOperator(organizationId: string): Promise<OperatorRunSu
     proposalsCreated: 0,
     aiGeneratedInsights: 0,
     failures: 0,
+    proposalsMarkedStale: 0,
   };
 
   const detected = await detectInvoiceOverdueEvents(organizationId);
-  summary.eventsDetected = detected.length;
-  summary.eventsNew = detected.filter((entry) => entry.created).length;
+  summary.eventsDetected += detected.length;
+  summary.eventsNew += detected.filter((entry) => entry.created).length;
 
   for (const { event } of detected) {
     try {
@@ -80,6 +97,53 @@ export async function runOperator(organizationId: string): Promise<OperatorRunSu
       summary.failures += 1;
       logOperatorEventFailure(organizationId, event.id, error);
     }
+  }
+
+  // Phase 16: three additional detectors feeding the same
+  // BusinessEvent -> OperatorInsight pipeline above, all insight-only (see
+  // events.ts's doc comments for why none of these also create an
+  // ActionProposal — reusing SEND_PAYMENT_REMINDER for them would either
+  // duplicate the invoice-overdue reminder already pending, or have no
+  // real action type to propose for a customer-level signal).
+  const insightOnlyDetectors: {
+    detect: () => Promise<DetectedBusinessEvent[]>;
+    ensureInsight: (organizationId: string, event: BusinessEvent) => Promise<EnsuredInsight>;
+  }[] = [
+    { detect: () => detectPaymentReceivedEvents(organizationId), ensureInsight: ensureInsightForPaymentReceivedEvent },
+    { detect: () => detectInvoiceRiskEscalationEvents(organizationId), ensureInsight: ensureInsightForInvoiceOverdueEvent },
+    {
+      detect: () => detectCustomerBehaviorDeterioratedEvents(organizationId),
+      ensureInsight: ensureInsightForCustomerBehaviorEvent,
+    },
+  ];
+
+  for (const { detect, ensureInsight } of insightOnlyDetectors) {
+    const events = await detect();
+    summary.eventsDetected += events.length;
+    summary.eventsNew += events.filter((entry) => entry.created).length;
+
+    for (const { event } of events) {
+      try {
+        const { insight, created: insightCreated } = await ensureInsight(organizationId, event);
+        if (insightCreated) {
+          summary.insightsCreated += 1;
+          if (insight.aiGenerated) summary.aiGeneratedInsights += 1;
+        }
+      } catch (error) {
+        summary.failures += 1;
+        logOperatorEventFailure(organizationId, event.id, error);
+      }
+    }
+  }
+
+  try {
+    const { markedStale } = await markStaleActionProposals(organizationId);
+    summary.proposalsMarkedStale = markedStale;
+  } catch (error) {
+    summary.failures += 1;
+    console.error(
+      `[operator] failed to mark stale proposals organizationId=${organizationId}: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 
   logOperatorRun(organizationId, summary, Date.now() - startedAt);
