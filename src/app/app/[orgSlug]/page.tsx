@@ -1,7 +1,8 @@
 import Link from "next/link";
-import { AlertTriangle, Plus, Receipt, Sparkles, UserPlus, Zap } from "lucide-react";
+import { AlertTriangle, ArrowRight, CalendarClock, Plus, Receipt, Sparkles, UserPlus, Zap } from "lucide-react";
 
 import { AIInsightCard, AIInsightsPanel } from "@/components/ui/ai-insight-card";
+import { AttentionScoreBadge, explainAttentionScore } from "@/components/ui/attention-score";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -23,6 +24,7 @@ import {
   getReceivablesTrend,
   listRecentPayments,
 } from "@/server/ar/summary";
+import { getDailyBrief, type DailyBriefAttentionItem } from "@/server/briefing/daily-brief";
 import { listPendingActionProposals } from "@/server/operator/approval";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
 import { OnboardingChecklist } from "./onboarding-checklist";
@@ -46,12 +48,13 @@ export default async function OrganizationDashboardPage({
 }) {
   const { orgSlug } = await params;
   const context = await requireOrganizationMembershipForPage(orgSlug);
-  const [summary, attention, recentPayments, activity, pendingProposals] = await Promise.all([
+  const [summary, attention, recentPayments, activity, pendingProposals, dailyBrief] = await Promise.all([
     getOrganizationArSummary(context.organization.id),
     getInvoicesRequiringAttention(context.organization.id),
     listRecentPayments(context.organization.id, 5),
     listOrganizationActivity(context.organization.id, 8),
     listPendingActionProposals(context.organization.id),
+    getDailyBrief(context.organization.id),
   ]);
 
   const primaryCurrency: Currency | null =
@@ -121,6 +124,68 @@ export default async function OrganizationDashboardPage({
       />
 
       <OnboardingChecklist organizationId={context.organization.id} orgSlug={orgSlug} />
+
+      <div>
+        <SectionHeader
+          title="Today"
+          description="Proactive financial insights — what deserves attention right now, cash-flow risk ahead, and what changed."
+        />
+        <div className="mt-3 grid grid-cols-1 gap-6 lg:grid-cols-5">
+          <GlassCard level={3} className="p-5 lg:col-span-3">
+            <h3 className="text-sm font-semibold text-foreground">Needs attention</h3>
+            {dailyBrief.attentionItems.length > 0 ? (
+              <ul className="mt-3 flex flex-col gap-2.5">
+                {dailyBrief.attentionItems.map((item) => (
+                  <TodayAttentionRow key={item.invoiceId} orgSlug={orgSlug} item={item} />
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-3 py-6 text-center text-xs text-muted">
+                Nothing needs attention today — every overdue invoice already has a reminder proposed.
+              </p>
+            )}
+          </GlassCard>
+
+          <div className="flex flex-col gap-6 lg:col-span-2">
+            <GlassCard level={2} className="p-5">
+              <div className="flex items-center gap-2">
+                <CalendarClock className="size-4 text-primary" />
+                <h3 className="text-sm font-semibold text-foreground">Cash-flow risk — next 3 weeks</h3>
+              </div>
+              {dailyBrief.primaryCurrency && dailyBrief.cashFlowRiskWindows.length > 0 ? (
+                <ul className="mt-3 flex flex-col gap-2 text-xs">
+                  {dailyBrief.cashFlowRiskWindows.map((window) => (
+                    <li key={window.weekStart} className="flex items-center justify-between gap-3">
+                      <span className="text-muted-foreground">
+                        {window.weekStart} – {window.weekEnd}
+                      </span>
+                      <span className={cn("tabular-nums font-medium", window.isPotentialRisk ? "text-warning" : "text-foreground")}>
+                        {formatMoney(window.expectedInMinor, dailyBrief.primaryCurrency!)} expected
+                        {window.isPotentialRisk ? " · at risk" : ""}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-3 text-xs text-muted">Not enough open, not-yet-due invoices to estimate this yet.</p>
+              )}
+            </GlassCard>
+
+            <GlassCard level={2} className="p-5">
+              <h3 className="text-sm font-semibold text-foreground">What changed — last 24h</h3>
+              {dailyBrief.whatChanged.length > 0 ? (
+                <ul className="mt-3 flex flex-col gap-2 text-xs text-muted">
+                  {dailyBrief.whatChanged.map((change, index) => (
+                    <li key={index}>{change.description}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-3 text-xs text-muted">Nothing notable in the last 24 hours.</p>
+              )}
+            </GlassCard>
+          </div>
+        </div>
+      </div>
 
       {summary.length > 0 ? (
         <div className="flex flex-col gap-6">
@@ -395,5 +460,50 @@ function QuickAction({ href, icon: Icon, label }: { href: string; icon: typeof P
       <Icon className="size-4" />
       {label}
     </Link>
+  );
+}
+
+/**
+ * Whether this item already has a pending ActionProposal is itself one of
+ * the attention score's own factors (see computeAttentionScore) — reused
+ * here rather than a second lookup, so "next step" never contradicts the
+ * score's own "Has an unresolved action" factor.
+ */
+function hasUnresolvedAction(item: DailyBriefAttentionItem): boolean {
+  return item.attention.factors.some((factor) => factor.label === "Has an unresolved action" && factor.value === 1);
+}
+
+function TodayAttentionRow({ orgSlug, item }: { orgSlug: string; item: DailyBriefAttentionItem }) {
+  const nextStep = hasUnresolvedAction(item)
+    ? "A reminder is already proposed — review in Action Center."
+    : "No reminder proposed yet — run “Check for new actions” in Action Center.";
+
+  return (
+    <li className="flex flex-col gap-2 rounded-lg border border-border/70 bg-surface-raised/60 p-3.5 sm:flex-row sm:items-start sm:justify-between">
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <Link
+            href={`/app/${orgSlug}/invoices/${item.invoiceId}`}
+            className="text-sm font-medium text-foreground hover:text-primary"
+          >
+            {item.invoiceNumber}
+          </Link>
+          <span className="text-xs text-muted">— {item.customerName}</span>
+          <AttentionScoreBadge score={item.attention.score} />
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {formatMoney(item.outstandingMinor, item.currency)} outstanding, {item.daysOverdue}d overdue — mainly due
+          to {explainAttentionScore(item.attention).toLowerCase()}.
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground">{nextStep}</p>
+      </div>
+      <Link
+        href={`/app/${orgSlug}/actions`}
+        className="inline-flex shrink-0 items-center gap-1 self-start text-xs font-medium text-primary hover:underline"
+      >
+        Action Center
+        <ArrowRight className="size-3" />
+      </Link>
+    </li>
   );
 }

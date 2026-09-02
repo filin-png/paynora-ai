@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/card";
 import { Dialog, DialogCancelButton } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SectionHeader } from "@/components/ui/page-header";
+import { TrendBadge } from "@/components/ui/trend-indicator";
 import { cn } from "@/lib/utils";
 import { isResourceNotFoundError } from "@/lib/not-found";
 import { resolveCommunicationDestination } from "@/server/communications/channel";
@@ -16,6 +17,7 @@ import { getCustomer } from "@/server/ar/customers";
 import { listInvoicesWithFinancials } from "@/server/ar/invoices";
 import { formatMoney } from "@/server/ar/money";
 import type { Currency } from "@/server/ar/currency";
+import { getCustomerPaymentTrend } from "@/server/customer-intelligence/trends";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
 import { getInvoiceStatusDisplay } from "../../invoices/status";
 import { archiveCustomerAction } from "./actions";
@@ -39,6 +41,7 @@ export default async function CustomerDetailPage({
     throw error;
   });
   const invoices = await listInvoicesWithFinancials(context.organization.id, "all", { customerId });
+  const paymentTrend = await getCustomerPaymentTrend(context.organization.id, customerId);
   const activityPage = await listCustomerActivity(context.organization.id, customerId, {
     cursor: activityCursor,
     take: ACTIVITY_PAGE_SIZE + 1,
@@ -153,6 +156,18 @@ export default async function CustomerDetailPage({
           <p className="mt-1.5 whitespace-pre-wrap text-sm text-foreground">{customer.notes}</p>
         </Card>
       ) : null}
+
+      <Card className="p-5">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs font-medium text-muted-foreground">Payment behavior trend</p>
+          <TrendBadge trend={paymentTrend} />
+        </div>
+        <p className="mt-1.5 text-sm text-foreground">
+          {paymentTrend.status === "insufficient-history"
+            ? "Not enough payment history yet to identify a trend — this needs at least two recorded payments in each of two comparison windows."
+            : `Recent average delay: ${paymentTrend.recentAvgDelayDays} day(s) (was ${paymentTrend.previousAvgDelayDays} day(s)), based on ${paymentTrend.recentPaymentCount} recent and ${paymentTrend.previousPaymentCount} prior payment(s).`}
+        </p>
+      </Card>
 
       <div>
         <SectionHeader

@@ -220,14 +220,24 @@ export type InvoiceListFilter = "all" | "open" | "overdue" | "paid";
  * "load more" list whose filter is applied after fetching a bounded page.
  * The cursor itself is still exact and gap-free — clicking "load more"
  * enough times always reaches every matching invoice.
+ *
+ * `invoiceIds`, added in Phase 16, narrows to a known set of invoices —
+ * used by the attention-score bulk lookup (src/server/attention/for-invoices.ts)
+ * so a caller that already knows which invoices it cares about (e.g. a
+ * list of pending Action Center proposals) reuses this same query/financials
+ * machinery instead of a second, parallel invoice-fetching path.
  */
 export async function listInvoicesWithFinancials(
   organizationId: string,
   filter: InvoiceListFilter = "all",
-  options: { customerId?: string; today?: string; cursor?: string; take?: number } = {},
+  options: { customerId?: string; invoiceIds?: string[]; today?: string; cursor?: string; take?: number } = {},
 ) {
   const invoices = await prisma.invoice.findMany({
-    where: { organizationId, ...(options.customerId ? { customerId: options.customerId } : {}) },
+    where: {
+      organizationId,
+      ...(options.customerId ? { customerId: options.customerId } : {}),
+      ...(options.invoiceIds ? { id: { in: options.invoiceIds } } : {}),
+    },
     include: { customer: true },
     // `id` is a stable tiebreak — required for cursor pagination to never
     // skip or repeat a row when two invoices share an issueDate.
