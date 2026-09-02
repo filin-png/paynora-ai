@@ -35,9 +35,14 @@ describe("runOperator", () => {
 
     const summary = await runOperator(organization.id);
 
-    expect(summary.eventsDetected).toBe(2);
-    expect(summary.eventsNew).toBe(2);
-    expect(summary.insightsCreated).toBe(2);
+    // Each invoice is deep overdue (issued 2020, due 2020-01-15), so both
+    // INVOICE_OVERDUE and INVOICE_RISK_ESCALATED (HIGH bucket, reached
+    // immediately) fire for each — 2 invoices x 2 event types = 4. Only
+    // INVOICE_OVERDUE's insight ever creates a proposal (risk escalation
+    // is insight-only, see events.ts), so proposalsCreated stays 2.
+    expect(summary.eventsDetected).toBe(4);
+    expect(summary.eventsNew).toBe(4);
+    expect(summary.insightsCreated).toBe(4);
     expect(summary.proposalsCreated).toBe(2);
     expect(summary.failures).toBe(0);
 
@@ -57,6 +62,7 @@ describe("runOperator", () => {
       proposalsCreated: 0,
       aiGeneratedInsights: 0,
       failures: 0,
+      proposalsMarkedStale: 0,
     });
   });
 
@@ -68,11 +74,13 @@ describe("runOperator", () => {
     const first = await runOperator(organization.id);
     const second = await runOperator(organization.id);
 
-    expect(first.eventsNew).toBe(1);
-    expect(first.insightsCreated).toBe(1);
+    // Deep overdue -> both INVOICE_OVERDUE and INVOICE_RISK_ESCALATED
+    // (HIGH) fire on the one invoice; only the former creates a proposal.
+    expect(first.eventsNew).toBe(2);
+    expect(first.insightsCreated).toBe(2);
     expect(first.proposalsCreated).toBe(1);
 
-    expect(second.eventsDetected).toBe(1);
+    expect(second.eventsDetected).toBe(2);
     expect(second.eventsNew).toBe(0);
     expect(second.insightsCreated).toBe(0);
     expect(second.proposalsCreated).toBe(0);
@@ -80,8 +88,8 @@ describe("runOperator", () => {
     const eventCount = await prisma.businessEvent.count({ where: { organizationId: organization.id } });
     const insightCount = await prisma.operatorInsight.count({ where: { organizationId: organization.id } });
     const proposalCount = await prisma.actionProposal.count({ where: { organizationId: organization.id } });
-    expect(eventCount).toBe(1);
-    expect(insightCount).toBe(1);
+    expect(eventCount).toBe(2);
+    expect(insightCount).toBe(2);
     expect(proposalCount).toBe(1);
   });
 
@@ -94,9 +102,12 @@ describe("runOperator", () => {
     await createOverdueInvoice(organization.id, customer.id, "INV-2");
     const second = await runOperator(organization.id);
 
-    expect(second.eventsDetected).toBe(2);
-    expect(second.eventsNew).toBe(1);
-    expect(second.insightsCreated).toBe(1);
+    // INV-1 already has both event types from the first run (not new);
+    // INV-2 is also deep overdue, so it produces both types fresh —
+    // 2 invoices x 2 event types detected = 4, only INV-2's 2 are new.
+    expect(second.eventsDetected).toBe(4);
+    expect(second.eventsNew).toBe(2);
+    expect(second.insightsCreated).toBe(2);
     expect(second.proposalsCreated).toBe(1);
   });
 
@@ -145,6 +156,7 @@ describe("runOperator — abuse control / operator-run rate limit (P1-7)", () =>
     await expect(runOperator(orgA.id)).rejects.toThrow(RateLimitExceededError);
 
     const summaryB = await runOperator(orgB.id);
-    expect(summaryB.eventsNew).toBe(1); // org B's budget is untouched
+    // Deep overdue -> both INVOICE_OVERDUE and INVOICE_RISK_ESCALATED fire.
+    expect(summaryB.eventsNew).toBe(2); // org B's budget is untouched
   }, 20000);
 });
