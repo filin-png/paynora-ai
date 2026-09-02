@@ -33,8 +33,11 @@ describe("end-to-end: overdue invoice -> Operator -> approve -> draft -> send ->
     });
 
     // 1. Operator detects the overdue invoice and proposes a reminder.
+    // Deep overdue (due 2020-01-15) -> both INVOICE_OVERDUE and
+    // INVOICE_RISK_ESCALATED (HIGH, reached immediately) fire; only the
+    // former creates a proposal (risk escalation is insight-only).
     const runSummary = await runOperator(organization.id);
-    expect(runSummary.eventsNew).toBe(1);
+    expect(runSummary.eventsNew).toBe(2);
     expect(runSummary.proposalsCreated).toBe(1);
 
     const pending = await listPendingActionProposals(organization.id);
