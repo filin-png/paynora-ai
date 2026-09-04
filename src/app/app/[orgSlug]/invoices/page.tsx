@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Plus, Receipt, Upload } from "lucide-react";
 
+import type { BadgeProps } from "@/components/ui/badge";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -9,11 +10,23 @@ import { Table, TableBody, TableCell, TableContainer, TableHead, TableHeader, Ta
 import { Tabs } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import type { Currency } from "@/server/ar/currency";
+import { daysBetween, getBusinessToday, toDateOnlyString } from "@/server/ar/dates";
 import { listInvoicesWithFinancials, type InvoiceListFilter } from "@/server/ar/invoices";
 import { formatMoney } from "@/server/ar/money";
+import { computeOverduePriority } from "@/server/operator/insights";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
 import { getCollectionsBadgesForInvoices } from "../collections-badge";
 import { getInvoiceStatusDisplay } from "./status";
+
+// Reuses the exact same priority function the Operator/Action Center use
+// for its insight priority (src/server/operator/insights.ts) — never a
+// second "how urgent is this" calculation. Only overdue invoices get a
+// priority badge; a not-yet-overdue invoice has nothing to prioritize yet.
+const PRIORITY_TONE: Record<string, NonNullable<BadgeProps["tone"]>> = {
+  HIGH: "danger",
+  MEDIUM: "warning",
+  LOW: "neutral",
+};
 
 const FILTERS: { value: InvoiceListFilter; label: string }[] = [
   { value: "all", label: "All" },
@@ -52,6 +65,7 @@ export default async function InvoicesPage({
     context.organization.id,
     invoices.map(({ invoice }) => invoice.id),
   );
+  const today = getBusinessToday();
 
   function pageHref(nextPageCursor: string | null): string {
     const query = new URLSearchParams();
@@ -106,6 +120,7 @@ export default async function InvoicesPage({
                 <TableHead className="text-right">Outstanding</TableHead>
                 <TableHead>Due</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>Priority</TableHead>
                 <TableHead>Collections</TableHead>
               </TableRow>
             </TableHeader>
@@ -113,8 +128,13 @@ export default async function InvoicesPage({
               {invoices.map(({ invoice, financials }) => {
                 const status = getInvoiceStatusDisplay(invoice, financials);
                 const collectionsBadge = collectionsBadges.get(invoice.id) ?? null;
+                const daysOverdue = financials.isOverdue ? daysBetween(toDateOnlyString(invoice.dueDate), today) : 0;
+                const priority = financials.isOverdue ? computeOverduePriority(daysOverdue) : null;
                 return (
-                  <TableRow key={invoice.id} className="cursor-pointer">
+                  <TableRow
+                    key={invoice.id}
+                    className={cn("cursor-pointer", priority === "HIGH" && "border-l-2 border-l-danger")}
+                  >
                     <TableCell className="p-0">
                       <Link href={`/app/${orgSlug}/invoices/${invoice.id}`} className="block px-4 py-3.5 font-medium text-foreground">
                         {invoice.number}
@@ -130,6 +150,15 @@ export default async function InvoicesPage({
                     <TableCell className="whitespace-nowrap text-muted">{invoice.dueDate.toISOString().slice(0, 10)}</TableCell>
                     <TableCell>
                       <Badge tone={status.tone}>{status.label}</Badge>
+                    </TableCell>
+                    <TableCell>
+                      {priority ? (
+                        <Badge tone={PRIORITY_TONE[priority]}>
+                          {priority.charAt(0) + priority.slice(1).toLowerCase()} · {daysOverdue}d
+                        </Badge>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
                     </TableCell>
                     <TableCell>
                       {collectionsBadge ? <Badge tone={collectionsBadge.tone}>{collectionsBadge.label}</Badge> : <span className="text-xs text-muted-foreground">—</span>}

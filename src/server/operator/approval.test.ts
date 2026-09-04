@@ -10,11 +10,14 @@ import {
   approveActionProposal,
   dismissActionProposal,
   listPendingActionProposals,
+  listRecentlyDecidedActionProposals,
 } from "./approval";
 import { detectInvoiceOverdueEvents } from "./events";
 import { InvalidActionProposalTransitionError, OperatorResourceNotFoundError } from "./errors";
 import { ensureInsightForInvoiceOverdueEvent } from "./insights";
 import { ensureReminderProposalForInsight } from "./proposals";
+import { markStaleActionProposals } from "./stale";
+import { recordPayment } from "@/server/ar/payments";
 
 beforeEach(async () => {
   await resetDatabase();
@@ -240,5 +243,46 @@ describe("listPendingActionProposals", () => {
     expect(pending.map((p) => p.id)).not.toContain(low.id);
     expect(pending[0].id).toBe(high.id);
     expect(pending.some((p) => p.id === medium.id)).toBe(true);
+  });
+});
+
+describe("listRecentlyDecidedActionProposals", () => {
+  it("includes APPROVED, DISMISSED, and STALE proposals, but not PENDING ones", async () => {
+    const { organization, user } = await createTestOrganization();
+    const customer = await createCustomer(organization.id, { name: "Acme Co" });
+
+    const { proposal: approved } = await createPendingProposal(organization.id, customer.id);
+    await approveActionProposal(organization.id, approved.id, user.id);
+
+    const { proposal: dismissed } = await createPendingProposal(organization.id, customer.id);
+    await dismissActionProposal(organization.id, dismissed.id, user.id);
+
+    const { invoice: staleInvoice, proposal: stale } = await createPendingProposal(organization.id, customer.id);
+    await recordPayment(organization.id, staleInvoice.id, { amountMinor: majorToMinor(250), paidAt: "2024-01-01" });
+    await markStaleActionProposals(organization.id);
+
+    const { proposal: pending } = await createPendingProposal(organization.id, customer.id);
+
+    const decided = await listRecentlyDecidedActionProposals(organization.id);
+    const decidedIds = decided.map((p) => p.id);
+
+    expect(decidedIds).toContain(approved.id);
+    expect(decidedIds).toContain(dismissed.id);
+    expect(decidedIds).toContain(stale.id);
+    expect(decided.find((p) => p.id === stale.id)?.status).toBe("STALE");
+    expect(decidedIds).not.toContain(pending.id);
+  });
+
+  it("only returns decided proposals for the calling organization (tenant isolation)", async () => {
+    const { organization: orgA, user: userA } = await createTestOrganization("Org A");
+    const { organization: orgB } = await createTestOrganization("Org B");
+    const customerA = await createCustomer(orgA.id, { name: "A Customer" });
+
+    const { proposal } = await createPendingProposal(orgA.id, customerA.id);
+    await approveActionProposal(orgA.id, proposal.id, userA.id);
+
+    const decidedForB = await listRecentlyDecidedActionProposals(orgB.id);
+
+    expect(decidedForB.map((p) => p.id)).not.toContain(proposal.id);
   });
 });

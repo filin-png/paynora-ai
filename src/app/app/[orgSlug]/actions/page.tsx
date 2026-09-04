@@ -1,12 +1,14 @@
 import Link from "next/link";
 import { RefreshCw, Sparkles } from "lucide-react";
 
+import { AttentionScoreBadge } from "@/components/ui/attention-score";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader, SectionHeader } from "@/components/ui/page-header";
 import { cn } from "@/lib/utils";
+import { getAttentionScoresForInvoiceIds } from "@/server/attention/for-invoices";
 import { listPendingActionProposals, listRecentlyDecidedActionProposals } from "@/server/operator/approval";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
 import { approveProposalAction, dismissProposalAction, runOperatorAction } from "./actions";
@@ -33,6 +35,18 @@ export default async function ActionCenterPage({
     listRecentlyDecidedActionProposals(context.organization.id),
   ]);
 
+  // Attention scores for every invoice shown on this page, computed once —
+  // see src/server/attention/for-invoices.ts. Pending proposals' invoices
+  // are, by definition, the ones with an unresolved action right now;
+  // decided/stale ones no longer are.
+  const pendingInvoiceIds = pending.map((p) => p.invoiceId).filter((id): id is string => id !== null);
+  const decidedInvoiceIds = decided.map((p) => p.invoiceId).filter((id): id is string => id !== null);
+  const attentionScores = await getAttentionScoresForInvoiceIds(
+    context.organization.id,
+    [...new Set([...pendingInvoiceIds, ...decidedInvoiceIds])],
+    new Set(pendingInvoiceIds),
+  );
+
   const boundRunOperator = runOperatorAction.bind(null, orgSlug);
 
   return (
@@ -57,6 +71,7 @@ export default async function ActionCenterPage({
             {pending.map((proposal) => {
               const boundApprove = approveProposalAction.bind(null, orgSlug, proposal.id);
               const boundDismiss = dismissProposalAction.bind(null, orgSlug, proposal.id);
+              const attention = proposal.invoiceId ? attentionScores.get(proposal.invoiceId) : undefined;
               return (
                 <li key={proposal.id}>
                   <Card className="flex flex-col gap-3 p-5 sm:flex-row sm:items-start sm:justify-between">
@@ -65,6 +80,7 @@ export default async function ActionCenterPage({
                         <Badge tone={PRIORITY_TONE[proposal.insight.priority] ?? "neutral"}>
                           {proposal.insight.priority.charAt(0) + proposal.insight.priority.slice(1).toLowerCase()} priority
                         </Badge>
+                        {attention ? <AttentionScoreBadge score={attention.attention.score} /> : null}
                         <span className="text-sm font-medium text-foreground">
                           {ACTION_TYPE_LABEL[proposal.type] ?? proposal.type}
                         </span>
@@ -73,6 +89,10 @@ export default async function ActionCenterPage({
                         ) : null}
                       </div>
                       <p className="text-sm text-muted">{proposal.reasoning}</p>
+                      <p className="text-xs text-muted-foreground">
+                        Detected automatically {proposal.insight.createdAt.toISOString().slice(0, 10)} — this proposal
+                        follows directly from that insight; approving it never sends anything by itself.
+                      </p>
                       {proposal.invoice ? (
                         <Link
                           href={`/app/${orgSlug}/invoices/${proposal.invoice.id}`}
@@ -128,6 +148,8 @@ export default async function ActionCenterPage({
                   </div>
                   {proposal.status === "DISMISSED" ? (
                     <Badge tone="neutral">Dismissed</Badge>
+                  ) : proposal.status === "STALE" ? (
+                    <Badge tone="neutral">Stale — no longer needed</Badge>
                   ) : proposal.status === "EXECUTED" ? (
                     <Link href={`/app/${orgSlug}/actions/${proposal.id}`}>
                       <Badge tone="success">Sent</Badge>

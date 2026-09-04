@@ -148,10 +148,15 @@ const RECENTLY_DECIDED_LIMIT = 20;
  * Center stays honest about what happened to a decision instead of the
  * row just disappearing. See docs/operator-foundation.md#action-center-ui
  * and docs/communications.md for the APPROVED -> ... -> EXECUTED path.
+ *
+ * Also includes STALE (Phase 16, src/server/operator/stale.ts) — a
+ * proposal the system itself resolved (the underlying invoice was paid or
+ * is no longer overdue before a human decided), not a human decision, but
+ * the same "never let a row just disappear" principle applies to it too.
  */
 export async function listRecentlyDecidedActionProposals(organizationId: string, take = RECENTLY_DECIDED_LIMIT) {
   return prisma.actionProposal.findMany({
-    where: { organizationId, status: { in: ["APPROVED", "DISMISSED", "EXECUTED"] } },
+    where: { organizationId, status: { in: ["APPROVED", "DISMISSED", "EXECUTED", "STALE"] } },
     include: { invoice: { include: { customer: true } }, customer: true, insight: true },
     orderBy: [{ decidedAt: "desc" }, { createdAt: "desc" }],
     take,
