@@ -286,53 +286,202 @@ in an unqualified sense.
       stale-SENDING reconciliation) — see the remediation doc
 - [x] 515+ tests passing (up from 416 at the Phase 8 baseline)
 
-## Phase 9 — Intelligence
+## A note on phase numbering below
 
-- [ ] Payment behavior analytics
-- [ ] Promise-to-pay tracking, manual first, automatic extraction later
-- [ ] Cashflow forecast (7 / 30 / 60 days)
-- [ ] Risk scoring improvements
-- [ ] Collection performance analytics
+The plan above (old "Phase 9 — Intelligence" through "Phase 13 — Exit
+Readiness") described what came next as of the Production Hardening
+milestone. What actually shipped afterward used different phase names and
+numbers than that plan predicted — most of the *content* of the old plan
+landed, just not under the names or in the order originally sketched
+(e.g. cashflow forecasting and risk scoring shipped as part of "Phase 16",
+not a "Phase 9"; a wallet/crypto-payments phase that wasn't on the old
+plan at all became "Phase 13"). Rather than silently rewrite history, the
+sections below record what was actually built, under the names actually
+used in commits/docs at the time — this is deliberately not a clean
+renumbering, because pretending the plan was followed exactly would be
+less honest than showing where it diverged. `CHANGELOG.md`'s own phase
+labels diverge further still in places (e.g. "Phase 10.2", "11.5", "11.6"
+appear there but not below) — that file was not reconciled with this one
+as part of this update; treat this ROADMAP as the index of what shipped
+and `CHANGELOG.md` as a less rigorously maintained supplementary log.
 
-## Phase 10 — Monetization
+## Phase 11.2 — Account Recovery & Invitations — ✅ complete
 
-- [ ] Subscription domain model (Prisma schema — not yet added; Phase 6
-      deliberately stopped short of this, see
-      `docs/integration-architecture.md#billing`)
-- [ ] Real `BillingProvider` adapters (Stripe, YooKassa) — the interface
-      and normalized contract already exist (`src/server/billing/`, Phase
-      6); this phase adds the actual SDK calls and a real merchant account
-      to test against
-- [ ] Plans, usage limits, entitlements
-- [ ] Subscription lifecycle (trial, active, past-due, cancelled) driven
-      by real, verified `BillingProvider` webhooks
+- [x] Password reset (token-based, rate-limited, single-use)
+- [x] Organization invitations (email-based, role-preselected, expiring)
+- [x] Transactional auth email sending helper
+      (`src/server/email/transactional.ts`) — the same fire-and-forget,
+      best-effort pattern every later transactional email (including
+      Phase 17's support-request notification) reuses
+- [x] Full test suite for both flows, including rate-limit and
+      tenant-isolation coverage
 
-## Phase 11 — Integrations (only per validated customer demand)
+See `docs/account-recovery-and-invitations.md`.
 
-- [ ] Accounting system integrations (candidates: local/regional + QuickBooks, Xero)
-- [ ] Payment processor integrations for customer-facing collection (distinct
-      from Phase 10's PAYNORA-subscription billing — candidates: Stripe once
-      relevant, regional providers)
-- [ ] Invoice import (CSV/XLSX)
-- [ ] Object storage (S3-compatible, Yandex Object Storage) for the first
-      feature that needs to store a file/document
+## Phase 11.3 — Billing & Entitlements Foundation — ✅ complete
 
-## Phase 12 — Commercialization
+- [x] `PlanId`/`SubscriptionStatus`/`OrganizationSubscription` schema —
+      deliberately no price field yet ("no RUB/USD prices are required
+      yet, do not make arbitrary pricing decisions" — this constraint is
+      still honored as of Phase 17, see `docs/dependency-license-review.md`
+      for where it mattered again)
+- [x] Centralized plan-entitlements catalog
+      (`src/server/billing/plans.ts`) — FREE/STARTER/PRO limits, one
+      source of truth read by every enforcement point and by the landing
+      page's Plans section
+- [x] Enforcement across customers/invoices/members/AI generation/
+      collections automation
+- [x] CSV bulk-import quota safety
 
-- [ ] Landing page + pricing
-- [ ] Onboarding flow
-- [ ] Transactional communication
-- [ ] Analytics funnel (candidate: PostHog, per `docs/provider-strategy.md`)
-- [ ] Legal pages
-- [ ] Support workflow
+See `docs/billing-entitlements.md`. Real payment collection (Stripe/
+YooKassa) is still not connected — see Phase 14 and "What's still open"
+below.
 
-## Phase 13 — Exit Readiness
+## Phase 11.4 — Commercial Readiness — ✅ complete
 
-- [ ] Remove founder dependencies
-- [ ] Complete operational documentation
-- [ ] Security review
-- [ ] Dependency/license review
-- [ ] Financial exports
-- [ ] Technical due-diligence package
+- [x] Real, data-derived onboarding checklist (no fake completion flag)
+- [x] Reversible sample/demo data mechanism, built on real domain
+      functions (never a shortcut around normal validation)
+- [x] Plan upgrade UX + plans comparison (landing page and in-app,
+      reading the same `PLAN_ENTITLEMENTS` catalog)
+- [x] OWNER-only product-readiness view (provider configuration status,
+      never a secret value)
+- [x] Landing page commercial pass
 
-See `docs/exit-readiness.md` for the commercial metrics this phase targets.
+See `docs/commercial-readiness.md`, including its own honest "what remains
+before PAYNORA can accept real external users" list.
+
+## Phase 13 — Wallet Foundation (crypto payments) — ✅ complete
+
+Not on the original plan above — added because a real customer-facing
+payment channel (crypto wallets) became relevant before Stripe/YooKassa
+did.
+
+- [x] `Wallet`/`WalletTransaction`/`CryptoPaymentRequest` schema, tenant-
+      scoped like every other resource
+- [x] `WalletProvider` abstraction + reconciliation service (a detected
+      on-chain transaction only ever marks an `Invoice` paid through the
+      same `recordPayment` path manual entry uses — no parallel payment
+      pipeline)
+- [x] Webhook pipeline with signature verification and idempotent event
+      handling
+- [x] Native-asset (ETH) balance display, decimal-safe (Phase 15A
+      extended this further — see below)
+
+See `docs/wallet-architecture.md`.
+
+## Phase 14 — Production Integrations & Real Intelligence — ✅ complete
+
+- [x] Real `WalletProvider` adapter (Alchemy) and wallet webhook route
+- [x] Real `WebSearchProvider` adapter + a bounded deep-research
+      orchestrator
+- [x] Real Analytics provider (PostHog), minimized to allowlisted event
+      names — see Phase 15A for the privacy audit that followed
+- [x] i18n foundation (RU/EN) — deliberately scoped to app-shell
+      navigation and landing-page chrome, not a full-UI translation sweep
+- [x] Production-facing environment management + `.env.example`,
+      provider-failure observability
+
+See `docs/production-integrations.md` for the full status table
+(implemented-with-tests vs. recognized-but-unimplemented vs.
+documented-only).
+
+## Phase 15A — Native ETH Balances & Privacy/GDPR Foundation — ✅ complete
+
+- [x] Multi-chain-aware `WalletBalance` type, decimal-safe native-asset
+      handling
+- [x] `docs/privacy-data-inventory.md` and `docs/data-flows.md` — an
+      independently-verified inventory of what data goes where, which
+      later documents (privacy policy, subprocessors list) are required to
+      stay consistent with
+- [x] Cookie consent mechanism (Settings → Privacy)
+- [x] Foundation legal documents: `docs/privacy-policy.md`,
+      `docs/terms-of-service.md`, `docs/data-retention.md`,
+      `docs/subprocessors.md` — explicitly marked as a technical
+      foundation with `[TO BE COMPLETED]`/`NEEDS LEGAL REVIEW` markers,
+      not a finished legal instrument (Phase 17 below gave these documents
+      live public pages; it did not remove those markers, since the
+      underlying legal-entity/counsel gaps are still real)
+- [x] Personal "export my data" / "delete my account" mechanism
+      (deliberately scoped to the requesting user's own account, not
+      organization financial records — see Phase 17's AR data export for
+      the distinct, tenant-scoped counterpart to that scoping decision)
+
+See `docs/privacy-data-inventory.md`, `docs/data-flows.md`.
+
+## Phase 16 — Proactive Financial Operations — ✅ complete
+
+- [x] Explainable 0–100 attention score (four weighted, disclosed
+      factors — never a black-box number)
+- [x] Three new deterministic detectors (payment received, invoice risk
+      escalation, customer payment-behavior deterioration), feeding the
+      existing Phase 3 Operator pipeline rather than a second one
+- [x] Daily Brief aggregation, customer payment-delay trends, 3-week
+      cash-flow risk windows (all computed fresh at read time — nothing
+      persisted or trained)
+- [x] Outcome/recommendation-effectiveness tracking, deliberately never
+      a causal claim ("payment received after action," never "action
+      caused the payment")
+- [x] A small, fixed-question grounded Copilot (never free-text chat) —
+      the deterministic building blocks it depends on are surfaced
+      directly in the UI; a dedicated Copilot UI surface is not yet built
+- [x] Full UI layer: Overview "Today" section, Action Center attention/
+      stale display, invoice list priority badges, customer detail trend
+      card
+
+See `docs/proactive-financial-operations.md`.
+
+## Phase 17 — Legal Pages, Data Export, Support, Dependency Review — ✅ complete
+
+- [x] Live public legal pages (`/privacy-policy`, `/terms-of-service`,
+      `/data-retention`, `/subprocessors`) rendering the Phase 15A
+      foundation documents — previously only reachable by reading the
+      repository, including a fix for a raw `docs/privacy-policy.md` path
+      that had been shown verbatim, unlinked, in the product UI
+- [x] Organization-level AR data export (CSV: customers/invoices/
+      payments), tenant-scoped, OWNER-gated — the counterpart to Phase
+      15A's personal account-data export, deliberately scoped the
+      opposite way (this one *is* organization financial records,
+      because it's an explicit, authorized org action, not a personal
+      privacy-channel pull)
+- [x] Founder-only, read-only subscription/plan report CLI — prints no
+      revenue/MRR figure, honoring the Phase 11.3 "no arbitrary pricing"
+      constraint since no real price or billing provider exists yet
+- [x] Minimal support-request workflow (`SupportRequest` model, a form
+      any member can use, best-effort email notification, audited via
+      `ActivityEvent`) — no fake ticket-status UI
+- [x] Dependency & license review (`docs/dependency-license-review.md`)
+      — direct-dependency licenses are all permissive; the 5 high-severity
+      `npm audit` findings all trace to Prisma's own dev-tooling
+      dependency tree, none reachable from this app's deployed runtime,
+      and the only automated "fix" available is a major Prisma
+      *downgrade* — deliberately not applied
+
+## What's still genuinely open (superseding the old Phase 9–13 plan above)
+
+Everything below requires either a deliberate architectural decision, a
+real external account/credential, or business action outside this
+codebase — none of it is a small next step:
+
+- **Real billing.** `BillingProvider` still has no real Stripe/YooKassa
+  adapter and the plan catalog still has no price. Self-serve plan
+  changes and payment collection remain a manual, PAYNORA-operated
+  action (`setOrganizationPlan`).
+- **Real deployment.** `APP_BASE_URL` still defaults to `localhost`; no
+  production deployment has been done from this codebase as of Phase 17.
+- **Real AI/email credentials.** `AI_PROVIDER`/`EMAIL_PROVIDER` remain
+  `none` by default; every AI-assisted or email-sending feature has been
+  built, tested, and verified entirely through its deterministic
+  fallback path, never against a live vendor.
+- **Promise-to-pay tracking.** Never built, on the old plan or since.
+- **Accounting/payment-processor integrations, object storage.** Still
+  only documented candidates (`docs/provider-strategy.md`), per that
+  doc's "no adapter before the phase that needs it" rule.
+- **A completed legal instrument.** The Phase 15A/17 legal pages are
+  real, live, and honest about being a *foundation* — the
+  `[TO BE COMPLETED]`/`NEEDS LEGAL REVIEW` markers inside them (legal
+  entity name, jurisdiction, counsel review) are still there because
+  those facts don't exist yet, not because of an oversight.
+- **Real customers and revenue.** `docs/exit-readiness.md` still shows
+  Phase 0/pre-revenue as of this update — no phase above changes that;
+  only paying customers do.
