@@ -213,6 +213,8 @@ model OrganizationInvitation {
 enum PlanId {
   FREE
   STARTER
+  // Phase 19: sits between STARTER and PRO — see src/server/billing/plans.ts.
+  BUSINESS
   PRO
 }
 
@@ -227,6 +229,14 @@ enum SubscriptionStatus {
   TRIALING
   PAST_DUE
   CANCELED
+  // Phase 19: a TRIALING subscription whose trialEndsAt has passed without
+  // converting to a paid plan — distinct from CANCELED (an explicit
+  // decision) for reporting/UI honesty, but has identical effective access
+  // (reverts to FREE) — see deriveEffectivePlan. Nothing writes this status
+  // via a background job (no scheduler for it exists); it is derived on
+  // read by getOrganizationEntitlements the same way an expired trial's
+  // access is computed, never mutated automatically.
+  EXPIRED
 }
 
 model OrganizationSubscription {
@@ -236,6 +246,11 @@ model OrganizationSubscription {
   status                 SubscriptionStatus @default(ACTIVE)
   currentPeriodStart     DateTime?
   currentPeriodEnd       DateTime?
+  // Phase 19: set only for a TRIALING subscription. Nullable because most
+  // subscriptions are never in a trial — see
+  // src/server/billing/entitlements.ts#getOrganizationEntitlements for how
+  // a past trialEndsAt is treated as an expired trial on read.
+  trialEndsAt            DateTime?
   // Nullable future integration points only — populated by a future
   // billing adapter applying a verified webhook event, never by domain
   // code in this phase. See src/server/billing/types.ts's

@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { trackEvent } from "@/server/analytics/events";
 import { recordActivityEvent } from "@/server/ar/activity";
+import { assertWalletEntitled } from "@/server/billing/entitlements";
 import { prisma } from "@/server/db/client";
 import { DuplicateWalletAddressError, InvalidWalletTransitionError, WalletResourceNotFoundError } from "./errors";
 import { walletNetworkSchema, type WalletNetwork } from "./network";
@@ -31,12 +32,19 @@ export type WalletConnectionInput = z.input<typeof walletConnectionInputSchema>;
  * never itself proves ownership; that is a distinct, explicit step
  * (`verifyWalletOwnership`, below) — see the phase brief's own
  * "connect wallet" vs. "verify wallet ownership" capability split.
+ *
+ * Phase 19: gated by `assertWalletEntitled` — the organization's plan
+ * must have Wallet enabled, checked here in the domain layer so no
+ * caller (Server Action, future API route) can bypass it. This is
+ * additional to, not instead of, the deployment-level `WALLET_PROVIDER`
+ * gate the caller already had to resolve a real `provider` from.
  */
 export async function connectWallet(
   organizationId: string,
   rawInput: WalletConnectionInput,
   provider: WalletProvider,
 ) {
+  await assertWalletEntitled(organizationId);
   const input = walletConnectionInputSchema.parse(rawInput);
   const connection = await provider.connectWallet({ network: input.network, address: input.address, label: input.label });
 

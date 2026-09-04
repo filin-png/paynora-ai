@@ -102,7 +102,7 @@ export async function getOnboardingState(organizationId: string, orgSlug: string
       title: "Configure collections automation",
       description: automationEntitled
         ? "Set up a policy so overdue invoices get a consistent, approval-gated follow-up."
-        : "Available on the Starter and Pro plans.",
+        : "Available on paid plans (Starter, Business, and Pro).",
       completed: organization.automationEnabled,
       locked: !automationEntitled,
       ctaHref: automationEntitled ? `${base}/automation` : `${base}/settings?tab=billing`,

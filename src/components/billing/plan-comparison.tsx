@@ -3,20 +3,12 @@ import type { PlanId } from "@prisma/client";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import { PLAN_ENTITLEMENTS, type EntitlementLimit } from "@/server/billing/plans";
+import { formatMoney } from "@/server/ar/money";
+import { PLAN_ENTITLEMENTS, PLAN_ORDER } from "@/server/billing/plans";
+import { formatPlanLimit, PLAN_BLURB, PLAN_LABEL } from "./plan-labels";
 
-const PLAN_ORDER: PlanId[] = ["FREE", "STARTER", "PRO"];
-
-const PLAN_LABEL: Record<PlanId, string> = { FREE: "Free", STARTER: "Starter", PRO: "Pro" };
-
-const PLAN_BLURB: Record<PlanId, string> = {
-  FREE: "Get started with a small, focused book of business.",
-  STARTER: "For growing teams that want automated follow-up.",
-  PRO: "For teams that need higher limits and more seats.",
-};
-
-function formatLimit(limit: EntitlementLimit): string {
-  return limit.kind === "unlimited" ? "Unlimited" : String(limit.max);
+function formatPlanPrice(priceMinor: bigint, currency: Parameters<typeof formatMoney>[1]): string {
+  return priceMinor === 0n ? "Free" : `${formatMoney(priceMinor, currency)}/mo`;
 }
 
 /**
@@ -28,7 +20,7 @@ function formatLimit(limit: EntitlementLimit): string {
  */
 export function PlanComparison({ currentPlan }: { currentPlan?: PlanId }) {
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
       {PLAN_ORDER.map((planId) => {
         const entitlements = PLAN_ENTITLEMENTS[planId];
         const isCurrent = currentPlan === planId;
@@ -39,15 +31,24 @@ export function PlanComparison({ currentPlan }: { currentPlan?: PlanId }) {
                 <p className="text-sm font-semibold text-foreground">{PLAN_LABEL[planId]}</p>
                 {isCurrent ? <Badge tone="info">Current plan</Badge> : null}
               </div>
+              <p className="mt-2 text-lg font-semibold tracking-tight text-foreground">
+                {formatPlanPrice(entitlements.priceMinor, entitlements.currency)}
+              </p>
               <p className="mt-1 text-xs text-muted">{PLAN_BLURB[planId]}</p>
             </div>
             <ul className="flex flex-col gap-2 text-sm text-foreground">
-              <li>{formatLimit(entitlements.maxCustomers)} customers</li>
-              <li>{formatLimit(entitlements.maxOpenInvoices)} open invoices</li>
-              <li>{formatLimit(entitlements.maxMembers)} team members</li>
-              <li>{formatLimit(entitlements.maxAiGenerationsPerMonth)} AI generations / month</li>
+              <li>{formatPlanLimit(entitlements.maxCustomers)} customers</li>
+              <li>{formatPlanLimit(entitlements.maxOpenInvoices)} open invoices</li>
+              <li>{formatPlanLimit(entitlements.maxMembers)} team members</li>
+              <li>{formatPlanLimit(entitlements.maxAiGenerationsPerMonth)} AI generations / month</li>
               <li className={entitlements.collectionsAutomationEnabled ? undefined : "text-muted-foreground"}>
                 {entitlements.collectionsAutomationEnabled ? "Collections automation" : "No collections automation"}
+              </li>
+              <li className={entitlements.copilotEnabled ? undefined : "text-muted-foreground"}>
+                {entitlements.copilotEnabled ? "Proactive Copilot" : "No Copilot"}
+              </li>
+              <li className={entitlements.walletEnabled ? undefined : "text-muted-foreground"}>
+                {entitlements.walletEnabled ? "Wallet" : "No Wallet"}
               </li>
             </ul>
           </Card>

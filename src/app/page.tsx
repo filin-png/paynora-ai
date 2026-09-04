@@ -20,7 +20,9 @@ import { ActionCenterMockup, DashboardMockup } from "@/components/marketing/feat
 import { getDictionary, type Dictionary, type Locale } from "@/lib/i18n";
 import { getLocale } from "@/lib/i18n/get-locale";
 import { cn } from "@/lib/utils";
-import { PLAN_ENTITLEMENTS, type EntitlementLimit, type PlanId } from "@/server/billing/plans";
+import { formatMoney } from "@/server/ar/money";
+import { PLAN_ENTITLEMENTS, PLAN_ORDER } from "@/server/billing/plans";
+import { formatPlanLimit, PLAN_BLURB, PLAN_LABEL } from "@/components/billing/plan-labels";
 
 const trustPoints = [
   {
@@ -363,18 +365,6 @@ function ProvidersSection() {
   );
 }
 
-const PLAN_ORDER: PlanId[] = ["FREE", "STARTER", "PRO"];
-const PLAN_LABEL: Record<PlanId, string> = { FREE: "Free", STARTER: "Starter", PRO: "Pro" };
-const PLAN_BLURB: Record<PlanId, string> = {
-  FREE: "Get started with a small, focused book of business.",
-  STARTER: "For growing teams that want automated follow-up.",
-  PRO: "For teams that need higher limits and more seats.",
-};
-
-function formatPlanLimit(limit: EntitlementLimit): string {
-  return limit.kind === "unlimited" ? "Unlimited" : String(limit.max);
-}
-
 /**
  * Reads `PLAN_ENTITLEMENTS` (src/server/billing/plans.ts) directly — the
  * same authoritative catalog every server-side enforcement point and the
@@ -401,7 +391,7 @@ function PlansSection() {
           </p>
         </div>
 
-        <div className="mt-10 grid gap-4 sm:grid-cols-3">
+        <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {PLAN_ORDER.map((planId, index) => {
             const entitlements = PLAN_ENTITLEMENTS[planId];
             return (
@@ -412,6 +402,11 @@ function PlansSection() {
               >
                 <div>
                   <p className="text-sm font-semibold text-foreground">{PLAN_LABEL[planId]}</p>
+                  <p className="mt-2 text-lg font-semibold tracking-tight text-foreground">
+                    {entitlements.priceMinor === 0n
+                      ? "Free"
+                      : `${formatMoney(entitlements.priceMinor, entitlements.currency)}/mo`}
+                  </p>
                   <p className="mt-1 text-xs leading-5 text-muted">{PLAN_BLURB[planId]}</p>
                 </div>
                 <ul className="flex flex-col gap-1.5 text-sm text-foreground">

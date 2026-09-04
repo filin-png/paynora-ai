@@ -484,6 +484,48 @@ See `docs/proactive-financial-operations.md`.
       payments table, sourced from real `SubscriptionPayment` rows only
       — empty until a real adapter exists, no fabricated figures
 
+### Phase 19 — commercial product layer (priced plans, entitlements, usage, lifecycle, Billing UI) — see `docs/commercial-product-architecture.md`
+
+- [x] Fourth plan tier, **BUSINESS**, and real founder-provided prices for
+      all three paid plans (Starter 1,990 ₽ / Business 4,990 ₽ / Pro
+      9,990 ₽) — `PlanEntitlements.priceMinor`/`currency`, bigint minor
+      units, the same money convention as everywhere else
+- [x] Two new server-enforced feature entitlements: Copilot (STARTER+) and
+      Wallet (BUSINESS+) — both genuinely new gates (neither feature had
+      any plan check before), enforced inside the domain functions
+      themselves (`answerCopilotQuestion`, `connectWallet`), never only in
+      a UI. `integrationsEnabled` is a reserved flag with no enforcement
+      point yet, since no real integration exists to gate
+- [x] `SubscriptionStatus.EXPIRED` + `OrganizationSubscription.trialEndsAt`
+      — a past-due trial is derived as EXPIRED on read
+      (`deriveEffectiveStatus`), never written by a background job (none
+      exists)
+- [x] Self-serve subscription lifecycle actions, OWNER-only: cancel,
+      reactivate, and downgrade are real and immediate; upgrade is
+      deliberately **not** self-serve —
+      `changeOrganizationPlanSelfServe` refuses any higher-ranked plan
+      server-side regardless of what a client requests, since there is no
+      real payment step to complete it with
+      (`UpgradeRequiresPaymentError`)
+- [x] Usage metering completed: Copilot request count (new
+      `RateLimitCounter` scope, metering only) and a "billing period"
+      concept (`getBillingPeriod` — real `currentPeriodStart`/`End` once a
+      provider sets them, a derived calendar-month window from
+      `createdAt` until then)
+- [x] Settings → Billing rebuilt: real prices, all four plans, billing
+      period, Copilot usage, Wallet/Copilot/Integrations capability rows,
+      real subscription-payment history (org-scoped, distinct from the
+      founder-only Phase 17/18 CLI), and real cancel/reactivate/downgrade
+      actions with an honest "payment not connected" state for upgrade
+- [x] "PAYNORA Financial Impact" panel on Overview → Today — four honest,
+      data-grounded stats (invoices needing attention, amount overdue,
+      cash-flow risk windows, actions ready to review), zero new queries,
+      no claimed-savings/ROI figure
+- [x] Targeted security/bypass audit + tests for all six scenarios in the
+      phase brief (role gate, cross-tenant read, client-side plan
+      manipulation, direct Server Action calls, expired-trial access,
+      usage-counter bypass) — see `docs/commercial-product-architecture.md`#security--entitlement-bypass-audit
+
 ## What's still genuinely open (superseding the old Phase 9–13 plan above)
 
 Everything below requires either a deliberate architectural decision, a
@@ -491,12 +533,13 @@ real external account/credential, or business action outside this
 codebase — none of it is a small next step:
 
 - **Real billing.** Phase 18 built the provider-independent ingestion
-  pipeline (ledger, idempotent event application, webhook route) ahead of
-  the vendor decision, but `BillingProvider` still has no real Stripe/
-  YooKassa adapter, and the plan catalog still has no price — both are
-  pending decisions, not implementation gaps. Self-serve plan changes and
-  payment collection remain a manual, PAYNORA-operated action
-  (`setOrganizationPlan`) until both land.
+  pipeline (ledger, idempotent event application, webhook route); Phase 19
+  added real prices and a complete commercial product layer on top of it.
+  `BillingProvider` still has no real Stripe/YooKassa adapter — that
+  remains the one pending decision. Self-serve downgrade/cancellation are
+  real as of Phase 19; self-serve *upgrade* and real payment collection
+  still require the vendor decision and adapter before they can exist —
+  see `docs/commercial-product-architecture.md`#checkout--why-upgrade-is-not-self-serve.
 - **Real deployment.** `APP_BASE_URL` still defaults to `localhost`; no
   production deployment has been done from this codebase as of Phase 17.
 - **Real AI/email credentials.** `AI_PROVIDER`/`EMAIL_PROVIDER` remain

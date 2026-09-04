@@ -8,10 +8,18 @@ import { prisma } from "@/server/db/client";
 import { resetDatabase } from "@/server/db/test-utils";
 import { setOrganizationPlan } from "./subscription";
 import {
+  assertCopilotEntitled,
+  assertWalletEntitled,
   assertWithinResourceLimit,
   EntitlementLimitExceededError,
+  FeatureNotEntitledError,
+  getBillingPeriod,
+  getCopilotUsage,
   getOrganizationEntitlements,
   getOrganizationUsage,
+  getOrganizationUsageOverview,
+  isFeatureNotEntitledMessage,
+  recordCopilotUsage,
 } from "./entitlements";
 import { limitMax, PLAN_ENTITLEMENTS } from "./plans";
 
@@ -285,5 +293,153 @@ describe("assertWithinResourceLimit — unlimited entitlement", () => {
     await prisma.$transaction(async (tx) => {
       await expect(assertWithinResourceLimit(tx, organization.id, "customers")).resolves.toBeUndefined();
     });
+  });
+});
+
+describe("Phase 19 — expired-trial derivation (server-side, never client-trusted)", () => {
+  it("a TRIALING subscription with a past trialEndsAt is treated as EXPIRED (reverts to FREE) without writing anything", async () => {
+    const { organization } = await createTestOrganization();
+    await prisma.organizationSubscription.update({
+      where: { organizationId: organization.id },
+      data: { plan: "PRO", status: "TRIALING", trialEndsAt: new Date(Date.now() - 60_000) },
+    });
+
+    const result = await getOrganizationEntitlements(organization.id);
+    expect(result.effectiveStatus).toBe("EXPIRED");
+    expect(result.plan).toBe("FREE");
+    expect(result.entitlements).toEqual(PLAN_ENTITLEMENTS.FREE);
+    // The raw stored status is untouched — this was a pure read-time derivation.
+    expect(result.status).toBe("TRIALING");
+    const raw = await prisma.organizationSubscription.findUniqueOrThrow({ where: { organizationId: organization.id } });
+    expect(raw.status).toBe("TRIALING");
+  });
+
+  it("a TRIALING subscription with a future trialEndsAt keeps its plan's entitlements", async () => {
+    const { organization } = await createTestOrganization();
+    await prisma.organizationSubscription.update({
+      where: { organizationId: organization.id },
+      data: { plan: "PRO", status: "TRIALING", trialEndsAt: new Date(Date.now() + 60_000) },
+    });
+
+    const result = await getOrganizationEntitlements(organization.id);
+    expect(result.effectiveStatus).toBe("TRIALING");
+    expect(result.plan).toBe("PRO");
+  });
+
+  it("EXPIRED (a directly stored EXPIRED status) also reverts to FREE, same as CANCELED", async () => {
+    const { organization } = await createTestOrganization();
+    await prisma.organizationSubscription.update({
+      where: { organizationId: organization.id },
+      data: { plan: "BUSINESS", status: "EXPIRED" },
+    });
+
+    const result = await getOrganizationEntitlements(organization.id);
+    expect(result.plan).toBe("FREE");
+    expect(result.effectiveStatus).toBe("EXPIRED");
+  });
+});
+
+describe("Phase 19 — assertCopilotEntitled / assertWalletEntitled (server-side feature gates)", () => {
+  it("throws FeatureNotEntitledError for Copilot on FREE, allows it on STARTER+", async () => {
+    const { organization } = await createTestOrganization();
+    await expect(assertCopilotEntitled(organization.id)).rejects.toThrow(FeatureNotEntitledError);
+
+    await setOrganizationPlan(organization.id, "STARTER");
+    await expect(assertCopilotEntitled(organization.id)).resolves.toBeUndefined();
+  });
+
+  it("throws FeatureNotEntitledError for Wallet on FREE and STARTER, allows it on BUSINESS+", async () => {
+    const { organization } = await createTestOrganization();
+    await expect(assertWalletEntitled(organization.id)).rejects.toThrow(FeatureNotEntitledError);
+
+    await setOrganizationPlan(organization.id, "STARTER");
+    await expect(assertWalletEntitled(organization.id)).rejects.toThrow(FeatureNotEntitledError);
+
+    await setOrganizationPlan(organization.id, "BUSINESS");
+    await expect(assertWalletEntitled(organization.id)).resolves.toBeUndefined();
+  });
+
+  it("a downgrade back to a plan without the feature re-denies it immediately — no caching", async () => {
+    const { organization } = await createTestOrganization();
+    await setOrganizationPlan(organization.id, "BUSINESS");
+    await expect(assertWalletEntitled(organization.id)).resolves.toBeUndefined();
+
+    await setOrganizationPlan(organization.id, "STARTER");
+    await expect(assertWalletEntitled(organization.id)).rejects.toThrow(FeatureNotEntitledError);
+  });
+
+  it("isFeatureNotEntitledMessage recognizes the error's own message, distinct from the count-based limit message", () => {
+    expect(isFeatureNotEntitledMessage(new FeatureNotEntitledError("Wallet").message)).toBe(true);
+    expect(isFeatureNotEntitledMessage("This organization's current plan allows up to 5 customers")).toBe(false);
+  });
+});
+
+describe("Phase 19 — getBillingPeriod", () => {
+  it("derives a rolling monthly window from the subscription's own createdAt when no real provider period is set", async () => {
+    const { organization } = await createTestOrganization();
+    const now = new Date();
+
+    const period = await getBillingPeriod(organization.id, now);
+
+    expect(period.source).toBe("derived");
+    expect(period.start.getTime()).toBeLessThanOrEqual(now.getTime());
+    expect(period.end.getTime()).toBeGreaterThan(now.getTime());
+  });
+
+  it("uses the real provider period once currentPeriodStart/End are set", async () => {
+    const { organization } = await createTestOrganization();
+    const start = new Date("2026-01-01T00:00:00.000Z");
+    const end = new Date("2026-02-01T00:00:00.000Z");
+    await prisma.organizationSubscription.update({
+      where: { organizationId: organization.id },
+      data: { currentPeriodStart: start, currentPeriodEnd: end },
+    });
+
+    const period = await getBillingPeriod(organization.id, new Date("2026-01-15T00:00:00.000Z"));
+
+    expect(period.source).toBe("provider");
+    expect(period.start.toISOString()).toBe(start.toISOString());
+    expect(period.end.toISOString()).toBe(end.toISOString());
+  });
+});
+
+describe("Phase 19 — Copilot usage metering", () => {
+  it("recordCopilotUsage increments a real, readable counter; never denies", async () => {
+    const { organization } = await createTestOrganization();
+    expect(await getCopilotUsage(organization.id)).toBe(0);
+
+    await recordCopilotUsage(organization.id);
+    await recordCopilotUsage(organization.id);
+
+    expect(await getCopilotUsage(organization.id)).toBe(2);
+  });
+
+  it("tenant isolation: organization B's Copilot usage is unaffected by organization A's", async () => {
+    const { organization: orgA } = await createTestOrganization();
+    const { organization: orgB } = await createTestOrganization();
+
+    await recordCopilotUsage(orgA.id);
+    await recordCopilotUsage(orgA.id);
+
+    expect(await getCopilotUsage(orgA.id)).toBe(2);
+    expect(await getCopilotUsage(orgB.id)).toBe(0);
+  });
+});
+
+describe("Phase 19 — getOrganizationUsageOverview", () => {
+  it("aggregates plan/status/billing-period/usage from the same functions each already tested individually", async () => {
+    const { organization } = await createTestOrganization();
+    await setOrganizationPlan(organization.id, "BUSINESS");
+    await createCustomer(organization.id, { name: "Overview Customer", email: "overview@example.com" });
+    await recordCopilotUsage(organization.id);
+
+    const overview = await getOrganizationUsageOverview(organization.id);
+
+    expect(overview.plan).toBe("BUSINESS");
+    expect(overview.effectiveStatus).toBe("ACTIVE");
+    expect(overview.entitlements).toEqual(PLAN_ENTITLEMENTS.BUSINESS);
+    expect(overview.resourceUsage.customers).toBe(1);
+    expect(overview.copilotUsageCount).toBe(1);
+    expect(overview.billingPeriod.source).toBe("derived");
   });
 });

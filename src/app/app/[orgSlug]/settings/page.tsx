@@ -90,7 +90,9 @@ export default async function OrganizationSettingsPage({
       {tab === "privacy" ? (
         <PrivacyTab orgSlug={orgSlug} organizationId={context.organization.id} userId={context.user.id} role={context.role} />
       ) : null}
-      {tab === "billing" ? <BillingTab organizationId={context.organization.id} /> : null}
+      {tab === "billing" ? (
+        <BillingTab organizationId={context.organization.id} orgSlug={orgSlug} role={context.role} />
+      ) : null}
       {tab === "readiness" ? <ReadinessTab organizationId={context.organization.id} role={context.role} /> : null}
     </div>
   );

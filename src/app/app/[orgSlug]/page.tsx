@@ -84,6 +84,16 @@ export default async function OrganizationDashboardPage({
   const overdueTop = attention.filter((entry) => entry.reason === "overdue").slice(0, 6);
   const today = getBusinessToday();
 
+  // "PAYNORA Financial Impact" (Phase 19, section 8): every number here is
+  // read from data already loaded above for this same page render — no new
+  // query, and deliberately no ROI/savings claim the system cannot prove.
+  // See docs/commercial-product-architecture.md#value-dashboard.
+  const overdueCount = attention.filter((entry) => entry.reason === "overdue").length;
+  const overdueAtRiskMinor = primaryCurrency
+    ? (summary.find((s) => s.currency === primaryCurrency)?.totalOverdueMinor ?? 0n)
+    : 0n;
+  const cashFlowRiskCount = dailyBrief.cashFlowRiskWindows.filter((w) => w.isPotentialRisk).length;
+
   const proposalGroups = new Map<
     string,
     { type: string; count: number; customerIds: Set<string>; priority: string }
@@ -130,6 +140,37 @@ export default async function OrganizationDashboardPage({
           title="Today"
           description="Proactive financial insights — what deserves attention right now, cash-flow risk ahead, and what changed."
         />
+
+        <p className="mt-4 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+          PAYNORA Financial Impact
+        </p>
+        <div className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <ImpactStat
+            icon={AlertTriangle}
+            value={String(overdueCount)}
+            label={overdueCount === 1 ? "invoice needs attention" : "invoices need attention"}
+            tone={overdueCount > 0 ? "danger" : "neutral"}
+          />
+          <ImpactStat
+            icon={Receipt}
+            value={primaryCurrency ? formatMoney(overdueAtRiskMinor, primaryCurrency) : "—"}
+            label="currently overdue"
+            tone={overdueAtRiskMinor > 0n ? "danger" : "neutral"}
+          />
+          <ImpactStat
+            icon={CalendarClock}
+            value={String(cashFlowRiskCount)}
+            label={cashFlowRiskCount === 1 ? "cash-flow risk window" : "cash-flow risk windows"}
+            tone={cashFlowRiskCount > 0 ? "warning" : "neutral"}
+          />
+          <ImpactStat
+            icon={Zap}
+            value={String(dailyBrief.recommendedActionsCount)}
+            label={dailyBrief.recommendedActionsCount === 1 ? "action ready to review" : "actions ready to review"}
+            tone={dailyBrief.recommendedActionsCount > 0 ? "primary" : "neutral"}
+          />
+        </div>
+
         <div className="mt-3 grid grid-cols-1 gap-6 lg:grid-cols-5">
           <GlassCard level={3} className="p-5 lg:col-span-3">
             <h3 className="text-sm font-semibold text-foreground">Needs attention</h3>
@@ -451,6 +492,42 @@ export default async function OrganizationDashboardPage({
         </div>
       </div>
     </div>
+  );
+}
+
+const IMPACT_TONE_CLASS: Record<"danger" | "warning" | "primary" | "neutral", string> = {
+  danger: "text-danger",
+  warning: "text-warning",
+  primary: "text-primary",
+  neutral: "text-muted-foreground",
+};
+
+/**
+ * One honest, data-grounded stat in the "PAYNORA Financial Impact" strip
+ * (Phase 19, section 8) — never a claimed-savings/ROI figure the system
+ * cannot prove, always a fact already computed above ("N invoices need
+ * attention", "X currently overdue"), see this file's own doc comment at
+ * the call site.
+ */
+function ImpactStat({
+  icon: Icon,
+  value,
+  label,
+  tone,
+}: {
+  icon: typeof AlertTriangle;
+  value: string;
+  label: string;
+  tone: "danger" | "warning" | "primary" | "neutral";
+}) {
+  return (
+    <GlassCard level={2} className="flex items-center gap-3 p-4">
+      <Icon className={cn("size-5 shrink-0", IMPACT_TONE_CLASS[tone])} />
+      <div className="min-w-0">
+        <p className={cn("text-lg font-semibold tabular-nums tracking-tight", IMPACT_TONE_CLASS[tone])}>{value}</p>
+        <p className="truncate text-xs text-muted-foreground">{label}</p>
+      </div>
+    </GlassCard>
   );
 }
 

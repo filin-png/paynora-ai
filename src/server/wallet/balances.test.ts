@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createTestOrganization } from "@/server/ar/test-fixtures";
+import { setOrganizationPlan } from "@/server/billing/subscription";
 import { prisma } from "@/server/db/client";
 import { resetDatabase } from "@/server/db/test-utils";
 import { WalletResourceNotFoundError } from "./errors";
@@ -13,7 +14,9 @@ afterAll(() => prisma.$disconnect());
 
 const testProvider = createTestWalletProvider();
 
+/** Phase 19: Wallet requires walletEnabled (BUSINESS+) — see wallets.test.ts's own doc comment on this pattern. */
 async function createActiveWallet(organizationId: string) {
+  await setOrganizationPlan(organizationId, "BUSINESS");
   const wallet = await connectWallet(organizationId, { network: "ETHEREUM", address: "0xabc" }, testProvider);
   await verifyWalletOwnership(organizationId, wallet.id, { signature: "sig" }, testProvider);
   return wallet;
@@ -22,6 +25,7 @@ async function createActiveWallet(organizationId: string) {
 describe("getWalletBalances", () => {
   it("returns not_connected for a wallet that hasn't completed ownership verification", async () => {
     const { organization } = await createTestOrganization();
+    await setOrganizationPlan(organization.id, "BUSINESS");
     const wallet = await connectWallet(organization.id, { network: "ETHEREUM", address: "0xabc" }, testProvider);
 
     const result = await getWalletBalances(organization.id, wallet.id, testProvider);
