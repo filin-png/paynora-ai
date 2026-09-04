@@ -114,6 +114,7 @@ model Organization {
   cryptoPaymentRequests    CryptoPaymentRequest[]
   walletTransactions       WalletTransaction[]
   supportRequests          SupportRequest[]
+  subscriptionPayments     SubscriptionPayment[]
 
   @@map("organizations")
 }
@@ -251,6 +252,35 @@ model OrganizationSubscription {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@map("organization_subscriptions")
+}
+
+// Phase 18 — a ledger of processed billing webhook deliveries: PAYNORA's
+// own subscription-payment history, and the idempotency boundary for
+// applying them (see src/server/billing/webhook-events.ts). One row per
+// uniquely-processed (provider, externalEventId) pair, regardless of
+// whether that delivery changed OrganizationSubscription.status — this is
+// deliberately the raw audit trail, distinct from ActivityEvent's
+// human-readable timeline (SUBSCRIPTION_STATUS_CHANGED is only recorded
+// there when status actually transitions). amountMinor/currency are
+// nullable because not every subscription-lifecycle event carries a
+// charge (e.g. a cancellation). No real adapter writes here yet — see
+// docs/provider-strategy.md#billingprovider.
+model SubscriptionPayment {
+  id                String             @id @default(cuid())
+  organizationId    String
+  provider          String
+  externalEventId   String
+  amountMinor       BigInt?
+  currency          String?
+  status            SubscriptionStatus
+  planIdRaw         String?
+  receivedAt        DateTime           @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, externalEventId])
+  @@index([organizationId, receivedAt])
+  @@map("subscription_payments")
 }
 
 // Phase 17 — a minimal, honest support-request record: a member submits a
@@ -463,6 +493,14 @@ enum ActivityEventType {
   // src/server/support/service.ts. Not tied to a customer/invoice, same
   // as AUTOMATION_ENABLED/COLLECTION_POLICY_CREATED above.
   SUPPORT_REQUEST_SUBMITTED
+  // Phase 18: a verified billing webhook event changed
+  // OrganizationSubscription.status — see
+  // src/server/billing/webhook-events.ts. Deliberately distinct from
+  // PLAN_CHANGED (setOrganizationPlan's own event, for a human/admin
+  // plan change): this fires for a status transition a webhook caused,
+  // and never changes `plan` itself — see that file's doc comment for
+  // why plan-mapping is out of scope until real pricing exists.
+  SUBSCRIPTION_STATUS_CHANGED
 }
 
 model ActivityEvent {

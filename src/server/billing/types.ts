@@ -54,6 +54,15 @@ export type NormalizedSubscriptionEvent = {
   status: BillingSubscriptionStatus;
   /** Provider-specific plan/price id. Mapping this to a PAYNORA plan is future domain logic, not this layer's job. */
   planId?: string;
+  /**
+   * What this delivery reports as charged, in PAYNORA's own bigint-minor-units
+   * convention (see src/server/ar/money.ts) — not every subscription-lifecycle
+   * event carries a charge (e.g. cancellation), so both are optional and must
+   * be set together or not at all. This is the vendor's own reported amount,
+   * never a value PAYNORA computes or assumes from its plan catalog.
+   */
+  amountMinor?: bigint;
+  currency?: string;
 };
 
 /**

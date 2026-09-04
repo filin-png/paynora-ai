@@ -343,6 +343,40 @@ clear `BillingProviderNotImplementedError`, the same precedent as AI's
 `gigachat`/`yandex`. The actual subscription domain is Phase 7
 "Monetization" work, per `ROADMAP.md` (unchanged by this phase).
 
+**Update (Phase 11.3 schema, Phase 18 ingestion pipeline)**: the schema
+gap above is closed — `OrganizationSubscription` (Phase 11.3) holds
+`plan`/`status` plus the nullable `billingProvider`/`externalCustomerId`/
+`externalSubscriptionId` link fields this section anticipated. Phase 18
+adds `SubscriptionPayment` (`src/server/billing/webhook-events.ts`'s
+model, a ledger of processed webhook deliveries — one row per unique
+`(provider, eventId)`, the idempotency boundary this section called for)
+and `applySubscriptionWebhookEvent`, the provider-independent function
+that applies a verified `NormalizedSubscriptionEvent` to both: it writes
+the ledger row and, only on an actual status transition, updates
+`OrganizationSubscription.status` and records a `SUBSCRIPTION_STATUS_CHANGED`
+`ActivityEvent`. It deliberately never writes `plan` — mapping a vendor's
+raw `planId` (now carried on `NormalizedSubscriptionEvent` too, alongside
+optional `amountMinor`/`currency` for what a delivery reports as charged)
+to a PAYNORA `PlanId` needs real pricing to exist first, which is still a
+pending decision (see `src/server/billing/plans.ts`). This function is
+callable and fully tested today with hand-constructed events — it does
+not wait on a real adapter.
+
+`src/app/api/webhooks/billing/route.ts` turns this into an HTTP endpoint:
+one **global** route (unlike Wallet's per-organization
+`/api/webhooks/wallet/[orgSlug]`), because billing here is the reverse
+shape — one PAYNORA merchant account with many organizations as its
+customers, so a real vendor delivers every event to a single URL and the
+organization is resolved from the verified event's customer/subscription
+id inside `applySubscriptionWebhookEvent`, never from the URL. It
+currently always returns 503, since `resolveBillingProvider()` still
+throws for both recognized vendor names — this route's shape is real and
+tested so that landing a real adapter is the only remaining step; the
+signature-header extraction is a placeholder (Stripe uses a header,
+YooKassa's own documented approach is source-IP allowlisting rather than
+a signature — see that file's doc comment) and is finalized once a
+vendor is actually chosen, since it is inert either way until then.
+
 ## Provider Registry
 
 `src/server/providers/` is new, cross-cutting infrastructure with no
