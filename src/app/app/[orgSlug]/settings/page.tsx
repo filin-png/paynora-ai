@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { CircleCheck, CircleHelp, CircleOff } from "lucide-react";
 
 import { Badge, type BadgeProps } from "@/components/ui/badge";
@@ -23,6 +24,7 @@ import { InviteMemberForm } from "./invite-member-form";
 import { PendingInvitationsList } from "./pending-invitations-list";
 import { deleteAccountAction } from "./account-actions";
 import { setAnalyticsEnabledAction } from "./privacy-actions";
+import { SupportForm } from "./support-form";
 import { RenameOrganizationForm } from "./rename-organization-form";
 
 const HEALTH_DISPLAY: Record<ProviderHealthStatus, { label: string; tone: NonNullable<BadgeProps["tone"]>; icon: typeof CircleCheck }> = {
@@ -130,6 +132,25 @@ async function GeneralTab({ orgSlug, name, role }: { orgSlug: string; name: stri
             confirmDescription="Archives every sample customer created by this action and cancels their still-open, unpaid sample invoices. Sample invoices that already have a recorded payment are kept as history, exactly like any other invoice."
             confirmLabel="Remove sample data"
           />
+        </div>
+      </Card>
+
+      <Card className="max-w-md p-6">
+        <p className="text-sm font-semibold text-foreground">Export your data</p>
+        <p className="mt-1 text-xs text-muted">
+          Download your organization&rsquo;s customers, invoices, or payments as CSV — the same records you already
+          see in the app, packaged as a file.
+        </p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <a href={`/api/organizations/${orgSlug}/export/customers`} className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
+            Customers CSV
+          </a>
+          <a href={`/api/organizations/${orgSlug}/export/invoices`} className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
+            Invoices CSV
+          </a>
+          <a href={`/api/organizations/${orgSlug}/export/payments`} className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
+            Payments CSV
+          </a>
         </div>
       </Card>
     </div>
@@ -363,8 +384,11 @@ async function PrivacyTab({
       <Card className="max-w-md p-6">
         <p className="text-sm font-semibold text-foreground">Data & account</p>
         <p className="mt-1 text-xs text-muted">
-          Export a copy of your account data, or permanently delete your account. See docs/privacy-policy.md for what
-          each of these does and does not include.
+          Export a copy of your account data, or permanently delete your account. See our{" "}
+          <Link href="/privacy-policy" className="text-primary hover:underline">
+            Privacy Policy
+          </Link>{" "}
+          for what each of these does and does not include.
         </p>
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <a href="/api/account/export" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
@@ -381,6 +405,16 @@ async function PrivacyTab({
             confirmDescription={deleteConfirmDescription}
             confirmLabel="Delete account"
           />
+        </div>
+      </Card>
+
+      <Card className="max-w-md p-6">
+        <p className="text-sm font-semibold text-foreground">Contact support</p>
+        <p className="mt-1 text-xs text-muted">
+          Send a message and we&rsquo;ll get back to you. Available to every member, not just the owner.
+        </p>
+        <div className="mt-4">
+          <SupportForm orgSlug={orgSlug} />
         </div>
       </Card>
     </div>

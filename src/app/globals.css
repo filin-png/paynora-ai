@@ -270,3 +270,112 @@ body {
     transform: scale(1) rotate(-8deg);
   }
 }
+
+/**
+ * Legal document prose (Phase 17) — styles the HTML `marked` renders from
+ * docs/{privacy-policy,terms-of-service,data-retention,subprocessors}.md
+ * (see src/lib/legal-docs.ts). Plain CSS rather than a Tailwind Typography
+ * plugin dependency: a handful of element selectors is enough for these
+ * four documents' actual Markdown surface (headings, paragraphs, lists,
+ * blockquotes, tables, links, inline code), reusing the same design
+ * tokens as the rest of the app so it never needs its own light/dark
+ * handling.
+ */
+.legal-content {
+  color: var(--foreground);
+  line-height: 1.7;
+}
+.legal-content h1 {
+  font-size: 1.75rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin-bottom: 1rem;
+}
+.legal-content h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-top: 2.5rem;
+  margin-bottom: 0.75rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+}
+.legal-content h3 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+.legal-content p,
+.legal-content ul,
+.legal-content ol {
+  margin-top: 0.9rem;
+  color: var(--muted);
+  font-size: 0.9375rem;
+}
+.legal-content ul,
+.legal-content ol {
+  padding-left: 1.25rem;
+}
+.legal-content li {
+  margin-top: 0.35rem;
+}
+.legal-content li::marker {
+  color: var(--muted-foreground);
+}
+.legal-content a {
+  color: var(--primary-hover);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.legal-content code {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.85em;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  padding: 0.1rem 0.35rem;
+}
+.legal-content blockquote {
+  margin-top: 1.25rem;
+  padding: 0.9rem 1.1rem;
+  border-left: 3px solid var(--warning);
+  background: var(--warning-soft);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  color: var(--foreground);
+  font-size: 0.9rem;
+}
+.legal-content blockquote p {
+  color: inherit;
+  margin-top: 0.4rem;
+}
+.legal-content blockquote p:first-child {
+  margin-top: 0;
+}
+.legal-content hr {
+  margin: 2rem 0;
+  border: none;
+  border-top: 1px solid var(--border);
+}
+.legal-content table {
+  display: block;
+  overflow-x: auto;
+  margin-top: 1.25rem;
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.legal-content th,
+.legal-content td {
+  border: 1px solid var(--border);
+  padding: 0.5rem 0.65rem;
+  text-align: left;
+  vertical-align: top;
+}
+.legal-content th {
+  background: var(--surface-raised);
+  color: var(--foreground);
+  font-weight: 600;
+}
+.legal-content td {
+  color: var(--muted);
+}

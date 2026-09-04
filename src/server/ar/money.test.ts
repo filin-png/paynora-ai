@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { amountMinorSchema, formatMoney, majorToMinor, parseAmountInput } from "./money";
+import { amountMinorSchema, formatMoney, majorToMinor, minorToMajorString, parseAmountInput } from "./money";
 
 // Well beyond the old Int32 ceiling (2,147,483,647) this project
 // deliberately moved away from — see docs/accounts-receivable.md.
@@ -87,5 +87,34 @@ describe("formatMoney", () => {
   it("throws rather than silently losing precision beyond Number.MAX_SAFE_INTEGER", () => {
     const tooLarge = BigInt(Number.MAX_SAFE_INTEGER) + 100n;
     expect(() => formatMoney(tooLarge, "USD")).toThrow();
+  });
+});
+
+describe("minorToMajorString", () => {
+  it("formats a plain decimal string with no currency symbol or separators", () => {
+    expect(minorToMajorString(150_000n)).toBe("1500.00");
+  });
+
+  it("pads a single-digit fraction to two decimal places", () => {
+    expect(minorToMajorString(1_005n)).toBe("10.05");
+  });
+
+  it("formats zero", () => {
+    expect(minorToMajorString(0n)).toBe("0.00");
+  });
+
+  it("formats a negative amount with a leading minus, not a trailing one", () => {
+    expect(minorToMajorString(-1_999n)).toBe("-19.99");
+  });
+
+  it("round-trips through parseAmountInput for an arbitrary decimal", () => {
+    const minor = parseAmountInput("999999999999.99");
+    expect(minorToMajorString(minor)).toBe("999999999999.99");
+  });
+
+  it("is exact well beyond Number.MAX_SAFE_INTEGER, where formatMoney refuses to run", () => {
+    const beyondSafeInteger = BigInt(Number.MAX_SAFE_INTEGER) + 12_345n;
+    expect(() => formatMoney(beyondSafeInteger, "USD")).toThrow();
+    expect(minorToMajorString(beyondSafeInteger)).toBe("90071992547533.36");
   });
 });
