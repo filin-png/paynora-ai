@@ -62,6 +62,7 @@ model User {
   sentInvitations              OrganizationInvitation[] @relation("InvitedBy")
   acceptedInvitations          OrganizationInvitation[] @relation("AcceptedBy")
   createdCryptoPaymentRequests CryptoPaymentRequest[]
+  supportRequests              SupportRequest[]
 
   @@map("users")
 }
@@ -112,6 +113,7 @@ model Organization {
   wallets                  Wallet[]
   cryptoPaymentRequests    CryptoPaymentRequest[]
   walletTransactions       WalletTransaction[]
+  supportRequests          SupportRequest[]
 
   @@map("organizations")
 }
@@ -249,6 +251,29 @@ model OrganizationSubscription {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@map("organization_subscriptions")
+}
+
+// Phase 17 — a minimal, honest support-request record: a member submits a
+// message, it's persisted, and (best-effort, never blocking) a
+// notification email goes out if EMAIL_PROVIDER is configured — see
+// src/server/support/service.ts. No ticket-status workflow, no
+// third-party helpdesk integration; this codebase has no "PAYNORA staff"
+// role to build a triage UI for yet, so a request is read the same way
+// any other founder-only data is read today — see
+// scripts/subscription-report.ts for the same "manual CLI, not a fake
+// admin panel" precedent.
+model SupportRequest {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String
+  message        String
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@map("support_requests")
 }
 
 model Customer {
@@ -434,6 +459,10 @@ enum ActivityEventType {
   // situation resolved before a human decided. See
   // src/server/operator/stale.ts and docs/proactive-financial-operations.md#stale-actions.
   ACTION_PROPOSAL_MARKED_STALE
+  // Phase 17: a member submitted a support request — see
+  // src/server/support/service.ts. Not tied to a customer/invoice, same
+  // as AUTOMATION_ENABLED/COLLECTION_POLICY_CREATED above.
+  SUPPORT_REQUEST_SUBMITTED
 }
 
 model ActivityEvent {

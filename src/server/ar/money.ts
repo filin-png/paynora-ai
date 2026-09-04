@@ -59,6 +59,22 @@ export function parseAmountInput(raw: string): bigint {
   return BigInt(wholePart) * MINOR_UNITS_PER_MAJOR + BigInt(fractionPart);
 }
 
+/**
+ * The inverse of parseAmountInput — a plain decimal string ("1500.50"),
+ * no currency symbol or thousands separator, via exact string/BigInt
+ * arithmetic (never a float step). For contexts where formatMoney's
+ * locale-formatted display string is wrong (CSV export, where a
+ * spreadsheet should read the column as a plain number) — see
+ * src/server/ar/export.ts.
+ */
+export function minorToMajorString(amountMinor: bigint): string {
+  const negative = amountMinor < 0n;
+  const magnitude = negative ? -amountMinor : amountMinor;
+  const whole = magnitude / MINOR_UNITS_PER_MAJOR;
+  const fraction = magnitude % MINOR_UNITS_PER_MAJOR;
+  return `${negative ? "-" : ""}${whole}.${fraction.toString().padStart(2, "0")}`;
+}
+
 const MAX_SAFE_FORMATTABLE_MINOR = BigInt(Number.MAX_SAFE_INTEGER);
 
 const currencyFormatters = new Map<Currency, Intl.NumberFormat>();

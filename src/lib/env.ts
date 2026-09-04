@@ -57,6 +57,16 @@ const baseEnvSchema = z.object({
     .trim()
     .email("PAYNORA_EMAIL_FROM must be a valid email address")
     .optional(),
+  // Phase 17 — where a submitted support request's best-effort
+  // notification email goes (src/server/support/service.ts). Optional:
+  // if unset, a request is still saved and audited (ActivityEvent), just
+  // with no outbound notification — see that module's doc comment for
+  // why there's no admin panel to poll instead.
+  SUPPORT_NOTIFICATION_EMAIL: z
+    .string()
+    .trim()
+    .email("SUPPORT_NOTIFICATION_EMAIL must be a valid email address")
+    .optional(),
   SMTP_HOST: z.string().trim().min(1).optional(),
   SMTP_PORT: z.coerce.number().int().positive().max(65535).optional(),
   SMTP_USER: z.string().trim().min(1).optional(),

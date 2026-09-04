@@ -59,6 +59,18 @@ export function SignUpForm({ callbackUrl = "/app" }: { callbackUrl?: string }) {
           {isPending ? "Creating account…" : "Create account"}
           {!isPending ? <ArrowRight className="size-4" /> : null}
         </Button>
+
+        <p className="text-center text-xs text-muted">
+          By creating an account, you agree to our{" "}
+          <Link href="/terms-of-service" className="font-medium text-primary hover:underline">
+            Terms of Service
+          </Link>{" "}
+          and{" "}
+          <Link href="/privacy-policy" className="font-medium text-primary hover:underline">
+            Privacy Policy
+          </Link>
+          .
+        </p>
       </form>
     </div>
   );
