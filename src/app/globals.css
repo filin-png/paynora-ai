@@ -284,6 +284,8 @@ body {
 .legal-content {
   color: var(--foreground);
   line-height: 1.7;
+  max-width: 100%;
+  overflow-x: auto;
 }
 .legal-content h1 {
   font-size: 1.75rem;
@@ -357,10 +359,9 @@ body {
   border-top: 1px solid var(--border);
 }
 .legal-content table {
-  display: block;
-  overflow-x: auto;
   margin-top: 1.25rem;
   width: 100%;
+  min-width: max-content;
   border-collapse: collapse;
   font-size: 0.85rem;
 }
