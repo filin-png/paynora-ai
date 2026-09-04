@@ -457,16 +457,46 @@ See `docs/proactive-financial-operations.md`.
       and the only automated "fix" available is a major Prisma
       *downgrade* — deliberately not applied
 
+### Phase 18 — subscription-payment tracking (ingestion pipeline, no real adapter yet)
+
+- [x] `SubscriptionPayment` ledger (`prisma/schema.prisma`) — one row per
+      uniquely-processed `(provider, eventId)` billing webhook delivery;
+      the idempotency boundary and audit trail for PAYNORA's own
+      subscription payments
+- [x] `applySubscriptionWebhookEvent` (`src/server/billing/webhook-events.ts`)
+      — provider-independent, fully tested with hand-constructed events:
+      resolves the organization from the verified event's customer/
+      subscription id, writes the ledger row, and — only on an actual
+      status transition — updates `OrganizationSubscription.status` and
+      records a `SUBSCRIPTION_STATUS_CHANGED` `ActivityEvent`. Never
+      writes `plan`: mapping a vendor's raw plan/price id to a PAYNORA
+      `PlanId` needs real pricing first (see the open item below)
+- [x] `NormalizedSubscriptionEvent` extended with optional `amountMinor`/
+      `currency` — what a delivery reports as charged, never a value
+      PAYNORA computes
+- [x] `/api/webhooks/billing` route — one global endpoint (unlike
+      Wallet's per-organization route: billing is the reverse shape, one
+      PAYNORA merchant account with many organizations as its customers).
+      Currently always returns 503 (`resolveBillingProvider()` still
+      throws for both recognized vendor names) — the route's shape is
+      real and tested so a real adapter is the only remaining step
+- [x] Founder report (`report:subscriptions`) extended with a recent-
+      payments table, sourced from real `SubscriptionPayment` rows only
+      — empty until a real adapter exists, no fabricated figures
+
 ## What's still genuinely open (superseding the old Phase 9–13 plan above)
 
 Everything below requires either a deliberate architectural decision, a
 real external account/credential, or business action outside this
 codebase — none of it is a small next step:
 
-- **Real billing.** `BillingProvider` still has no real Stripe/YooKassa
-  adapter and the plan catalog still has no price. Self-serve plan
-  changes and payment collection remain a manual, PAYNORA-operated
-  action (`setOrganizationPlan`).
+- **Real billing.** Phase 18 built the provider-independent ingestion
+  pipeline (ledger, idempotent event application, webhook route) ahead of
+  the vendor decision, but `BillingProvider` still has no real Stripe/
+  YooKassa adapter, and the plan catalog still has no price — both are
+  pending decisions, not implementation gaps. Self-serve plan changes and
+  payment collection remain a manual, PAYNORA-operated action
+  (`setOrganizationPlan`) until both land.
 - **Real deployment.** `APP_BASE_URL` still defaults to `localhost`; no
   production deployment has been done from this codebase as of Phase 17.
 - **Real AI/email credentials.** `AI_PROVIDER`/`EMAIL_PROVIDER` remain
