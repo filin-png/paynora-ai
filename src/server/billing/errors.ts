@@ -20,6 +20,22 @@ export class BillingProviderNotImplementedError extends Error {
 }
 
 /**
+ * A billing vendor has a real adapter (Phase 20's `yookassa`) but this
+ * deployment hasn't set the credentials it needs — distinct from
+ * `BillingProviderNotImplementedError` (no adapter exists at all): this
+ * one means "add YUKASSA_SHOP_ID/YUKASSA_SECRET_KEY", not "wait for a
+ * future phase". env.ts's own schema already requires these once
+ * `BILLING_PROVIDER=yookassa`, so this is defense-in-depth, not the
+ * primary way a misconfiguration is caught.
+ */
+export class BillingProviderNotConfiguredError extends Error {
+  constructor(provider: string) {
+    super(`Billing provider "${provider}" is missing required credentials for this deployment`);
+    this.name = "BillingProviderNotConfiguredError";
+  }
+}
+
+/**
  * A webhook delivery failed authenticity verification (bad/missing
  * signature). Never include the raw signature, secret, or full request
  * body in this error's message — see docs/integration-architecture.md

@@ -223,11 +223,31 @@ describe("parseEnv", () => {
     expect(env.TELEGRAM_BOT_TOKEN).toBe("123456:ABC-test-token");
   });
 
-  it("accepts BILLING_PROVIDER=stripe/yookassa and any recognized DEPLOYMENT_PROFILE with no further config required", () => {
+  it("accepts BILLING_PROVIDER=stripe (still unimplemented, no credential schema yet) and any recognized DEPLOYMENT_PROFILE with no further config required", () => {
     expect(parseEnv({ ...validBase, BILLING_PROVIDER: "stripe" }).BILLING_PROVIDER).toBe("stripe");
-    expect(parseEnv({ ...validBase, BILLING_PROVIDER: "yookassa" }).BILLING_PROVIDER).toBe("yookassa");
     expect(parseEnv({ ...validBase, DEPLOYMENT_PROFILE: "RU" }).DEPLOYMENT_PROFILE).toBe("RU");
     expect(parseEnv({ ...validBase, DEPLOYMENT_PROFILE: "GLOBAL" }).DEPLOYMENT_PROFILE).toBe("GLOBAL");
+  });
+
+  it("rejects BILLING_PROVIDER=yookassa with no YUKASSA_SHOP_ID/YUKASSA_SECRET_KEY (Phase 20: yookassa has a real adapter, so it needs real credentials)", () => {
+    expect(() => parseEnv({ ...validBase, BILLING_PROVIDER: "yookassa" })).toThrow(
+      /YUKASSA_SHOP_ID is required when BILLING_PROVIDER="yookassa"/,
+    );
+    expect(() => parseEnv({ ...validBase, BILLING_PROVIDER: "yookassa" })).toThrow(
+      /YUKASSA_SECRET_KEY is required when BILLING_PROVIDER="yookassa"/,
+    );
+  });
+
+  it("accepts BILLING_PROVIDER=yookassa with YUKASSA_SHOP_ID/YUKASSA_SECRET_KEY set", () => {
+    const env = parseEnv({
+      ...validBase,
+      BILLING_PROVIDER: "yookassa",
+      YUKASSA_SHOP_ID: "shop-test-id",
+      YUKASSA_SECRET_KEY: "test_secret_key",
+    });
+    expect(env.BILLING_PROVIDER).toBe("yookassa");
+    expect(env.YUKASSA_SHOP_ID).toBe("shop-test-id");
+    expect(env.YUKASSA_SECRET_KEY).toBe("test_secret_key");
   });
 
   it("rejects an unknown DEPLOYMENT_PROFILE", () => {

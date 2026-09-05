@@ -8,7 +8,10 @@ import type { BillingProvider, NormalizedSubscriptionEvent } from "../types";
  */
 export const noneBillingProvider: BillingProvider = {
   name: "none",
-  verifyAndParseWebhook(_rawBody: string, _signatureHeader: string): NormalizedSubscriptionEvent {
+  async createCheckout() {
+    throw new BillingDisabledError();
+  },
+  verifyAndParseWebhook(): NormalizedSubscriptionEvent {
     throw new BillingDisabledError();
   },
 };

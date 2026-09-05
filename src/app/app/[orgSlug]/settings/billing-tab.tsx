@@ -9,12 +9,18 @@ import { PlanComparison } from "@/components/billing/plan-comparison";
 import { formatPlanLimit, PLAN_LABEL } from "@/components/billing/plan-labels";
 import { cn } from "@/lib/utils";
 import { formatMoney } from "@/server/ar/money";
+import { getLatestCheckoutSession } from "@/server/billing/checkout";
 import type { EntitlementLimit } from "@/server/billing/plans";
 import { PLAN_ENTITLEMENTS, PLAN_ORDER, planRank } from "@/server/billing/plans";
 import { getOrganizationUsageOverview } from "@/server/billing/entitlements";
 import { getOrganizationSubscriptionPayments } from "@/server/billing/payment-history";
 import { isBillingEnabled } from "@/server/billing/service";
-import { cancelSubscriptionAction, downgradePlanAction, reactivateSubscriptionAction } from "./billing-actions";
+import {
+  cancelSubscriptionAction,
+  downgradePlanAction,
+  reactivateSubscriptionAction,
+  startUpgradeCheckoutAction,
+} from "./billing-actions";
 
 const STATUS_DISPLAY: Record<SubscriptionStatus, { label: string; tone: NonNullable<BadgeProps["tone"]> }> = {
   ACTIVE: { label: "Active", tone: "success" },
@@ -47,9 +53,10 @@ export async function BillingTab({
   orgSlug: string;
   role: string;
 }) {
-  const [overview, payments] = await Promise.all([
+  const [overview, payments, latestCheckout] = await Promise.all([
     getOrganizationUsageOverview(organizationId),
     getOrganizationSubscriptionPayments(organizationId),
+    getLatestCheckoutSession(organizationId),
   ]);
   const { plan, effectiveStatus, entitlements, billingPeriod, resourceUsage, aiGenerationUsage, copilotUsageCount } =
     overview;
@@ -65,9 +72,32 @@ export async function BillingTab({
   ];
 
   const otherPlans = PLAN_ORDER.filter((candidate) => candidate !== plan);
+  const checkoutInProgress = latestCheckout?.status === "PENDING" && !latestCheckout.isStale ? latestCheckout : null;
 
   return (
     <div className="flex flex-col gap-6">
+      {checkoutInProgress ? (
+        <Card className="flex flex-col gap-3 border-primary/30 bg-accent-soft p-5 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-medium text-foreground">
+              Payment pending — upgrade to {PLAN_LABEL[checkoutInProgress.targetPlanId]}
+            </p>
+            <p className="mt-1 text-xs text-muted">
+              {formatMoney(checkoutInProgress.amountMinor, checkoutInProgress.currency as Parameters<typeof formatMoney>[1])}{" "}
+              — waiting for payment confirmation. This updates automatically once the provider confirms it.
+            </p>
+          </div>
+          {checkoutInProgress.checkoutUrl ? (
+            <a
+              href={checkoutInProgress.checkoutUrl}
+              className={cn(buttonVariants({ variant: "primary", size: "sm" }))}
+            >
+              Resume payment
+            </a>
+          ) : null}
+        </Card>
+      ) : null}
+
       <Card className="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <p className="text-sm text-muted">Current plan</p>
@@ -204,10 +234,18 @@ export async function BillingTab({
                           confirmDescription="Existing customers, invoices, and members are never removed — only new quota-consuming creation is bounded by the new plan's limits from now on."
                           confirmLabel="Downgrade"
                         />
+                      ) : billingConnected ? (
+                        checkoutInProgress ? (
+                          <span className="text-xs text-muted">Checkout already in progress</span>
+                        ) : (
+                          <form action={startUpgradeCheckoutAction.bind(null, orgSlug, candidate)}>
+                            <button type="submit" className={cn(buttonVariants({ variant: "primary", size: "sm" }))}>
+                              Upgrade
+                            </button>
+                          </form>
+                        )
                       ) : (
-                        <span className="text-xs text-muted">
-                          {billingConnected ? "Contact PAYNORA to upgrade" : "Payment not connected yet"}
-                        </span>
+                        <span className="text-xs text-muted">Payment not connected yet</span>
                       )}
                     </div>
                   );
