@@ -40,5 +40,12 @@ export function buildReminderInsightRequest(
     system: REMINDER_INSIGHT_SYSTEM_PROMPT,
     input: context,
     schema: reminderInsightOutputSchema,
+    // Cost/runaway-generation bound (Phase 21A) — generous headroom above a
+    // realistic one-or-two-sentence summary (max 500 chars) even accounting
+    // for less-token-efficient scripts, not a target length. A response
+    // truncated by this limit fails JSON parsing or schema validation the
+    // same as any other malformed output (src/server/ai/gateway.ts) and
+    // falls back to buildDeterministicSummary — never partially trusted.
+    maxOutputTokens: 500,
   };
 }

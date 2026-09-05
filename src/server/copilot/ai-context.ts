@@ -34,5 +34,9 @@ export function buildCopilotExplanationRequest(
     system: COPILOT_SYSTEM_PROMPT,
     input: { question, deterministicAnswer },
     schema: copilotExplanationOutputSchema,
+    // Cost/runaway-generation bound (Phase 21A) — see
+    // operator/ai-context.ts's identical comment for the rationale; sized
+    // for the explanation's own 800-char schema ceiling.
+    maxOutputTokens: 700,
   };
 }

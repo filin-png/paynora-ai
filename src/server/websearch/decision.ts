@@ -47,5 +47,10 @@ export function buildWebSearchDecisionRequest(query: string): AIRequest<WebSearc
     system: WEB_SEARCH_DECISION_SYSTEM_PROMPT,
     input: { query },
     schema: webSearchDecisionSchema,
+    // Cost/runaway-generation bound (Phase 21A) — see
+    // operator/ai-context.ts's identical comment for the rationale; sized
+    // for directAnswer's own 2000-char schema ceiling plus the small
+    // needsSearch boolean.
+    maxOutputTokens: 1200,
   };
 }
