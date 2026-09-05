@@ -36,5 +36,14 @@ export function buildReminderEmailRequest(context: ReminderEmailContext): AIRequ
     system: REMINDER_EMAIL_SYSTEM_PROMPT,
     input: context,
     schema: reminderEmailOutputSchema,
+    // Cost/runaway-generation bound (Phase 21A) — see
+    // operator/ai-context.ts's identical comment for the rationale.
+    // Deliberately well below MAX_BODY_LENGTH's 10,000-char *safety* ceiling:
+    // a "short, professional" reminder email realistically runs a few
+    // hundred words, so this bounds worst-case spend without constraining
+    // any real reminder email; a response this limit actually truncates is
+    // already a malformed/runaway one that should fail validation and fall
+    // back to buildDeterministicReminderEmail, not be accommodated.
+    maxOutputTokens: 2000,
   };
 }

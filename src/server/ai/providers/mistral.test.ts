@@ -104,4 +104,122 @@ describe("Mistral adapter (mocked fetch — no real network, no real key)", () =
 
     await expect(provider.generateStructured(request)).rejects.toThrow(/did not include message content/);
   });
+
+  it("classifies HTTP 429 as 'rate limited' — never the API key or response body", async () => {
+    (env as { MISTRAL_API_KEY?: string }).MISTRAL_API_KEY = "super-secret-key";
+    (env as { MISTRAL_MODEL?: string }).MISTRAL_MODEL = "test-model";
+
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({ error: "monthly token cap exceeded — never appears in the thrown message" }, { ok: false, status: 429 }),
+    );
+    const provider = createMistralProvider(fetchImpl);
+
+    let caught: unknown;
+    try {
+      await provider.generateStructured(request);
+    } catch (error) {
+      caught = error;
+    }
+
+    const message = caught instanceof Error ? caught.message : String(caught);
+    expect(message).toContain("HTTP 429");
+    expect(message).toContain("rate limited");
+    expect(message).not.toContain("super-secret-key");
+    expect(message).not.toContain("monthly token cap");
+  });
+
+  it("classifies a Mistral 5xx (transient server error) as 'provider error' — never the API key or response body", async () => {
+    (env as { MISTRAL_API_KEY?: string }).MISTRAL_API_KEY = "super-secret-key";
+    (env as { MISTRAL_MODEL?: string }).MISTRAL_MODEL = "test-model";
+
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({ error: "internal error detail should never appear in the thrown message" }, { ok: false, status: 503 }),
+    );
+    const provider = createMistralProvider(fetchImpl);
+
+    let caught: unknown;
+    try {
+      await provider.generateStructured(request);
+    } catch (error) {
+      caught = error;
+    }
+
+    const message = caught instanceof Error ? caught.message : String(caught);
+    expect(message).toContain("HTTP 503");
+    expect(message).toContain("provider error");
+    expect(message).not.toContain("super-secret-key");
+    expect(message).not.toContain("internal error detail");
+  });
+
+  it("classifies HTTP 403 (e.g. a guardrail/moderation block) as 'authentication failed' — the same bucket as 401", async () => {
+    (env as { MISTRAL_API_KEY?: string }).MISTRAL_API_KEY = "test-key";
+    (env as { MISTRAL_MODEL?: string }).MISTRAL_MODEL = "test-model";
+
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({}, { ok: false, status: 403 }));
+    const provider = createMistralProvider(fetchImpl);
+
+    await expect(provider.generateStructured(request)).rejects.toThrow(/HTTP 403.*authentication failed/);
+  });
+
+  it("propagates a real network failure (e.g. DNS/connection error) without ever including the API key", async () => {
+    (env as { MISTRAL_API_KEY?: string }).MISTRAL_API_KEY = "super-secret-key";
+    (env as { MISTRAL_MODEL?: string }).MISTRAL_MODEL = "test-model";
+
+    const fetchImpl = vi.fn().mockRejectedValue(new TypeError("fetch failed: getaddrinfo ENOTFOUND api.mistral.ai"));
+    const provider = createMistralProvider(fetchImpl);
+
+    let caught: unknown;
+    try {
+      await provider.generateStructured(request);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(TypeError);
+    const message = caught instanceof Error ? caught.message : String(caught);
+    expect(message).not.toContain("super-secret-key");
+  });
+
+  it("forwards request.maxOutputTokens as the wire-level max_tokens field", async () => {
+    (env as { MISTRAL_API_KEY?: string }).MISTRAL_API_KEY = "test-key";
+    (env as { MISTRAL_MODEL?: string }).MISTRAL_MODEL = "test-model";
+
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({ choices: [{ message: { content: JSON.stringify({ answer: "4" }) } }] }),
+    );
+    const provider = createMistralProvider(fetchImpl);
+
+    await provider.generateStructured({ ...request, maxOutputTokens: 500 });
+
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    expect(body.max_tokens).toBe(500);
+  });
+
+  it("handles concurrent calls independently — each gets its own request/response, no shared mutable state", async () => {
+    (env as { MISTRAL_API_KEY?: string }).MISTRAL_API_KEY = "test-key";
+    (env as { MISTRAL_MODEL?: string }).MISTRAL_MODEL = "test-model";
+
+    const fetchImpl = vi.fn().mockImplementation(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(init.body as string) as { messages: { content: string }[] };
+      const parsedInput = JSON.parse(body.messages[1]!.content) as { question: string };
+      // Echoes the input back so each concurrent call's response can be
+      // proven to correspond to its own request, not a mixed-up one.
+      return jsonResponse({
+        choices: [{ message: { content: JSON.stringify({ answer: parsedInput.question }) } }],
+      });
+    });
+    const provider = createMistralProvider(fetchImpl);
+
+    const [a, b, c] = await Promise.all([
+      provider.generateStructured({ ...request, input: { question: "first" } }),
+      provider.generateStructured({ ...request, input: { question: "second" } }),
+      provider.generateStructured({ ...request, input: { question: "third" } }),
+    ]);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(a.data).toEqual({ answer: "first" });
+    expect(b.data).toEqual({ answer: "second" });
+    expect(c.data).toEqual({ answer: "third" });
+  });
 });

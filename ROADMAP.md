@@ -565,6 +565,42 @@ See `docs/proactive-financial-operations.md`.
 - [x] Adversarial security review of the checkout/webhook pipeline — see
       `docs/billing-provider.md`#security-review
 
+### Phase 21A — Mistral as PAYNORA's primary production AI provider — see `docs/ai-integration.md`
+
+- [x] Full audit of the existing AI architecture before any change — found
+      the Mistral adapter (`src/server/ai/providers/mistral.ts`) already
+      real and implemented since Phase 6, verified against Mistral's
+      current official API docs (endpoint, JSON mode, auth, error codes,
+      `max_tokens`) and found already correct on every point — no
+      provider wire-logic code change was needed
+- [x] Closed one real gap found during the audit: `AIRequest.maxOutputTokens`
+      existed and was already wired to the wire-level `max_tokens`
+      parameter, but no real call site ever set it — now set on all four
+      real `AIRequest` builders (Operator, Copilot, Communications,
+      WebSearch decision), sized above each feature's own schema ceiling
+- [x] Test coverage added for gaps the existing Mistral adapter tests
+      didn't cover: HTTP 429/403/5xx classification, a real network
+      failure, and concurrent calls — without rewriting any existing test
+- [x] Dedicated security review against the phase brief's 15-point list
+      (cross-tenant leakage, prompt injection, secret/API-key/system-prompt
+      leakage, unauthorized invocation, organizationId/quota manipulation,
+      quota/rate-limit bypass, invalid output, provider-error leakage,
+      sensitive-data logging) — no blocking issues found
+- [x] `.env.example` updated with a verified, currently-recommended
+      `MISTRAL_MODEL` example (`mistral-small-latest`, per Mistral's own
+      model-picking guidance for short-form text tasks) — never
+      hardcoded as a code-level default
+- [x] `docs/ai-architecture.md` corrected (it was a stale Phase 3 snapshot
+      claiming no real adapter existed) and `docs/ai-integration.md`
+      added as the Mistral-specific production setup/security/cost-control
+      reference
+- [x] Confirmed, and documented, a real pre-existing scope gap unrelated
+      to this phase: Proactive Copilot and the web-search decision step
+      are both fully implemented domain logic with no UI/Server Action
+      wiring anywhere — real Mistral traffic today only flows through
+      Operator insight generation and Communications reminder-email
+      drafting, both already reachable from the Action Center
+
 ## What's still genuinely open (superseding the old Phase 9–13 plan above)
 
 Everything below requires either a deliberate architectural decision, a
@@ -587,9 +623,14 @@ codebase — none of it is a small next step:
 - **Real deployment.** `APP_BASE_URL` still defaults to `localhost`; no
   production deployment has been done from this codebase as of Phase 17.
 - **Real AI/email credentials.** `AI_PROVIDER`/`EMAIL_PROVIDER` remain
-  `none` by default; every AI-assisted or email-sending feature has been
-  built, tested, and verified entirely through its deterministic
-  fallback path, never against a live vendor.
+  `none` by default. Phase 21A verified the Mistral adapter's wire
+  contract against Mistral's own current documentation and hardened cost
+  control, but a real `MISTRAL_API_KEY` has still never been set — every
+  AI-assisted (and email-sending) feature has been built, tested, and
+  verified entirely through mocked-network tests and its deterministic
+  fallback path, never against a live vendor call. See
+  `docs/ai-integration.md`#production-readiness — what-is-and-isnt-proven-yet
+  for the precise boundary.
 - **Promise-to-pay tracking.** Never built, on the old plan or since.
 - **Accounting/payment-processor integrations, object storage.** Still
   only documented candidates (`docs/provider-strategy.md`), per that
