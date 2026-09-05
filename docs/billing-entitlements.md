@@ -1,5 +1,15 @@
 # Commercial Plans & Entitlements (Phase 11.3)
 
+**Superseded by `docs/commercial-product-architecture.md` (Phase 19)** for
+current plan names/prices/entitlement flags, usage metering, subscription
+lifecycle, and the Billing UI — this document is kept as the historical
+record of Phase 11.3's original design (three plans, no price, no Copilot/
+Wallet gates) rather than rewritten in place. The core mechanics described
+below (the entitlement layer, the concurrency/locking model, the AI-quota
+reuse of `RateLimitCounter`) are unchanged and still accurate; only the
+plan catalog's shape (now four plans, priced, with more feature flags) has
+grown past what's shown here.
+
 Provider-neutral plan/subscription state and server-side usage enforcement,
 built without connecting a real payment provider. See
 `src/server/billing/types.ts` for the separate `BillingProvider` abstraction

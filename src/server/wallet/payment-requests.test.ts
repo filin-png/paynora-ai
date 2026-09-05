@@ -4,6 +4,7 @@ import { createCustomer } from "@/server/ar/customers";
 import { createInvoice } from "@/server/ar/invoices";
 import { majorToMinor } from "@/server/ar/money";
 import { createTestOrganization } from "@/server/ar/test-fixtures";
+import { setOrganizationPlan } from "@/server/billing/subscription";
 import { prisma } from "@/server/db/client";
 import { resetDatabase } from "@/server/db/test-utils";
 import { ExceedsOutstandingBalanceError, InvalidWalletTransitionError, WalletResourceNotFoundError } from "./errors";
@@ -69,6 +70,7 @@ describe("createCryptoPaymentRequest", () => {
 
   it("rejects a wallet that is not yet ACTIVE (still PENDING_VERIFICATION)", async () => {
     const { organization, user } = await createTestOrganization();
+    await setOrganizationPlan(organization.id, "BUSINESS");
     const invoice = await setupInvoice(organization.id);
     const pendingWallet = await connectWallet(
       organization.id,

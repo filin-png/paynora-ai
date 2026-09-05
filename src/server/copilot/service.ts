@@ -3,7 +3,7 @@ import { formatMoney } from "@/server/ar/money";
 import { getCustomer } from "@/server/ar/customers";
 import { ArResourceNotFoundError } from "@/server/ar/errors";
 import { getCustomerReceivablesSummaries } from "@/server/ar/summary";
-import { checkAiGenerationQuota } from "@/server/billing/entitlements";
+import { assertCopilotEntitled, checkAiGenerationQuota, recordCopilotUsage } from "@/server/billing/entitlements";
 import { getDailyBrief } from "@/server/briefing/daily-brief";
 import { getCashFlowRiskWindows } from "@/server/briefing/cash-flow-risk";
 import { getWhatChanged } from "@/server/briefing/what-changed";
@@ -152,12 +152,23 @@ async function buildCashFlowRiskAnswer(organizationId: string): Promise<string> 
  * cross-tenant id, the same enumeration-safe pattern as every other
  * lookup in this codebase) — this function adds no separate check because
  * it has nothing to check beyond what those calls already do.
+ *
+ * Phase 19: `assertCopilotEntitled` is the first thing this function does
+ * — a plan without Copilot access never reaches even the deterministic
+ * answer builders, throwing `FeatureNotEntitledError`
+ * (src/server/billing/entitlements.ts) instead. Usage is metered via
+ * `recordCopilotUsage` on every call that gets past the entitlement
+ * check, regardless of whether AI elaboration itself later succeeds —
+ * see that function's doc comment for why this never denies on its own.
  */
 export async function answerCopilotQuestion(
   organizationId: string,
   question: CopilotQuestionType,
   targetId?: string,
 ): Promise<CopilotAnswer> {
+  await assertCopilotEntitled(organizationId);
+  await recordCopilotUsage(organizationId);
+
   let deterministicAnswer: string;
   switch (question) {
     case "why_important":
