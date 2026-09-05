@@ -19,21 +19,32 @@ import { resolveBillingProvider } from "@/server/billing/service";
  * the verified event's customer/subscription id, inside
  * applySubscriptionWebhookEvent, never from the URL.
  *
- * Currently always returns 503: `resolveBillingProvider()` throws
- * `BillingProviderNotImplementedError` for both recognized vendor names
- * (stripe/yookassa) until a real adapter is registered — see that
- * function's doc comment and docs/provider-strategy.md#billingprovider.
- * This route's shape (response codes, event application) is real and
- * tested now so that landing a real adapter is the only thing left to do
- * — nothing here should need to change.
+ * `resolveBillingProvider()` throws `BillingDisabledError` (503) when
+ * BILLING_PROVIDER=none, or `BillingProviderNotConfiguredError` (also 503)
+ * when a real adapter (yookassa, Phase 20) is selected but missing
+ * credentials in this deployment.
  *
- * The `x-billing-signature` header name below is a placeholder: Stripe
- * uses `Stripe-Signature`, YooKassa verifies by source IP allowlist +
- * notification shape rather than a signature header at all (see
- * src/server/billing/types.ts's `verifyAndParseWebhook` doc comment) —
- * the real header (or IP-based check) is finalized once a real adapter
- * exists, since it's vendor-specific and inert until then regardless.
+ * The `x-billing-signature` header is only meaningful for a
+ * signature-verifying provider (Stripe would use `Stripe-Signature`
+ * instead — not yet implemented). YooKassa (the real Phase 20 adapter)
+ * verifies authenticity by source IP allowlist rather than a signature
+ * header — see src/server/billing/providers/yookassa.ts. Both are passed
+ * through as a `WebhookVerificationContext` and it's each provider's own
+ * job to check whichever one it actually uses.
+ *
+ * `sourceIp` is read from `x-real-ip` first, falling back to the first
+ * hop of `x-forwarded-for` — trusted here because this route is only
+ * reachable through the deployment's own reverse proxy, which sets these
+ * headers itself; it is never client-settable directly in production.
  */
+export function extractSourceIp(request: Request): string | undefined {
+  const realIp = request.headers.get("x-real-ip");
+  if (realIp) return realIp.trim();
+  const forwardedFor = request.headers.get("x-forwarded-for");
+  if (forwardedFor) return forwardedFor.split(",")[0]?.trim();
+  return undefined;
+}
+
 export async function POST(request: Request): Promise<Response> {
   if (!env.BILLING_PROVIDER || env.BILLING_PROVIDER === "none") {
     return NextResponse.json({ error: "Billing is not enabled for this deployment" }, { status: 503 });
@@ -47,11 +58,12 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const rawBody = await request.text();
-  const signatureHeader = request.headers.get("x-billing-signature") ?? "";
+  const signatureHeader = request.headers.get("x-billing-signature") ?? undefined;
+  const sourceIp = extractSourceIp(request);
 
   let event;
   try {
-    event = provider.verifyAndParseWebhook(rawBody, signatureHeader);
+    event = provider.verifyAndParseWebhook(rawBody, { signatureHeader, sourceIp });
   } catch (error) {
     if (error instanceof BillingWebhookVerificationError) {
       return NextResponse.json({ error: "Signature verification failed" }, { status: 401 });

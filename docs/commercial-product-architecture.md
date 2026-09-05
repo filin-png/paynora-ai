@@ -235,25 +235,25 @@ Settings → Billing shows a real "Change plan" section. Downgrade and
 cancellation are real, immediate, self-serve actions (see
 [Subscription lifecycle](#subscription-lifecycle)) — they can only reduce
 access, so there is no bypass risk in allowing them without payment.
-**Upgrade is not**: there is no real payment step in this deployment
-(`isBillingEnabled()` is false while `BILLING_PROVIDER=none`, the default),
-so a self-serve "upgrade" button would be a straight security bypass — free
-access to a higher plan by clicking a button. Instead, the UI honestly
-shows "Payment not connected yet" / "Contact PAYNORA to upgrade" next to
-any higher-ranked plan, and the server function itself
-(`changeOrganizationPlanSelfServe`) refuses the transition regardless of
-what the UI does or what a client sends directly.
+**Upgrade is not**: `changeOrganizationPlanSelfServe` still refuses any
+target plan ranked above the current one (`UpgradeRequiresPaymentError`),
+regardless of what the UI does or what a client sends directly — this
+Phase 19 invariant is unchanged.
 
-Once a real `BillingProvider` adapter exists (a separate, explicitly-
-approved phase — see `docs/provider-strategy.md`), the natural integration
-point is: the "Contact PAYNORA to upgrade" affordance becomes a real
-checkout redirect, and a successful webhook delivery
-(`src/app/api/webhooks/billing/route.ts`, Phase 18) calls
-`applySubscriptionWebhookEvent`, which is already wired to update `status`
-— plan-mapping from a vendor's raw price id is the one piece still
-explicitly deferred (`NormalizedSubscriptionEvent.planId` exists but is
-unmapped), since it requires the real prices this phase's catalog now has
-to actually be registered with a vendor first.
+As of Phase 20, when `BILLING_PROVIDER=yookassa` is configured, an upgrade
+is no longer a placeholder — it goes through a real checkout with a real
+payment provider (YooKassa/ЮKassa). See `docs/billing-provider.md` for the
+full design (checkout-session security model, webhook verification,
+idempotency, what still requires production credentials). In short:
+`src/server/billing/checkout.ts#createCheckoutSession` creates a
+`BillingCheckoutSession` row server-side (amount from `plans.ts`'s
+catalog, never client input) *before* calling the vendor, and
+`src/server/billing/webhook-events.ts#applySubscriptionWebhookEvent`'s
+checkout-driven path grants exactly that row's `targetPlanId` once the
+vendor's webhook confirms the payment — never a plan the webhook body
+itself claims. While `BILLING_PROVIDER=none` (still the default), the
+Billing UI continues to show "Payment not connected yet" and the checkout
+path is unreachable, exactly as before.
 
 ## Billing UI (Settings → Billing)
 
@@ -393,3 +393,11 @@ payment collection, no real API keys, no vendor-plan-id mapping. The next
 phase ("REAL PRODUCTION INTEGRATIONS") is where those land, on the founder's
 explicit go-ahead — this phase deliberately stops at "the commercial
 product layer is real and provider-neutral," not "money actually moves."
+
+**Update (Phase 20)**: the YooKassa gap above is closed — a real adapter,
+real checkout flow, and real webhook-driven plan grants now exist (still
+requiring real production credentials to actually move money; see
+`docs/billing-provider.md`). Stripe remains recognized-but-unimplemented,
+and recurring/auto-billing (a saved payment method charged automatically
+each period) is still explicitly out of scope — see that doc's
+"what Phase 20 does not do" section.

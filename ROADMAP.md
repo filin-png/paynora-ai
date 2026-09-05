@@ -526,6 +526,45 @@ See `docs/proactive-financial-operations.md`.
       manipulation, direct Server Action calls, expired-trial access,
       usage-counter bypass) — see `docs/commercial-product-architecture.md`#security--entitlement-bypass-audit
 
+### Phase 20 — real billing provider (YooKassa checkout, verified webhooks) — see `docs/billing-provider.md`
+
+- [x] `BillingProvider` interface extended for checkout (`createCheckout`)
+      and provider-agnostic webhook verification (`WebhookVerificationContext`,
+      since YooKassa verifies by source-IP allowlist, not a signature
+      header, unlike Stripe) — existing Phase 6/18 shape otherwise
+      unchanged, no parallel billing system introduced
+- [x] Real YooKassa adapter (`src/server/billing/providers/yookassa.ts`)
+      verified against YooKassa's own published API docs — real payment
+      creation, real IPv4/IPv6 CIDR-based source-IP webhook verification
+      (implemented from scratch, no external dependency), no invented API
+      shape
+- [x] `BillingCheckoutSession` (new Prisma model) — the checkout-security
+      linchpin: created server-side, amount from the plan catalog, before
+      any vendor call; a webhook can only ever grant the plan *this row*
+      recorded, never a plan the webhook body itself claims
+- [x] `createCheckoutSession` (`src/server/billing/checkout.ts`) — the
+      only way an upgrade can happen; rank-checked, row-locked against
+      concurrent duplicate submissions, marks itself FAILED (not left
+      dangling PENDING) if the vendor call itself fails
+- [x] `applySubscriptionWebhookEvent` extended with a checkout-driven
+      resolution path (`event.paymentId` → `BillingCheckoutSession`),
+      fully backward-compatible with the pre-Phase-20 customerId/
+      subscriptionId path — a failed/canceled checkout never touches an
+      organization's existing active subscription
+- [x] Settings → Billing: real "Upgrade" button/checkout redirect
+      replacing the Phase 19 "Contact PAYNORA to upgrade" placeholder,
+      plus a pending-payment banner with a "Resume payment" link
+- [x] `BILLING_PROVIDER=yookassa` env schema (`YUKASSA_SHOP_ID`,
+      `YUKASSA_SECRET_KEY`, optional `YUKASSA_WEBHOOK_IP_ALLOWLIST`),
+      `.env.example` documented, no real credential anywhere in git
+- [x] Full test suite (checkout creation/rejection/race/staleness,
+      webhook success/failure/pending/duplicate/forged/cross-tenant/
+      cross-provider, real CIDR-matching edge cases) — only the
+      deterministic `createTestBillingProvider`/hand-constructed events
+      used in tests, no fake production data
+- [x] Adversarial security review of the checkout/webhook pipeline — see
+      `docs/billing-provider.md`#security-review
+
 ## What's still genuinely open (superseding the old Phase 9–13 plan above)
 
 Everything below requires either a deliberate architectural decision, a
@@ -534,12 +573,17 @@ codebase — none of it is a small next step:
 
 - **Real billing.** Phase 18 built the provider-independent ingestion
   pipeline (ledger, idempotent event application, webhook route); Phase 19
-  added real prices and a complete commercial product layer on top of it.
-  `BillingProvider` still has no real Stripe/YooKassa adapter — that
-  remains the one pending decision. Self-serve downgrade/cancellation are
-  real as of Phase 19; self-serve *upgrade* and real payment collection
-  still require the vendor decision and adapter before they can exist —
-  see `docs/commercial-product-architecture.md`#checkout--why-upgrade-is-not-self-serve.
+  added real prices and a complete commercial product layer on top of it;
+  Phase 20 added a real `BillingProvider` adapter (YooKassa/ЮKassa) and a
+  real checkout flow — upgrade now goes through a real vendor payment,
+  verified webhook, and server-authoritative plan grant. See
+  `docs/billing-provider.md` for the full design, and its "what's not done
+  yet" section for the parts that still need a real production
+  merchant account (`YUKASSA_SHOP_ID`/`YUKASSA_SECRET_KEY`) before money
+  actually moves. Stripe remains recognized-but-unimplemented; recurring/
+  auto-billing (charging a saved payment method automatically each
+  period, rather than a one-time checkout per upgrade) is still explicitly
+  out of scope.
 - **Real deployment.** `APP_BASE_URL` still defaults to `localhost`; no
   production deployment has been done from this codebase as of Phase 17.
 - **Real AI/email credentials.** `AI_PROVIDER`/`EMAIL_PROVIDER` remain

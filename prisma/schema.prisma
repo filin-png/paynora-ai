@@ -115,6 +115,7 @@ model Organization {
   walletTransactions       WalletTransaction[]
   supportRequests          SupportRequest[]
   subscriptionPayments     SubscriptionPayment[]
+  billingCheckoutSessions  BillingCheckoutSession[]
 
   @@map("organizations")
 }
@@ -296,6 +297,58 @@ model SubscriptionPayment {
   @@unique([provider, externalEventId])
   @@index([organizationId, receivedAt])
   @@map("subscription_payments")
+}
+
+// Phase 20 — a real payment/checkout intent, created server-side the
+// moment an OWNER requests an upgrade, BEFORE any vendor API call. This is
+// the authorization record a checkout-driven webhook event
+// (src/server/billing/webhook-events.ts#applySubscriptionWebhookEvent)
+// looks up by `externalPaymentId` to learn "this specific vendor payment
+// was for THIS organization, upgrading to THIS plan" — the plan grant
+// never depends on anything the webhook body itself claims about which
+// organization or plan is involved, only on this row PAYNORA already
+// wrote before the vendor was ever contacted. See
+// docs/billing-provider.md#checkout-session-security.
+enum CheckoutSessionStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  CANCELED
+}
+
+model BillingCheckoutSession {
+  id                String                @id @default(cuid())
+  organizationId    String
+  provider          String
+  targetPlanId      PlanId
+  status            CheckoutSessionStatus @default(PENDING)
+  amountMinor       BigInt
+  currency          String
+  // Set once the vendor's checkout/payment is actually created — nullable
+  // only for the brief window between "row created" and "vendor API call
+  // returned". Unique so a vendor payment id can never be claimed by more
+  // than one checkout session.
+  externalPaymentId String?               @unique
+  // The vendor's own redirect URL for this checkout (e.g. YooKassa's
+  // `confirmation.confirmation_url`) — stored purely so the Billing UI can
+  // offer "Resume payment" while this session is still PENDING; never used
+  // as an authority for anything (the plan grant only ever comes from
+  // `targetPlanId`/`status` above, never from this URL). Nullable for the
+  // same brief window as `externalPaymentId`.
+  checkoutUrl       String?
+  // Sent to the vendor as the idempotency key for the checkout-creation
+  // API call itself (e.g. YooKassa's Idempotence-Key header) — distinct
+  // from the webhook-delivery idempotency key
+  // (SubscriptionPayment's (provider, externalEventId)), which guards a
+  // different operation.
+  idempotencyKey    String                @unique
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@map("billing_checkout_sessions")
 }
 
 // Phase 17 — a minimal, honest support-request record: a member submits a
@@ -516,6 +569,12 @@ enum ActivityEventType {
   // and never changes `plan` itself — see that file's doc comment for
   // why plan-mapping is out of scope until real pricing exists.
   SUBSCRIPTION_STATUS_CHANGED
+  // Phase 20: an OWNER requested a real, paid plan upgrade — a checkout
+  // session was created with a real vendor (see
+  // src/server/billing/checkout.ts). Distinct from SUBSCRIPTION_STATUS_CHANGED,
+  // which fires once the payment actually completes; this fires at
+  // request time, before any money has moved.
+  CHECKOUT_SESSION_CREATED
 }
 
 model ActivityEvent {

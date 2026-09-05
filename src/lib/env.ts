@@ -98,11 +98,24 @@ const baseEnvSchema = z.object({
   // nothing sends a Telegram message anywhere in this codebase today.
   MESSAGING_PROVIDER: z.enum(["none", "telegram"]).default("none"),
   TELEGRAM_BOT_TOKEN: z.string().trim().min(1).optional(),
-  // Phase 6: BillingProvider boundary (src/server/billing/*) — interface
-  // and normalized types only. Selecting "stripe"/"yookassa" resolves to a
-  // clear "not implemented yet" error, the same precedent as AI_PROVIDER's
-  // unimplemented values — see docs/integration-architecture.md#billing.
+  // Phase 6 introduced the BillingProvider boundary; Phase 20 adds the
+  // first real adapter — "yookassa" (src/server/billing/providers/yookassa.ts).
+  // "stripe" remains recognized-but-not-implemented, same precedent as
+  // AI_PROVIDER's gigachat/yandex — see docs/billing-provider.md.
   BILLING_PROVIDER: z.enum(["none", "stripe", "yookassa"]).default("none"),
+  // Phase 20: required once BILLING_PROVIDER="yookassa" — see
+  // docs/billing-provider.md#environment-configuration. YUKASSA_SHOP_ID +
+  // YUKASSA_SECRET_KEY authenticate every API call (HTTP Basic auth) and
+  // create real checkouts/payments the moment they're set — never commit
+  // real values, .env.example documents this. YUKASSA_WEBHOOK_IP_ALLOWLIST
+  // is optional: YooKassa verifies webhook authenticity by source-IP
+  // allowlist rather than a signature (see that adapter's own doc
+  // comment); this overrides the adapter's built-in, documentation-sourced
+  // default list, for when YooKassa publishes new ranges before this
+  // codebase is updated.
+  YUKASSA_SHOP_ID: z.string().trim().min(1).optional(),
+  YUKASSA_SECRET_KEY: z.string().trim().min(1).optional(),
+  YUKASSA_WEBHOOK_IP_ALLOWLIST: z.string().trim().min(1).optional(),
   // Phase 13 introduced the WalletProvider boundary; Phase 14 adds the
   // first real adapter — "alchemy" (src/server/wallet/providers/alchemy.ts),
   // a non-custodial address-monitoring provider — see
@@ -230,6 +243,14 @@ export const envSchema = baseEnvSchema.superRefine((data, ctx) => {
     });
   }
 
+  if (data.BILLING_PROVIDER === "yookassa") {
+    const required = ["YUKASSA_SHOP_ID", "YUKASSA_SECRET_KEY"] as const;
+    for (const key of required) {
+      if (!data[key]) {
+        ctx.addIssue({ code: "custom", path: [key], message: `${key} is required when BILLING_PROVIDER="yookassa"` });
+      }
+    }
+  }
   if (data.WALLET_PROVIDER === "alchemy") {
     const required = [
       "ALCHEMY_API_KEY",

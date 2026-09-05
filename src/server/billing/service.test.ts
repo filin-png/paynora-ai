@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { BillingDisabledError, BillingProviderNotImplementedError } from "./errors";
+import { BillingDisabledError, BillingProviderNotConfiguredError, BillingProviderNotImplementedError } from "./errors";
 import { isBillingEnabled, resolveBillingProvider } from "./service";
 
 describe("billing service (BILLING_PROVIDER=none, the test/CI default)", () => {
@@ -19,11 +19,13 @@ describe("resolveBillingProvider — recognized-but-unimplemented vendors", () =
     expect(() => resolveBillingProvider("stripe")).toThrow(/not implemented/);
   });
 
-  it("throws a clear, typed error for yookassa", () => {
-    expect(() => resolveBillingProvider("yookassa")).toThrow(BillingProviderNotImplementedError);
-  });
-
   it("throws BillingDisabledError when explicitly passed none", () => {
     expect(() => resolveBillingProvider("none")).toThrow(BillingDisabledError);
+  });
+});
+
+describe("resolveBillingProvider — yookassa (Phase 20: real adapter, but this test env has no credentials)", () => {
+  it("throws BillingProviderNotConfiguredError — distinct from 'not implemented', since a real adapter now exists", () => {
+    expect(() => resolveBillingProvider("yookassa")).toThrow(BillingProviderNotConfiguredError);
   });
 });
