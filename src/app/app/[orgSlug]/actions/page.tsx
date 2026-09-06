@@ -7,7 +7,11 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader, SectionHeader } from "@/components/ui/page-header";
+import { CopilotPanel } from "@/components/copilot/copilot-panel";
 import { cn } from "@/lib/utils";
+import type { Currency } from "@/server/ar/currency";
+import { listInvoicesWithFinancials } from "@/server/ar/invoices";
+import { formatMoney } from "@/server/ar/money";
 import { getAttentionScoresForInvoiceIds } from "@/server/attention/for-invoices";
 import { listPendingActionProposals, listRecentlyDecidedActionProposals } from "@/server/operator/approval";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
@@ -41,10 +45,17 @@ export default async function ActionCenterPage({
   // decided/stale ones no longer are.
   const pendingInvoiceIds = pending.map((p) => p.invoiceId).filter((id): id is string => id !== null);
   const decidedInvoiceIds = decided.map((p) => p.invoiceId).filter((id): id is string => id !== null);
-  const attentionScores = await getAttentionScoresForInvoiceIds(
-    context.organization.id,
-    [...new Set([...pendingInvoiceIds, ...decidedInvoiceIds])],
-    new Set(pendingInvoiceIds),
+  const allInvoiceIds = [...new Set([...pendingInvoiceIds, ...decidedInvoiceIds])];
+  const [attentionScores, invoicesWithFinancials] = await Promise.all([
+    getAttentionScoresForInvoiceIds(context.organization.id, allInvoiceIds, new Set(pendingInvoiceIds)),
+    listInvoicesWithFinancials(context.organization.id, "all", { invoiceIds: allInvoiceIds }),
+  ]);
+  // Financial impact (Phase 22, section 4): each proposal's real
+  // outstanding balance — reuses the same `listInvoicesWithFinancials`
+  // bulk lookup `attention/for-invoices.ts` and `attention/
+  // payment-outlook.ts` already use, never a second per-proposal query.
+  const outstandingByInvoiceId = new Map(
+    invoicesWithFinancials.map(({ invoice, financials }) => [invoice.id, { outstandingMinor: financials.outstandingMinor, currency: invoice.currency as Currency }]),
   );
 
   const boundRunOperator = runOperatorAction.bind(null, orgSlug);
@@ -72,8 +83,9 @@ export default async function ActionCenterPage({
               const boundApprove = approveProposalAction.bind(null, orgSlug, proposal.id);
               const boundDismiss = dismissProposalAction.bind(null, orgSlug, proposal.id);
               const attention = proposal.invoiceId ? attentionScores.get(proposal.invoiceId) : undefined;
+              const impact = proposal.invoiceId ? outstandingByInvoiceId.get(proposal.invoiceId) : undefined;
               return (
-                <li key={proposal.id}>
+                <li key={proposal.id} className="flex flex-col gap-2">
                   <Card className="flex flex-col gap-3 p-5 sm:flex-row sm:items-start sm:justify-between">
                     <div className="flex flex-col gap-1.5">
                       <div className="flex flex-wrap items-center gap-2">
@@ -81,6 +93,9 @@ export default async function ActionCenterPage({
                           {proposal.insight.priority.charAt(0) + proposal.insight.priority.slice(1).toLowerCase()} priority
                         </Badge>
                         {attention ? <AttentionScoreBadge score={attention.attention.score} /> : null}
+                        {impact ? (
+                          <Badge tone="neutral">{formatMoney(impact.outstandingMinor, impact.currency)} at stake</Badge>
+                        ) : null}
                         <span className="text-sm font-medium text-foreground">
                           {ACTION_TYPE_LABEL[proposal.type] ?? proposal.type}
                         </span>
@@ -117,6 +132,11 @@ export default async function ActionCenterPage({
                       </form>
                     </div>
                   </Card>
+                  <CopilotPanel
+                    orgSlug={orgSlug}
+                    targetId={proposal.id}
+                    questions={[{ type: "why_important", label: "Why is this important?" }]}
+                  />
                 </li>
               );
             })}
@@ -143,6 +163,17 @@ export default async function ActionCenterPage({
                     {proposal.invoice ? (
                       <span className="text-xs text-muted">
                         {proposal.invoice.number} — {proposal.invoice.customer.name}
+                      </span>
+                    ) : null}
+                    {/* Audit trail (Phase 22, section 4): decidedByUserId/decidedAt were
+                        already recorded atomically by transitionActionProposal
+                        (src/server/operator/approval.ts) — this only surfaces them.
+                        STALE proposals were never decided by a human, so there is
+                        no actor to show for those. */}
+                    {proposal.decidedByUser && proposal.decidedAt ? (
+                      <span className="text-xs text-muted-foreground">
+                        Decided by {proposal.decidedByUser.name ?? proposal.decidedByUser.email} on{" "}
+                        {proposal.decidedAt.toISOString().slice(0, 10)}
                       </span>
                     ) : null}
                   </div>

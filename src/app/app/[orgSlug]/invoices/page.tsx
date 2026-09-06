@@ -13,10 +13,18 @@ import type { Currency } from "@/server/ar/currency";
 import { daysBetween, getBusinessToday, toDateOnlyString } from "@/server/ar/dates";
 import { listInvoicesWithFinancials, type InvoiceListFilter } from "@/server/ar/invoices";
 import { formatMoney } from "@/server/ar/money";
+import { getPaymentOutlookForInvoiceIds, paymentOutlookLabel, type PaymentOutlookBand } from "@/server/attention/payment-outlook";
 import { computeOverduePriority } from "@/server/operator/insights";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
 import { getCollectionsBadgesForInvoices } from "../collections-badge";
 import { getInvoiceStatusDisplay } from "./status";
+
+const OUTLOOK_TONE: Record<PaymentOutlookBand, NonNullable<BadgeProps["tone"]>> = {
+  "on-track": "neutral",
+  likely: "success",
+  "at-risk": "danger",
+  "insufficient-history": "neutral",
+};
 
 // Reuses the exact same priority function the Operator/Action Center use
 // for its insight priority (src/server/operator/insights.ts) — never a
@@ -61,11 +69,15 @@ export default async function InvoicesPage({
   const hasMore = page.length > INVOICE_PAGE_SIZE;
   const invoices = hasMore ? page.slice(0, INVOICE_PAGE_SIZE) : page;
   const nextCursor = hasMore ? invoices.at(-1)!.invoice.id : null;
-  const collectionsBadges = await getCollectionsBadgesForInvoices(
-    context.organization.id,
-    invoices.map(({ invoice }) => invoice.id),
-  );
   const today = getBusinessToday();
+  const [collectionsBadges, paymentOutlooks] = await Promise.all([
+    getCollectionsBadgesForInvoices(context.organization.id, invoices.map(({ invoice }) => invoice.id)),
+    getPaymentOutlookForInvoiceIds(
+      context.organization.id,
+      invoices.map(({ invoice }) => invoice.id),
+      today,
+    ),
+  ]);
 
   function pageHref(nextPageCursor: string | null): string {
     const query = new URLSearchParams();
@@ -121,6 +133,7 @@ export default async function InvoicesPage({
                 <TableHead>Due</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Priority</TableHead>
+                <TableHead>Payment outlook</TableHead>
                 <TableHead>Collections</TableHead>
               </TableRow>
             </TableHeader>
@@ -159,6 +172,17 @@ export default async function InvoicesPage({
                       ) : (
                         <span className="text-xs text-muted-foreground">—</span>
                       )}
+                    </TableCell>
+                    <TableCell>
+                      {(() => {
+                        const outlook = paymentOutlooks.get(invoice.id);
+                        if (!outlook) return <span className="text-xs text-muted-foreground">—</span>;
+                        return (
+                          <Badge tone={OUTLOOK_TONE[outlook.band]} title={outlook.explanation}>
+                            {paymentOutlookLabel(outlook.band)}
+                          </Badge>
+                        );
+                      })()}
                     </TableCell>
                     <TableCell>
                       {collectionsBadge ? <Badge tone={collectionsBadge.tone}>{collectionsBadge.label}</Badge> : <span className="text-xs text-muted-foreground">—</span>}

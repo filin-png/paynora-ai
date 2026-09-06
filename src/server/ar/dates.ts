@@ -53,3 +53,15 @@ export function daysBetween(from: string, to: string): number {
   const toMs = Date.parse(`${to}T00:00:00.000Z`);
   return Math.round((toMs - fromMs) / 86_400_000);
 }
+
+/**
+ * Shifts a "YYYY-MM-DD" calendar date by `days` (may be negative) — the
+ * same UTC-midnight arithmetic `daysBetween` uses in reverse. Used by
+ * `attention/payment-outlook.ts` to project an "expected payment date"
+ * from a due date plus a customer's own real average delay, and by
+ * `briefing/cash-flow-risk.ts` for its weekly windows.
+ */
+export function addDaysToDateOnlyString(date: string, days: number): string {
+  const ms = Date.parse(`${date}T00:00:00.000Z`) + days * 86_400_000;
+  return toDateOnlyString(new Date(ms));
+}

@@ -1,14 +1,18 @@
 import { tryGenerateStructured } from "@/server/ai/service";
+import { getAttentionScoresForInvoiceIds } from "@/server/attention/for-invoices";
+import { getPaymentOutlookForInvoiceIds } from "@/server/attention/payment-outlook";
 import { formatMoney } from "@/server/ar/money";
 import { getCustomer } from "@/server/ar/customers";
+import { getBusinessToday } from "@/server/ar/dates";
 import { ArResourceNotFoundError } from "@/server/ar/errors";
+import { getInvoiceWithFinancials } from "@/server/ar/invoices";
 import { getCustomerReceivablesSummaries } from "@/server/ar/summary";
 import { assertCopilotEntitled, checkAiGenerationQuota, recordCopilotUsage } from "@/server/billing/entitlements";
 import { getDailyBrief } from "@/server/briefing/daily-brief";
 import { getCashFlowRiskWindows } from "@/server/briefing/cash-flow-risk";
 import { getWhatChanged } from "@/server/briefing/what-changed";
 import { getCustomerPaymentTrend } from "@/server/customer-intelligence/trends";
-import { getActionProposal } from "@/server/operator/approval";
+import { getActionProposal, listPendingActionProposals } from "@/server/operator/approval";
 import { OperatorResourceNotFoundError } from "@/server/operator/errors";
 import { aiGenerationPolicy } from "@/server/rate-limit/policies";
 import { checkRateLimit } from "@/server/rate-limit/service";
@@ -26,6 +30,7 @@ import { buildCopilotExplanationRequest } from "./ai-context";
 export const COPILOT_QUESTION_TYPES = [
   "why_important",
   "explain_customer",
+  "explain_invoice",
   "what_changed_this_week",
   "focus_invoices",
   "cash_flow_risk",
@@ -105,6 +110,39 @@ async function buildExplainCustomerAnswer(organizationId: string, customerId: st
   return `${customer.name} — outstanding: ${outstandingText}. ${trendText}`;
 }
 
+/**
+ * Phase 22 — answers "why did this invoice get [high/this] risk" for any
+ * invoice, not just ones with a pending proposal (unlike `why_important`,
+ * which needs an ActionProposal). Reuses the exact same
+ * `getAttentionScoresForInvoiceIds`/`getPaymentOutlookForInvoiceIds` bulk
+ * helpers the invoice list and Action Center already call — never a
+ * second scoring implementation, just a single-invoice lookup through the
+ * bulk API.
+ */
+async function buildExplainInvoiceAnswer(organizationId: string, invoiceId: string): Promise<string> {
+  const { invoice, financials } = await getInvoiceWithFinancials(organizationId, invoiceId);
+  if (financials.isPaid) {
+    return `${invoice.number} is fully paid — no outstanding risk.`;
+  }
+
+  const [pendingProposals, outlooks] = await Promise.all([
+    listPendingActionProposals(organizationId),
+    getPaymentOutlookForInvoiceIds(organizationId, [invoiceId], getBusinessToday()),
+  ]);
+  const hasUnresolvedAction = pendingProposals.some((p) => p.invoiceId === invoiceId);
+  const attention = (
+    await getAttentionScoresForInvoiceIds(organizationId, [invoiceId], new Set(hasUnresolvedAction ? [invoiceId] : []))
+  ).get(invoiceId)!;
+  const outlook = outlooks.get(invoiceId);
+
+  const factorText = attention.attention.factors
+    .filter((f) => f.value > 0)
+    .map((f) => f.label.toLowerCase())
+    .join(", ");
+  const outlookText = outlook ? ` ${outlook.explanation}` : "";
+  return `${invoice.number} has an attention score of ${attention.attention.score}/100, driven mainly by: ${factorText || "no significant factors"}.${outlookText}`;
+}
+
 async function buildWhatChangedAnswer(organizationId: string): Promise<string> {
   const changes = await getWhatChanged(organizationId, 24 * 7);
   if (changes.length === 0) return "Nothing notable changed in the last 7 days.";
@@ -144,14 +182,15 @@ async function buildCashFlowRiskAnswer(organizationId: string): Promise<string> 
 
 /**
  * The one entry point the UI calls. `targetId` is required for
- * `why_important` (an ActionProposal id) and `explain_customer` (a
- * Customer id); every other question type is organization-scoped only.
- * Tenant isolation is enforced by each underlying call
- * (getActionProposal/getCustomer already scope by organizationId and
- * throw OperatorResourceNotFoundError/ArResourceNotFoundError for a
- * cross-tenant id, the same enumeration-safe pattern as every other
- * lookup in this codebase) — this function adds no separate check because
- * it has nothing to check beyond what those calls already do.
+ * `why_important` (an ActionProposal id), `explain_customer` (a Customer
+ * id), and `explain_invoice` (an Invoice id, Phase 22); every other
+ * question type is organization-scoped only. Tenant isolation is enforced
+ * by each underlying call (getActionProposal/getCustomer/
+ * getInvoiceWithFinancials already scope by organizationId and throw
+ * OperatorResourceNotFoundError/ArResourceNotFoundError for a cross-tenant
+ * id, the same enumeration-safe pattern as every other lookup in this
+ * codebase) — this function adds no separate check because it has
+ * nothing to check beyond what those calls already do.
  *
  * Phase 19: `assertCopilotEntitled` is the first thing this function does
  * — a plan without Copilot access never reaches even the deterministic
@@ -178,6 +217,10 @@ export async function answerCopilotQuestion(
     case "explain_customer":
       if (!targetId) throw new ArResourceNotFoundError("Customer");
       deterministicAnswer = await buildExplainCustomerAnswer(organizationId, targetId);
+      break;
+    case "explain_invoice":
+      if (!targetId) throw new ArResourceNotFoundError("Invoice");
+      deterministicAnswer = await buildExplainInvoiceAnswer(organizationId, targetId);
       break;
     case "what_changed_this_week":
       deterministicAnswer = await buildWhatChangedAnswer(organizationId);

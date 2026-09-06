@@ -157,7 +157,14 @@ const RECENTLY_DECIDED_LIMIT = 20;
 export async function listRecentlyDecidedActionProposals(organizationId: string, take = RECENTLY_DECIDED_LIMIT) {
   return prisma.actionProposal.findMany({
     where: { organizationId, status: { in: ["APPROVED", "DISMISSED", "EXECUTED", "STALE"] } },
-    include: { invoice: { include: { customer: true } }, customer: true, insight: true },
+    // `decidedByUser` (Phase 22): powers the Action Center's audit-trail
+    // line ("Decided by X on Y") — the column already existed
+    // (`decidedByUserId`/`decidedAt`, set atomically in
+    // `transitionActionProposal`), this just includes the relation so the
+    // UI can show a name instead of a bare id. A STALE proposal was never
+    // decided by a human, so `decidedByUser` is null for those — the UI
+    // handles that case explicitly, never invents an actor.
+    include: { invoice: { include: { customer: true } }, customer: true, insight: true, decidedByUser: true },
     orderBy: [{ decidedAt: "desc" }, { createdAt: "desc" }],
     take,
   });

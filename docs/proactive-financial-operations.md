@@ -291,7 +291,7 @@ mocking a provider response.
   `CUSTOMER_PAYMENT_BEHAVIOR_DETERIORATED` detector and the Copilot's
   `explain_customer` answer already use.
 
-## Known limitations
+## Known limitations (Phase 16)
 
 - The invoices list highlights priority visually rather than re-sorting by
   it, to preserve the existing cursor-pagination invariant. A future phase
@@ -309,3 +309,174 @@ mocking a provider response.
 - No production AI or messaging credentials were connected while building
   this phase; every path above was exercised through its deterministic
   fallback, not a live provider call.
+
+## Phase 22 — Ask PAYNORA UI, payment outlook, customer risk, financial impact
+
+Phase 22 is the "user layer" this document's Phase 16 section had deferred:
+the Copilot gets a real UI surface, invoices and customers get an
+explainable outlook/risk view, and the Action Center gets a financial-impact
+figure and an audit trail. Every piece below is additive to the
+detectors -> attention score -> briefing -> copilot -> proposal pipeline
+described above — nothing in that pipeline changed, and nothing here is a
+second scoring or trend system.
+
+### Payment outlook (`src/server/attention/payment-outlook.ts`)
+
+Answers the brief's "probability of payment" and "expected payment window"
+asks without inventing a percentage (the brief's own constraint: no
+fabricated numbers). `computePaymentOutlook` is a pure function combining
+two facts this codebase already computes:
+
+1. This invoice's own overdue priority (`computeOverduePriority` —
+   unchanged, the same function the invoice list and Operator already use).
+2. This customer's real payment-delay trend
+   (`customer-intelligence/trends.ts` — unchanged).
+
+The result is a qualitative band — `on-track` / `likely` / `at-risk` /
+`insufficient-history` — never a percentage, plus an "expected payment
+date" that is the due date shifted by the customer's own real average
+delay, and is `null` whenever there isn't enough real history to compute
+one. `getPaymentOutlookForInvoiceIds` is the bulk lookup, mirroring
+`attention/for-invoices.ts`'s existing shape — one org-wide trend query,
+grouped in memory, never a per-invoice round trip. Shown on the invoices
+list (a new "Payment outlook" column, badge + hover explanation) and the
+invoice detail page.
+
+The invoices list does **not** gain a sort/filter control for this signal
+in this phase — the same cursor-pagination tradeoff Phase 16 already
+documented above for "Priority" applies identically here, and re-deriving
+it per invoice would mean scoring every invoice before pagination could
+apply, defeating the cursor's cost bound. Recorded, not fixed — a future
+phase could add an offset-paginated "risk view" if this is worth it.
+
+### Customer risk (`src/server/customer-intelligence/risk.ts`)
+
+`getCustomerRiskProfile` never introduces a second scoring formula: a
+customer's `currentRiskScore` is the highest `computeAttentionScore` among
+that customer's own open, overdue invoices (0 when none are overdue) —
+literally reusing `attention/score.ts`. `riskLevel` (`none`/`low`/`medium`/
+`high`) is a fixed banding of that same number. `recommendedNextAction` is
+built entirely from facts already established elsewhere on the page (does
+the riskiest invoice already have a pending proposal, is the trend
+deteriorating) — never a separate claim. Shown on the customer detail page
+next to the existing payment-behavior-trend card.
+
+### Copilot UI (`src/components/copilot/copilot-panel.tsx`, `src/app/app/[orgSlug]/copilot-actions.ts`)
+
+The single gap Phase 16 recorded and left open: the Copilot's fixed
+question set had no UI. `CopilotPanel` is a small client component — a row
+of buttons for a caller-supplied subset of the fixed
+`CopilotQuestionType` set, never a free-text box — calling the one Server
+Action (`askCopilotAction`) every surface shares. `askCopilotAction`
+re-derives `organizationId` from `orgSlug` via
+`requireOrganizationMembershipForPage` exactly like every other Server
+Action in this app; it never accepts an organization id from the client.
+Failures are normalized to one of four states (`ok`/`not_entitled`/
+`not_found`/`error`) — a raw exception message is never forwarded to the
+client (see `SECURITY.md`'s error-normalization discipline).
+
+A sixth question type was added, `explain_invoice`
+(`buildExplainInvoiceAnswer` in `copilot/service.ts`), because the
+existing `why_important` requires a pending `ActionProposal` and can't
+answer "why did *this* invoice get this risk" for an invoice that doesn't
+have one yet. It reuses the same bulk attention-score and payment-outlook
+lookups the invoice list already calls — no new computation.
+
+Embedded on:
+
+- **Overview "Today"** — `focus_invoices` ("Who should I handle first?"),
+  `cash_flow_risk`, `what_changed_this_week`.
+- **Invoice detail** — `explain_invoice`.
+- **Customer detail** — `explain_customer`.
+- **Action Center** — `why_important`, one panel per pending proposal.
+
+Every surface degrades honestly on a FREE-plan organization (Copilot
+requires `copilotEnabled`, unchanged from Phase 19): the panel renders the
+existing `FeatureNotEntitledError` as an inline upsell instead of an error,
+verified in browser QA against a real FREE-plan organization.
+
+### Action Center: financial impact and audit trail
+
+Each pending proposal card now also shows the invoice's real outstanding
+balance ("RUB 500.00 at stake") — reusing the same
+`listInvoicesWithFinancials` bulk lookup the invoice list and
+`attention/for-invoices.ts` already use, not a second query per proposal.
+`listRecentlyDecidedActionProposals` (`operator/approval.ts`) now includes
+the `decidedByUser` relation — the `decidedByUserId`/`decidedAt` columns
+already existed (set atomically by `transitionActionProposal` since Phase
+3) and were simply never joined into a name before; the "Recently decided"
+list now shows "Decided by X on Y" for anything a human actually decided,
+and shows nothing for `STALE` proposals (the system resolved those, not a
+person — never inventing an actor).
+
+### Overview additions
+
+`getDailyBrief` gained two fields, both computed from data the function
+already fetches or a query it already makes elsewhere in this codebase —
+neither is a new source of truth:
+
+- `customersNeedingAttention` — customers with a real `deteriorating`
+  trend (reusing `getAllCustomerPaymentTrends`, the same query the Phase
+  16 detector uses), worst delta first, capped at 5.
+- `priorityCollectionMinor` — the sum of outstanding balance across
+  HIGH-priority overdue invoices only, in the primary currency, computed
+  from the same per-invoice attention scoring `attentionItems` already
+  does (no second scoring pass). This is the brief's "priority collection
+  amount" — real money already summed elsewhere, never a fabricated
+  figure.
+
+Both are shown on Overview: a new "Customers needing attention" panel next
+to the Copilot panel, and a fifth "PAYNORA Financial Impact" stat.
+
+A genuine gap remains, recorded rather than silently built past: a
+period-over-period delta for the overdue amount / priority collection
+amount (the brief's "changes vs. the previous period, if the data allows
+computing this") would need a second historical reconstruction of overdue
+balance-as-of-a-past-date (the existing `getReceivablesTrend` only
+reconstructs *outstanding*, not *overdue*, historically). Building that
+purely to check a box, without a clear need for it yet, would be exactly
+the kind of scope padding this project's own discipline argues against —
+so it was left out this phase, with this note instead of a fabricated
+number.
+
+### Tests added
+
+`payment-outlook.test.ts` (band logic + tenant isolation), `risk.test.ts`
+(risk levels + tenant isolation), `daily-brief.test.ts` (new fields +
+tenant isolation — this file also newly covers `getDailyBrief`'s
+pre-existing behavior, which had no dedicated test file before this
+phase), and six new cases in `copilot/service.test.ts` for
+`explain_invoice` (deterministic answer, not-yet-due handling, tenant
+isolation).
+
+### Security review (Phase 22)
+
+- **Tenant isolation**: every new function takes `organizationId` and
+  scopes its underlying query by it; a cross-tenant id is silently absent
+  from bulk results (`getPaymentOutlookForInvoiceIds`,
+  `getCustomerRiskProfile`) or throws the same enumeration-safe
+  `ArResourceNotFoundError` every existing lookup does
+  (`explain_invoice`/`explain_customer`) — all four proven by a dedicated
+  test, not just asserted in a comment.
+- **Authorization / Server Action**: `askCopilotAction` never accepts an
+  organization id — it re-derives one from `orgSlug` via
+  `requireOrganizationMembershipForPage`, so a direct call with someone
+  else's `orgSlug` fails the membership check before touching any Copilot
+  logic, identically to every pre-existing Server Action in this app.
+- **Entitlement bypass**: `explain_invoice` goes through the exact same
+  `assertCopilotEntitled` gate every other question type already does —
+  no new bypass path, verified in browser QA against a real FREE-plan
+  organization (rendered the upsell, never an answer).
+- **AI prompt injection**: `explain_invoice`'s deterministic answer is
+  built entirely from invoice numbers, fixed factor labels, and template
+  strings — no raw customer-authored text (notes, names aside) enters it,
+  and the Copilot's existing system-prompt/structured-input separation
+  (`copilot/ai-context.ts`, unchanged) applies identically regardless of
+  which fixed question was asked — proven generically by the existing
+  `ai-context.test.ts`, which never assumed a fixed question-type list.
+- **Sensitive data / telemetry**: `askCopilotAction`'s failure path never
+  forwards a raw exception message to the client (only the two
+  recognized, safe states); its server-side log line carries `orgSlug`
+  and a normalized message, no financial figures or secrets, matching the
+  existing telemetry discipline (`SECURITY.md`).
+- No blocking issues found.

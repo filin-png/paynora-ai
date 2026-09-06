@@ -3,12 +3,13 @@ import { notFound } from "next/navigation";
 import { ArrowLeft, CalendarClock, PauseCircle, PlayCircle } from "lucide-react";
 
 import { Alert } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
+import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogCancelButton } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SectionHeader } from "@/components/ui/page-header";
+import { CopilotPanel } from "@/components/copilot/copilot-panel";
 import { cn } from "@/lib/utils";
 import { isResourceNotFoundError } from "@/lib/not-found";
 import { listInvoiceActivity } from "@/server/ar/activity";
@@ -17,7 +18,15 @@ import { daysBetween, getBusinessToday, toDateOnlyString } from "@/server/ar/dat
 import { getInvoiceWithFinancials } from "@/server/ar/invoices";
 import { formatMoney } from "@/server/ar/money";
 import { listPaymentsForInvoice } from "@/server/ar/payments";
+import { getPaymentOutlookForInvoiceIds, paymentOutlookLabel, type PaymentOutlookBand } from "@/server/attention/payment-outlook";
 import { getCollectionStatusForInvoice, type CollectionStatusView } from "@/server/collections/sequences";
+
+const OUTLOOK_TONE: Record<PaymentOutlookBand, NonNullable<BadgeProps["tone"]>> = {
+  "on-track": "neutral",
+  likely: "success",
+  "at-risk": "danger",
+  "insufficient-history": "neutral",
+};
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
 import { listCryptoPaymentRequestsForInvoice } from "@/server/wallet/payment-requests";
 import { isWalletEnabled } from "@/server/wallet/service";
@@ -54,7 +63,7 @@ export default async function InvoiceDetailPage({
   );
   const canRecordPayment = invoice.status === "OPEN" && financials.outstandingMinor > 0n;
 
-  const [payments, activityPage, collectionsStatus, cryptoRequests, activeWallets] = await Promise.all([
+  const [payments, activityPage, collectionsStatus, cryptoRequests, activeWallets, paymentOutlooks] = await Promise.all([
     listPaymentsForInvoice(context.organization.id, invoiceId),
     listInvoiceActivity(context.organization.id, invoiceId, {
       cursor: activityCursor,
@@ -63,7 +72,9 @@ export default async function InvoiceDetailPage({
     getCollectionStatusForInvoice(context.organization.id, invoiceId),
     canRecordPayment ? listCryptoPaymentRequestsForInvoice(context.organization.id, invoiceId) : Promise.resolve([]),
     canRecordPayment ? listWallets(context.organization.id, { status: "ACTIVE" }) : Promise.resolve([]),
+    getPaymentOutlookForInvoiceIds(context.organization.id, [invoiceId], getBusinessToday()),
   ]);
+  const outlook = paymentOutlooks.get(invoiceId);
   const activityHasMore = activityPage.length > ACTIVITY_PAGE_SIZE;
   const activity = activityHasMore ? activityPage.slice(0, ACTIVITY_PAGE_SIZE) : activityPage;
   const nextActivityCursor = activityHasMore ? activity.at(-1)!.id : null;
@@ -153,6 +164,22 @@ export default async function InvoiceDetailPage({
         invoiceId={invoiceId}
         status={collectionsStatus}
         isOwner={context.role === "OWNER"}
+      />
+
+      {outlook ? (
+        <Card className="flex flex-wrap items-center justify-between gap-3 p-5">
+          <div>
+            <p className="text-xs font-medium text-muted-foreground">Payment outlook</p>
+            <p className="mt-1 text-sm text-foreground">{outlook.explanation}</p>
+          </div>
+          <Badge tone={OUTLOOK_TONE[outlook.band]}>{paymentOutlookLabel(outlook.band)}</Badge>
+        </Card>
+      ) : null}
+
+      <CopilotPanel
+        orgSlug={orgSlug}
+        targetId={invoiceId}
+        questions={[{ type: "explain_invoice", label: "Why this risk level?" }]}
       />
 
       {canRecordPayment ? (
