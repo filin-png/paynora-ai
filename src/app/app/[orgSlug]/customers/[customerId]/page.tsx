@@ -2,13 +2,14 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, Mail, Phone, Plus, Send, TriangleAlert } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
+import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogCancelButton } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SectionHeader } from "@/components/ui/page-header";
 import { TrendBadge } from "@/components/ui/trend-indicator";
+import { CopilotPanel } from "@/components/copilot/copilot-panel";
 import { cn } from "@/lib/utils";
 import { isResourceNotFoundError } from "@/lib/not-found";
 import { resolveCommunicationDestination } from "@/server/communications/channel";
@@ -17,10 +18,24 @@ import { getCustomer } from "@/server/ar/customers";
 import { listInvoicesWithFinancials } from "@/server/ar/invoices";
 import { formatMoney } from "@/server/ar/money";
 import type { Currency } from "@/server/ar/currency";
-import { getCustomerPaymentTrend } from "@/server/customer-intelligence/trends";
+import { getCustomerRiskProfile, type CustomerRiskLevel } from "@/server/customer-intelligence/risk";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
 import { getInvoiceStatusDisplay } from "../../invoices/status";
 import { archiveCustomerAction } from "./actions";
+
+const RISK_TONE: Record<CustomerRiskLevel, NonNullable<BadgeProps["tone"]>> = {
+  none: "neutral",
+  low: "neutral",
+  medium: "warning",
+  high: "danger",
+};
+
+const RISK_LABEL: Record<CustomerRiskLevel, string> = {
+  none: "No risk",
+  low: "Low risk",
+  medium: "Medium risk",
+  high: "High risk",
+};
 
 // See docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-6 — bounds a
 // long-lived customer's activity timeline.
@@ -41,7 +56,7 @@ export default async function CustomerDetailPage({
     throw error;
   });
   const invoices = await listInvoicesWithFinancials(context.organization.id, "all", { customerId });
-  const paymentTrend = await getCustomerPaymentTrend(context.organization.id, customerId);
+  const riskProfile = await getCustomerRiskProfile(context.organization.id, customerId);
   const activityPage = await listCustomerActivity(context.organization.id, customerId, {
     cursor: activityCursor,
     take: ACTIVITY_PAGE_SIZE + 1,
@@ -158,16 +173,26 @@ export default async function CustomerDetailPage({
       ) : null}
 
       <Card className="p-5">
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-xs font-medium text-muted-foreground">Payment behavior trend</p>
-          <TrendBadge trend={paymentTrend} />
+          <div className="flex items-center gap-2">
+            <Badge tone={RISK_TONE[riskProfile.riskLevel]}>{RISK_LABEL[riskProfile.riskLevel]}</Badge>
+            <TrendBadge trend={riskProfile.trend} />
+          </div>
         </div>
         <p className="mt-1.5 text-sm text-foreground">
-          {paymentTrend.status === "insufficient-history"
+          {riskProfile.trend.status === "insufficient-history"
             ? "Not enough payment history yet to identify a trend — this needs at least two recorded payments in each of two comparison windows."
-            : `Recent average delay: ${paymentTrend.recentAvgDelayDays} day(s) (was ${paymentTrend.previousAvgDelayDays} day(s)), based on ${paymentTrend.recentPaymentCount} recent and ${paymentTrend.previousPaymentCount} prior payment(s).`}
+            : `Recent average delay: ${riskProfile.trend.recentAvgDelayDays} day(s) (was ${riskProfile.trend.previousAvgDelayDays} day(s)), based on ${riskProfile.trend.recentPaymentCount} recent and ${riskProfile.trend.previousPaymentCount} prior payment(s).`}
         </p>
+        <p className="mt-2 text-xs text-muted-foreground">{riskProfile.recommendedNextAction}</p>
       </Card>
+
+      <CopilotPanel
+        orgSlug={orgSlug}
+        targetId={customerId}
+        questions={[{ type: "explain_customer", label: `Explain ${customer.name}'s risk` }]}
+      />
 
       <div>
         <SectionHeader

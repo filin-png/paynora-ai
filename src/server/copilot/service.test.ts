@@ -101,6 +101,58 @@ describe("answerCopilotQuestion", () => {
     );
   });
 
+  it("explain_invoice: reports the real attention score for an overdue invoice with no pending proposal (Phase 22 — unlike why_important, needs no ActionProposal)", async () => {
+    const { organization } = await createCopilotEntitledOrganization();
+    const customer = await createCustomer(organization.id, { name: "Acme" });
+    const invoice = await createInvoice(organization.id, {
+      customerId: customer.id,
+      number: "INV-EXPLAIN-1",
+      currency: "USD",
+      amountMinor: majorToMinor(500),
+      issueDate: "2020-01-01",
+      dueDate: "2020-01-15",
+    });
+
+    const answer = await answerCopilotQuestion(organization.id, "explain_invoice", invoice.id);
+    expect(answer.deterministicAnswer).toContain("INV-EXPLAIN-1");
+    expect(answer.deterministicAnswer).toContain("attention score");
+  });
+
+  it("explain_invoice: for an invoice that isn't overdue yet, reports its outlook as 'not yet due' rather than a fabricated overdue risk", async () => {
+    const { organization } = await createCopilotEntitledOrganization();
+    const customer = await createCustomer(organization.id, { name: "Acme" });
+    const invoice = await createInvoice(organization.id, {
+      customerId: customer.id,
+      number: "INV-NOTOVERDUE-1",
+      currency: "USD",
+      amountMinor: majorToMinor(500),
+      issueDate: "2020-01-01",
+      dueDate: "2099-01-15",
+    });
+
+    const answer = await answerCopilotQuestion(organization.id, "explain_invoice", invoice.id);
+    expect(answer.deterministicAnswer).toContain("INV-NOTOVERDUE-1");
+    expect(answer.deterministicAnswer).toContain("Not yet due");
+  });
+
+  it("explain_invoice: throws for an invoice id from another organization (tenant isolation)", async () => {
+    const { organization: orgA } = await createCopilotEntitledOrganization("Org A");
+    const { organization: orgB } = await createCopilotEntitledOrganization("Org B");
+    const customerA = await createCustomer(orgA.id, { name: "A Customer" });
+    const invoiceA = await createInvoice(orgA.id, {
+      customerId: customerA.id,
+      number: "INV-CROSS-1",
+      currency: "USD",
+      amountMinor: majorToMinor(500),
+      issueDate: "2020-01-01",
+      dueDate: "2020-01-15",
+    });
+
+    await expect(answerCopilotQuestion(orgB.id, "explain_invoice", invoiceA.id)).rejects.toThrow(
+      ArResourceNotFoundError,
+    );
+  });
+
   it("what_changed_this_week: reports real recent payments, never fabricated ones", async () => {
     const { organization } = await createCopilotEntitledOrganization();
     const customer = await createCustomer(organization.id, { name: "Acme" });

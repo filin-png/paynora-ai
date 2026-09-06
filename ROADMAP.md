@@ -424,7 +424,8 @@ See `docs/privacy-data-inventory.md`, `docs/data-flows.md`.
       caused the payment")
 - [x] A small, fixed-question grounded Copilot (never free-text chat) —
       the deterministic building blocks it depends on are surfaced
-      directly in the UI; a dedicated Copilot UI surface is not yet built
+      directly in the UI; a dedicated Copilot UI surface was added in
+      Phase 22
 - [x] Full UI layer: Overview "Today" section, Action Center attention/
       stale display, invoice list priority badges, customer detail trend
       card
@@ -600,6 +601,55 @@ See `docs/proactive-financial-operations.md`.
       wiring anywhere — real Mistral traffic today only flows through
       Operator insight generation and Communications reminder-email
       drafting, both already reachable from the Action Center
+      (the Copilot half of this gap was closed in Phase 22 below; the
+      web-search decision step still has no UI — untouched, out of that
+      phase's scope)
+
+### Phase 22 — Proactive Financial Operations: the user layer — see `docs/proactive-financial-operations.md#phase-22--ask-paynora-ui-payment-outlook-customer-risk-financial-impact`
+
+- [x] Full architectural audit of Phase 16's proactive backend before any
+      change — found the detectors/attention-score/briefing/copilot/trends
+      layer already complete and correct; the actual gap was a missing
+      user layer (no Copilot UI, no payment-outlook/customer-risk display,
+      no financial-impact figure on Action Center), not missing domain
+      logic
+- [x] `attention/payment-outlook.ts` (new) — grounded payment-likelihood
+      band (`on-track`/`likely`/`at-risk`/`insufficient-history`) and
+      expected-payment-date projection, reusing `computeOverduePriority`
+      and the customer payment-delay trend — never an invented
+      probability percentage
+- [x] `customer-intelligence/risk.ts` (new) — customer risk level and
+      recommended next action, reusing `computeAttentionScore` (the
+      customer's risk is the max of their own open invoices' attention
+      scores, never a second formula)
+- [x] Copilot UI (`components/copilot/copilot-panel.tsx` +
+      `app/[orgSlug]/copilot-actions.ts`, new) — the fixed question set
+      Phase 16 built but never exposed is now embedded on Overview,
+      Invoice detail, Customer detail, and Action Center; a sixth
+      question type (`explain_invoice`) added for invoices with no
+      pending proposal yet
+- [x] Action Center: financial impact ("RUB X at stake") and an audit
+      trail ("Decided by X on Y") — both surface data that already
+      existed (`listInvoicesWithFinancials`, `decidedByUserId`/
+      `decidedAt`), never a new computation or a new column
+- [x] Overview: "Customers needing attention" (real deteriorating trends)
+      and a "priority collection amount" stat, both added to
+      `getDailyBrief` from data it already computes
+- [x] Invoices list: "Payment outlook" column (no new sort/filter — same
+      cursor-pagination tradeoff Phase 16 already documented for
+      "Priority", recorded not fixed)
+- [x] 19 new tests (payment-outlook bands + tenant isolation, customer
+      risk + tenant isolation, daily-brief new fields + tenant isolation
+      — plus first-ever coverage of `getDailyBrief`'s pre-existing
+      behavior — and `explain_invoice` deterministic/tenant-isolation
+      cases)
+- [x] Security review: tenant isolation, Server Action authorization,
+      entitlement bypass, AI prompt injection, sensitive-data/telemetry
+      leakage — no blocking issues found
+- [x] Full validation gate (typecheck, lint, `prisma validate`, full test
+      suite — 1003 passed, 3 skipped — production build) and browser QA
+      at 1440×900 and 390×844 against a real FREE-plan organization with
+      real invoice/customer/proposal data (no mocks, no demo seed)
 
 ## What's still genuinely open (superseding the old Phase 9–13 plan above)
 

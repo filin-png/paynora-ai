@@ -1,5 +1,5 @@
 import type { Currency } from "@/server/ar/currency";
-import { daysBetween, getBusinessToday, toDateOnlyString } from "@/server/ar/dates";
+import { addDaysToDateOnlyString, daysBetween, getBusinessToday, toDateOnlyString } from "@/server/ar/dates";
 import { listInvoicesWithFinancials } from "@/server/ar/invoices";
 import { getOrganizationArSummary } from "@/server/ar/summary";
 
@@ -38,10 +38,7 @@ export type CashFlowRiskWindow = {
 const WEEK_DAYS = 7;
 const MEANINGFUL_OVERDUE_RATE = 0.25;
 
-function addDays(dateStr: string, days: number): string {
-  const ms = Date.parse(`${dateStr}T00:00:00.000Z`) + days * 86_400_000;
-  return toDateOnlyString(new Date(ms));
-}
+const addDays = addDaysToDateOnlyString;
 
 export async function getCashFlowRiskWindows(
   organizationId: string,

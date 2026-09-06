@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { AlertTriangle, ArrowRight, CalendarClock, Plus, Receipt, Sparkles, UserPlus, Zap } from "lucide-react";
+import { AlertTriangle, ArrowRight, CalendarClock, Flame, Plus, Receipt, Sparkles, UserPlus, Zap } from "lucide-react";
 
 import { AIInsightCard, AIInsightsPanel } from "@/components/ui/ai-insight-card";
 import { AttentionScoreBadge, explainAttentionScore } from "@/components/ui/attention-score";
@@ -12,6 +12,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { GlassCard } from "@/components/ui/glass-card";
 import { MetricCard } from "@/components/ui/metric-card";
 import { PageHeader, SectionHeader } from "@/components/ui/page-header";
+import { TrendBadge } from "@/components/ui/trend-indicator";
+import { CopilotPanel } from "@/components/copilot/copilot-panel";
 import { cn } from "@/lib/utils";
 import { listOrganizationActivity } from "@/server/ar/activity";
 import type { Currency } from "@/server/ar/currency";
@@ -93,6 +95,7 @@ export default async function OrganizationDashboardPage({
     ? (summary.find((s) => s.currency === primaryCurrency)?.totalOverdueMinor ?? 0n)
     : 0n;
   const cashFlowRiskCount = dailyBrief.cashFlowRiskWindows.filter((w) => w.isPotentialRisk).length;
+  const priorityCollectionMinor = dailyBrief.priorityCollectionMinor ?? 0n;
 
   const proposalGroups = new Map<
     string,
@@ -144,7 +147,7 @@ export default async function OrganizationDashboardPage({
         <p className="mt-4 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
           PAYNORA Financial Impact
         </p>
-        <div className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           <ImpactStat
             icon={AlertTriangle}
             value={String(overdueCount)}
@@ -156,6 +159,12 @@ export default async function OrganizationDashboardPage({
             value={primaryCurrency ? formatMoney(overdueAtRiskMinor, primaryCurrency) : "—"}
             label="currently overdue"
             tone={overdueAtRiskMinor > 0n ? "danger" : "neutral"}
+          />
+          <ImpactStat
+            icon={Flame}
+            value={primaryCurrency ? formatMoney(priorityCollectionMinor, primaryCurrency) : "—"}
+            label="priority collection amount"
+            tone={priorityCollectionMinor > 0n ? "danger" : "neutral"}
           />
           <ImpactStat
             icon={CalendarClock}
@@ -224,6 +233,45 @@ export default async function OrganizationDashboardPage({
                 <p className="mt-3 text-xs text-muted">Nothing notable in the last 24 hours.</p>
               )}
             </GlassCard>
+          </div>
+        </div>
+
+        <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-5">
+          <GlassCard level={2} className="p-5 lg:col-span-3">
+            <h3 className="text-sm font-semibold text-foreground">Customers needing attention</h3>
+            {dailyBrief.customersNeedingAttention.length > 0 ? (
+              <ul className="mt-3 flex flex-col gap-2.5">
+                {dailyBrief.customersNeedingAttention.map((entry) => (
+                  <li
+                    key={entry.customerId}
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 bg-surface-raised/60 p-3.5"
+                  >
+                    <Link
+                      href={`/app/${orgSlug}/customers/${entry.customerId}`}
+                      className="text-sm font-medium text-foreground hover:text-primary"
+                    >
+                      {entry.customerName}
+                    </Link>
+                    <TrendBadge trend={entry.trend} />
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-3 py-6 text-center text-xs text-muted">
+                No customers have a recently deteriorating payment trend.
+              </p>
+            )}
+          </GlassCard>
+
+          <div className="lg:col-span-2">
+            <CopilotPanel
+              orgSlug={orgSlug}
+              questions={[
+                { type: "focus_invoices", label: "Who should I handle first?" },
+                { type: "cash_flow_risk", label: "What's my cash-flow risk?" },
+                { type: "what_changed_this_week", label: "What changed this week?" },
+              ]}
+            />
           </div>
         </div>
       </div>

@@ -86,6 +86,26 @@ export async function getCustomer(organizationId: string, customerId: string) {
 }
 
 /**
+ * Bulk name lookup for a known, already-bounded set of customer ids —
+ * used by briefing/daily-brief.ts (Phase 22) to label the "customers
+ * needing attention" list without an N+1 `getCustomer` call per customer.
+ * Tenant-scoped the same way every other customer query in this module
+ * is: a cross-tenant id in `customerIds` simply doesn't match, never
+ * throws.
+ */
+export async function getCustomerNamesByIds(
+  organizationId: string,
+  customerIds: string[],
+): Promise<Map<string, string>> {
+  if (customerIds.length === 0) return new Map();
+  const customers = await prisma.customer.findMany({
+    where: { organizationId, id: { in: customerIds } },
+    select: { id: true, name: true },
+  });
+  return new Map(customers.map((c) => [c.id, c.name]));
+}
+
+/**
  * Applied whenever a caller doesn't explicitly request a page size —
  * bounds worst-case query cost for callers that don't paginate (e.g. the
  * invoice-form customer picker) without changing their return shape. See
