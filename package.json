@@ -14,7 +14,8 @@
     "db:validate": "prisma validate",
     "postinstall": "prisma generate",
     "smoke": "tsx scripts/live-smoke-test.ts",
-    "report:subscriptions": "tsx scripts/subscription-report.ts"
+    "report:subscriptions": "tsx scripts/subscription-report.ts",
+    "production:check": "tsx scripts/production-check.ts"
   },
   "overrides": {
     "nodemailer": "^9.0.5"

@@ -255,4 +255,50 @@ describe("parseEnv", () => {
       /Invalid environment configuration/,
     );
   });
+
+  // Phase 23 — these three cross-validation branches (WALLET_PROVIDER=
+  // alchemy, ANALYTICS_PROVIDER=posthog, WEB_SEARCH_PROVIDER=anthropic)
+  // existed in env.ts's superRefine since Phase 14 but had no test
+  // coverage; a typo or a future refactor of any of them could silently
+  // stop enforcing a required-credential check without any test failing
+  // to say so.
+  it("rejects WALLET_PROVIDER=alchemy with no Alchemy credentials", () => {
+    expect(() => parseEnv({ ...validBase, WALLET_PROVIDER: "alchemy" })).toThrow(
+      /ALCHEMY_API_KEY is required when WALLET_PROVIDER="alchemy"/,
+    );
+  });
+
+  it("accepts WALLET_PROVIDER=alchemy with all four required Alchemy credentials set", () => {
+    const env = parseEnv({
+      ...validBase,
+      WALLET_PROVIDER: "alchemy",
+      ALCHEMY_API_KEY: "test-api-key",
+      ALCHEMY_AUTH_TOKEN: "test-auth-token",
+      ALCHEMY_WEBHOOK_ID: "wh_test",
+      ALCHEMY_WEBHOOK_SIGNING_KEY: "test-signing-key",
+    });
+    expect(env.WALLET_PROVIDER).toBe("alchemy");
+  });
+
+  it("rejects ANALYTICS_PROVIDER=posthog with no POSTHOG_API_KEY", () => {
+    expect(() => parseEnv({ ...validBase, ANALYTICS_PROVIDER: "posthog" })).toThrow(
+      /POSTHOG_API_KEY is required when ANALYTICS_PROVIDER="posthog"/,
+    );
+  });
+
+  it("accepts ANALYTICS_PROVIDER=posthog with POSTHOG_API_KEY set", () => {
+    const env = parseEnv({ ...validBase, ANALYTICS_PROVIDER: "posthog", POSTHOG_API_KEY: "phc_test" });
+    expect(env.ANALYTICS_PROVIDER).toBe("posthog");
+  });
+
+  it("rejects WEB_SEARCH_PROVIDER=anthropic with no ANTHROPIC_API_KEY", () => {
+    expect(() => parseEnv({ ...validBase, WEB_SEARCH_PROVIDER: "anthropic" })).toThrow(
+      /ANTHROPIC_API_KEY is required when WEB_SEARCH_PROVIDER="anthropic"/,
+    );
+  });
+
+  it("accepts WEB_SEARCH_PROVIDER=anthropic with ANTHROPIC_API_KEY set", () => {
+    const env = parseEnv({ ...validBase, WEB_SEARCH_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "sk-ant-test" });
+    expect(env.WEB_SEARCH_PROVIDER).toBe("anthropic");
+  });
 });

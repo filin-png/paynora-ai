@@ -651,6 +651,68 @@ See `docs/proactive-financial-operations.md`.
       at 1440×900 and 390×844 against a real FREE-plan organization with
       real invoice/customer/proposal data (no mocks, no demo seed)
 
+### Phase 23 — Production Readiness & Launch Architecture — see `docs/production-readiness.md`
+
+Architecture-and-hardening pass, not a deployment — no real credential
+was connected, no domain bought, no database created, nothing deployed.
+
+- [x] Full production audit across Next.js/App Router boundaries, Prisma,
+      Auth.js, tenancy, billing, webhooks, AI Gateway, rate limiting,
+      telemetry, env config, error handling, and existing docs — findings
+      classified CRITICAL/HIGH/MEDIUM/LOW/INFO before anything was
+      changed; only real, in-scope findings were acted on
+- [x] **The one finding that must not be missed**: this codebase's
+      existing Phase 9 database-connection architecture (one
+      `PrismaClient`/`pg.Pool` per long-lived process) is genuinely
+      incompatible with Vercel's default per-invocation serverless
+      function model — confirmed, not theoretical. Documented as BLOCKED
+      in `docs/production-readiness.md`, section 14 ("Vercel"), with the
+      two real resolution paths spelled out, deliberately left as a
+      decision for the user rather than silently patched with new
+      infrastructure
+      (a pooler/Accelerate) this phase wasn't asked to add
+- [x] Two real secret-redaction gaps found and closed: both the Alchemy
+      wallet adapter and the Telegram messaging adapter build their real
+      vendor request URL with the API key/bot token embedded in the path
+      (each vendor's own API design) and left a raw network-level fetch
+      failure unwrapped — now normalized so no thrown error ever contains
+      that URL, with new regression tests proving it for both
+- [x] `import "server-only"` on `env.ts` was tried and reverted — it
+      breaks `npm run smoke`/`npm run report:subscriptions` (legitimate
+      `tsx` CLI scripts) under plain Node's module resolution; the actual
+      leak risk was already low (verified: zero `NEXT_PUBLIC_` vars in
+      this codebase, zero Client Component imports of `@/lib/env`), so
+      this wasn't worth breaking two working scripts — a real example of
+      "don't fix what verification shows isn't actually broken"
+- [x] `next.config.ts`: added HTTP security headers (Content-Security-Policy,
+      X-Content-Type-Options, X-Frame-Options, Referrer-Policy,
+      Permissions-Policy) — a strict CSP costs nothing here since this
+      app loads no external script/style/font and PostHog is invoked
+      server-side only; verified via browser QA (no console CSP
+      violations, no broken styling)
+- [x] `scripts/production-check.ts` (new) + `npm run production:check` —
+      one command running static/configuration/database/security/test-suite/
+      build validation in sequence, requiring no real production
+      credential and making no network call; reuses existing `lint`/
+      `typecheck`/`db:validate`/`test`/`build` scripts rather than
+      duplicating them
+- [x] Closed a real test-coverage gap: three `env.ts` cross-validation
+      branches (`WALLET_PROVIDER=alchemy`, `ANALYTICS_PROVIDER=posthog`,
+      `WEB_SEARCH_PROVIDER=anthropic`) existed since Phase 14 with zero
+      test coverage — added, all passing
+- [x] Webhook (billing + wallet), database/Prisma, and auth/session
+      audits all found already correct from prior phases' own hardening
+      work — nothing needed changing; documented as READY rather than
+      re-implemented
+- [x] `docs/production-readiness.md` (new) — the 20-section launch
+      checklist the phase brief asked for, each item marked READY /
+      READY AFTER CONFIG / BLOCKED / NOT IMPLEMENTED, never claiming
+      "production ready" where real credentials/deployment/domain
+      decisions are still outstanding
+- [x] Full validation gate (typecheck, lint, `prisma validate`, full test
+      suite — 1012 passed, 3 skipped, up from 1003 — production build)
+      plus `npm run production:check` end-to-end
+
 ## What's still genuinely open (superseding the old Phase 9–13 plan above)
 
 Everything below requires either a deliberate architectural decision, a

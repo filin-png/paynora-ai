@@ -122,4 +122,27 @@ describe("Telegram adapter (mocked fetch — no real network, no real bot token)
     const errorMessage = caught instanceof Error ? caught.message : String(caught);
     expect(errorMessage).not.toContain("super-secret-token");
   });
+
+  /**
+   * Phase 23 — the existing test above only covered an HTTP-error-status
+   * failure; a raw network-level failure (DNS/connection error) is a
+   * separate code path (the `fetch` call itself throwing) that wasn't
+   * covered and, before this phase, wasn't normalized either — see
+   * telegram.ts#send.
+   */
+  it("never includes the bot token in a thrown error on a raw network failure (e.g. DNS/connection error)", async () => {
+    (env as { TELEGRAM_BOT_TOKEN?: string }).TELEGRAM_BOT_TOKEN = "super-secret-token";
+
+    const fetchImpl = vi.fn().mockRejectedValue(new TypeError("fetch failed for https://api.telegram.org/botsuper-secret-token/sendMessage"));
+    const provider = createTelegramProvider(fetchImpl);
+
+    let caught: unknown;
+    try {
+      await provider.send(message);
+    } catch (error) {
+      caught = error;
+    }
+    const errorMessage = caught instanceof Error ? caught.message : String(caught);
+    expect(errorMessage).not.toContain("super-secret-token");
+  });
 });

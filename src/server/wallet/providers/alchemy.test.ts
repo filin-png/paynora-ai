@@ -239,6 +239,41 @@ describe("createAlchemyWalletProvider — network calls", () => {
     await expect(provider.getBalances("ETHEREUM", ADDR)).rejects.toThrow();
   });
 
+  /**
+   * Phase 23 — Alchemy's real API embeds the API key directly in the
+   * request URL path (unlike every other provider adapter in this
+   * codebase, which authenticates via an `Authorization` header), so
+   * `url` itself is secret-shaped. Both failure paths (an HTTP error
+   * status, and a network-level failure like a DNS/connection error) must
+   * never let that key reach a thrown error's message — see
+   * alchemy.ts#fetchJson.
+   */
+  it("never includes the API key in a thrown error, even on an HTTP error status", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 500, statusText: "Internal Server Error" });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = createAlchemyWalletProvider(CONFIG);
+
+    await expect(provider.getBalances("ETHEREUM", ADDR)).rejects.toThrow();
+    try {
+      await provider.getBalances("ETHEREUM", ADDR);
+    } catch (error) {
+      expect(String(error)).not.toContain(CONFIG.apiKey);
+    }
+  });
+
+  it("never includes the API key in a thrown error on a raw network failure (e.g. DNS/connection error)", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError(`fetch failed for https://eth-mainnet.g.alchemy.com/v2/${CONFIG.apiKey}`));
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = createAlchemyWalletProvider(CONFIG);
+
+    try {
+      await provider.getBalances("ETHEREUM", ADDR);
+      throw new Error("expected getBalances to reject");
+    } catch (error) {
+      expect(String(error)).not.toContain(CONFIG.apiKey);
+    }
+  });
+
   it("getBalances rejects when the request times out", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn().mockImplementation((_url: string, init: RequestInit) => {

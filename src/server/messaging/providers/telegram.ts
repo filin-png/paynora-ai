@@ -50,17 +50,32 @@ export function createTelegramProvider(fetchImpl: typeof fetch = fetch): Messagi
         );
       }
 
-      const response = await fetchImpl(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-        method: "POST",
-        signal: options?.signal,
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ chat_id: message.to, text: message.text }),
-      });
-
       // Never include the request URL (embeds the bot token as a path
       // segment) or the raw response body verbatim in a thrown error — only
       // the fields we've deliberately extracted below. See
-      // docs/integration-architecture.md#secrets.
+      // docs/integration-architecture.md#secrets. Phase 23: this covers a
+      // raw network-level failure (DNS/connection error) too, not just an
+      // HTTP error status — `fetch` itself can throw, and its own error
+      // could in principle be logged verbatim by a caller further up the
+      // stack if this didn't normalize it here first.
+      // On the gateway-level timeout path (src/server/messaging/gateway.ts),
+      // this promise's own eventual settlement (abort-triggered or not) is
+      // moot — the gateway's timer already rejects with
+      // MessagingTimeoutError synchronously first. This catch only ever
+      // matters for a real, non-timeout network failure, and never needs
+      // to distinguish the two.
+      let response: Awaited<ReturnType<typeof fetchImpl>>;
+      try {
+        response = await fetchImpl(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: "POST",
+          signal: options?.signal,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ chat_id: message.to, text: message.text }),
+        });
+      } catch {
+        throw new Error("telegram request failed: network error");
+      }
+
       let payload: TelegramSendMessageResponse;
       try {
         payload = await response.json();
