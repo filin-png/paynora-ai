@@ -18,10 +18,10 @@ describe("parseEnv", () => {
       NODE_ENV: "production",
       DATABASE_URL: "postgresql://user:pass@localhost:5432/paynora",
       AUTH_SECRET: "b".repeat(40),
-      AI_PROVIDER: "gigachat",
+      AI_PROVIDER: "none",
     });
     expect(env.NODE_ENV).toBe("production");
-    expect(env.AI_PROVIDER).toBe("gigachat");
+    expect(env.AI_PROVIDER).toBe("none");
   });
 
   it("rejects a missing DATABASE_URL", () => {
@@ -179,6 +179,51 @@ describe("parseEnv", () => {
       MISTRAL_MODEL: "test-model",
     });
     expect(env.AI_PROVIDER).toBe("mistral");
+  });
+
+  it("rejects AI_PROVIDER=gigachat with no GIGACHAT_API_KEY/GIGACHAT_MODEL", () => {
+    expect(() => parseEnv({ ...validBase, AI_PROVIDER: "gigachat" })).toThrow(
+      /GIGACHAT_API_KEY and GIGACHAT_MODEL are required/,
+    );
+  });
+
+  it("accepts AI_PROVIDER=gigachat with a valid key and model, defaulting GIGACHAT_SCOPE", () => {
+    const env = parseEnv({
+      ...validBase,
+      AI_PROVIDER: "gigachat",
+      GIGACHAT_API_KEY: "test-authorization-key",
+      GIGACHAT_MODEL: "GigaChat",
+    });
+    expect(env.AI_PROVIDER).toBe("gigachat");
+    expect(env.GIGACHAT_SCOPE).toBe("GIGACHAT_API_PERS");
+  });
+
+  it("rejects AI_PROVIDER=yandex with no YANDEXGPT_API_KEY/YANDEXGPT_MODEL/YANDEXGPT_FOLDER_ID", () => {
+    expect(() => parseEnv({ ...validBase, AI_PROVIDER: "yandex" })).toThrow(
+      /YANDEXGPT_API_KEY, YANDEXGPT_MODEL, and YANDEXGPT_FOLDER_ID are required/,
+    );
+  });
+
+  it("rejects AI_PROVIDER=yandex with a key and model but no folder id", () => {
+    expect(() =>
+      parseEnv({
+        ...validBase,
+        AI_PROVIDER: "yandex",
+        YANDEXGPT_API_KEY: "test-key",
+        YANDEXGPT_MODEL: "yandexgpt/latest",
+      }),
+    ).toThrow(/YANDEXGPT_API_KEY, YANDEXGPT_MODEL, and YANDEXGPT_FOLDER_ID are required/);
+  });
+
+  it("accepts AI_PROVIDER=yandex with a valid key, model, and folder id", () => {
+    const env = parseEnv({
+      ...validBase,
+      AI_PROVIDER: "yandex",
+      YANDEXGPT_API_KEY: "test-key",
+      YANDEXGPT_MODEL: "yandexgpt/latest",
+      YANDEXGPT_FOLDER_ID: "b1gfolder123",
+    });
+    expect(env.AI_PROVIDER).toBe("yandex");
   });
 
   it("requires OPENROUTER_API_KEY/OPENROUTER_MODEL when openrouter is only the fallback, not the primary", () => {

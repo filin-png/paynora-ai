@@ -39,8 +39,8 @@ describe("resolveHealth", () => {
     expect(resolveHealth("none", false)).toBe("DISABLED");
   });
 
-  it("is UNKNOWN for a selected, recognized-but-unimplemented vendor (e.g. gigachat)", () => {
-    expect(resolveHealth("gigachat", false)).toBe("UNKNOWN");
+  it("is UNKNOWN for a selected, recognized-but-unimplemented vendor (e.g. stripe)", () => {
+    expect(resolveHealth("stripe", false)).toBe("UNKNOWN");
   });
 
   it("is HEALTHY for a selected vendor with a real adapter", () => {
@@ -52,7 +52,7 @@ describe("getProviderVendorBreakdown", () => {
   it("reports every known vendor as not configured in the test environment (no secrets set)", () => {
     const vendors = getProviderVendorBreakdown();
     const names = vendors.map((v) => v.vendor).sort();
-    expect(names).toEqual(["anthropic", "mistral", "openrouter", "posthog", "smtp", "telegram"]);
+    expect(names).toEqual(["anthropic", "gigachat", "mistral", "openrouter", "posthog", "smtp", "telegram", "yandex"]);
     for (const vendor of vendors) {
       expect(vendor.configured).toBe(false);
       expect(vendor.active).toBe(false);

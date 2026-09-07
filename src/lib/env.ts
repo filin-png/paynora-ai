@@ -27,11 +27,13 @@ const baseEnvSchema = z.object({
       32,
       "AUTH_SECRET must be at least 32 characters — generate one with `openssl rand -base64 33`",
     ),
-  // Phase 6 extends this to a routing table (src/server/ai/service.ts) —
-  // "gigachat"/"yandex" remain recognized-but-not-implemented (same
-  // precedent as gigachat since Phase 3: selecting them throws a clear,
-  // typed "not implemented yet" error rather than silently doing nothing
-  // or pretending to work); "openrouter"/"mistral" have real adapters.
+  // Phase 6 extends this to a routing table (src/server/ai/service.ts).
+  // "openrouter"/"mistral" have had real adapters since Phase 6;
+  // "gigachat"/"yandex" ("yandex" selects the YandexGPT adapter — kept as
+  // the existing enum value rather than renamed, see
+  // docs/ai-integration-ru-providers.md) gained real adapters in the
+  // Russian AI providers phase (src/server/ai/providers/gigachat.ts,
+  // yandexgpt.ts).
   AI_PROVIDER: z.enum(["none", "gigachat", "yandex", "openrouter", "mistral"]).default("none"),
   // Optional single fallback, tried only if the primary fails — never a
   // chain, never retried past one confirmed success. See
@@ -41,6 +43,29 @@ const baseEnvSchema = z.object({
   OPENROUTER_MODEL: z.string().trim().min(1).optional(),
   MISTRAL_API_KEY: z.string().trim().min(1).optional(),
   MISTRAL_MODEL: z.string().trim().min(1).optional(),
+  // GigaChat (Sber) — see docs/ai-integration-ru-providers.md.
+  // GIGACHAT_API_KEY is the "Authorization key" from the GigaChat personal
+  // cabinet (an already-base64-encoded client_id:client_secret pair, used
+  // directly as an HTTP Basic credential to exchange for a short-lived
+  // access token — never used as a Bearer token itself, see
+  // src/server/ai/providers/gigachat.ts). GIGACHAT_SCOPE selects which
+  // contract type the key belongs to; GIGACHAT_API_PERS (individual
+  // developer) is the correct default for most early-stage use.
+  GIGACHAT_API_KEY: z.string().trim().min(1).optional(),
+  GIGACHAT_MODEL: z.string().trim().min(1).optional(),
+  GIGACHAT_SCOPE: z.enum(["GIGACHAT_API_PERS", "GIGACHAT_API_B2B", "GIGACHAT_API_CORP"]).default("GIGACHAT_API_PERS"),
+  // YandexGPT (Yandex Cloud Foundation Models) — see
+  // docs/ai-integration-ru-providers.md. Uses the static API-key auth
+  // scheme Yandex Cloud documents as the simpler alternative to a
+  // short-lived IAM token (appropriate here, same shape as every other
+  // provider in this codebase). YANDEXGPT_FOLDER_ID is required in
+  // addition to the two variables the phase brief anticipated — Yandex
+  // Cloud's completion endpoint has no way to resolve a model without it
+  // (it is embedded in modelUri, see gigachat.ts's sibling adapter,
+  // yandexgpt.ts).
+  YANDEXGPT_API_KEY: z.string().trim().min(1).optional(),
+  YANDEXGPT_MODEL: z.string().trim().min(1).optional(),
+  YANDEXGPT_FOLDER_ID: z.string().trim().min(1).optional(),
   EMAIL_PROVIDER: z.enum(["none", "smtp"]).default("none"),
   // Phase 11.2: base URL used to build password-reset and organization-
   // invitation links embedded in transactional emails (and returned by
@@ -232,6 +257,24 @@ export const envSchema = baseEnvSchema.superRefine((data, ctx) => {
       code: "custom",
       path: ["MISTRAL_API_KEY"],
       message: 'MISTRAL_API_KEY and MISTRAL_MODEL are required when AI_PROVIDER or AI_PROVIDER_FALLBACK is "mistral"',
+    });
+  }
+  if (selectedAiProviders.includes("gigachat") && (!data.GIGACHAT_API_KEY || !data.GIGACHAT_MODEL)) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["GIGACHAT_API_KEY"],
+      message: 'GIGACHAT_API_KEY and GIGACHAT_MODEL are required when AI_PROVIDER or AI_PROVIDER_FALLBACK is "gigachat"',
+    });
+  }
+  if (
+    selectedAiProviders.includes("yandex") &&
+    (!data.YANDEXGPT_API_KEY || !data.YANDEXGPT_MODEL || !data.YANDEXGPT_FOLDER_ID)
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["YANDEXGPT_API_KEY"],
+      message:
+        'YANDEXGPT_API_KEY, YANDEXGPT_MODEL, and YANDEXGPT_FOLDER_ID are required when AI_PROVIDER or AI_PROVIDER_FALLBACK is "yandex"',
     });
   }
 

@@ -20,15 +20,12 @@ describe("AI service (AI_PROVIDER=none, the test/CI default)", () => {
 });
 
 describe("resolveProviderByName", () => {
-  it("resolves none/openrouter/mistral to real, distinct provider instances", () => {
+  it("resolves every configured vendor name to a real, distinct provider instance", () => {
     expect(resolveProviderByName("none").name).toBe("none");
     expect(resolveProviderByName("openrouter").name).toBe("openrouter");
     expect(resolveProviderByName("mistral").name).toBe("mistral");
-  });
-
-  it("throws a clear, typed error for recognized-but-unimplemented vendors", () => {
-    expect(() => resolveProviderByName("gigachat")).toThrow(/not implemented/);
-    expect(() => resolveProviderByName("yandex")).toThrow(/not implemented/);
+    expect(resolveProviderByName("gigachat").name).toBe("gigachat");
+    expect(resolveProviderByName("yandex").name).toBe("yandex");
   });
 });
 
@@ -103,11 +100,14 @@ describe("tryGenerateStructured — routing and fallback (via DI, no real networ
     expect(resolveCallCount).toBe(1);
   });
 
-  it("treats a recognized-but-unimplemented vendor as a failed attempt, not a thrown error", async () => {
-    // Uses the real resolveProviderByName (no override) — gigachat really
-    // does throw "not implemented", and that must be caught and treated
-    // as "try the next one" / "return null", never escape as an
-    // unhandled rejection.
+  it("treats a real but unconfigured vendor as a failed attempt, not a thrown error", async () => {
+    // Uses the real resolveProviderByName (no override) — gigachat is a
+    // real adapter, but GIGACHAT_API_KEY is unset in this test/CI
+    // environment (AI_PROVIDER is unset in vitest.config.mts, so no real
+    // vendor credential is ever configured here), so calling it genuinely
+    // rejects with a configuration error. That rejection must be caught
+    // and treated as "try the next one" / "return null", never escape as
+    // an unhandled rejection.
     await expect(
       tryGenerateStructured(request, { enabled: true, order: ["gigachat"] as AiProviderName[] }),
     ).resolves.toBeNull();

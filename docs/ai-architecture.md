@@ -1,15 +1,16 @@
 # AI Architecture
 
-**Status (updated Phase 21A): the AI Gateway foundation below is
-implemented (Phase 3) and unchanged since. Two real vendor adapters exist —
-OpenRouter and Mistral (both Phase 6) — with Mistral as PAYNORA's primary
-production AI provider (Phase 21A). `AI_PROVIDER=none` remains the
-default** (no credentials required to run the app); `gigachat`/`yandex`
-are still recognized-but-unimplemented, resolving to a clear
-`AIProviderError` rather than a real integration or a silent no-op. See
+**Status (updated: Russian AI providers phase): the AI Gateway foundation
+below is implemented (Phase 3) and unchanged since. Four real vendor
+adapters exist — OpenRouter and Mistral (both Phase 6), and GigaChat and
+YandexGPT (the Russian AI providers phase) — with Mistral as PAYNORA's
+primary production AI provider (Phase 21A). `AI_PROVIDER=none` remains the
+default** (no credentials required to run the app). See
 **[docs/ai-integration.md](./ai-integration.md)** for the Mistral-specific
 production setup guide (environment variables, security review, quota,
-fallback, smoke test) and
+fallback, smoke test),
+**[docs/ai-integration-ru-providers.md](./ai-integration-ru-providers.md)**
+for the GigaChat/YandexGPT-specific equivalent, and
 [docs/integration-architecture.md#ai-routing](./integration-architecture.md#ai-routing)
 for the full routing/fallback design. This document covers the
 interface/Gateway contract itself, which none of that changed.
@@ -75,7 +76,7 @@ chain below; only the schema/prompt at the call site differs.)
 | --- | --- | --- |
 | AI Service | `src/server/ai/service.ts` | What callers actually use (`tryGenerateStructured`). Resolves the configured provider, **never throws** — any failure degrades to `null` so a caller's deterministic fallback runs. |
 | AI Gateway | `src/server/ai/gateway.ts` | `runAIGeneration`: calls the provider with a timeout (10s default), validates the response against the request's Zod schema, normalizes failures into typed errors. |
-| AIProvider | `src/server/ai/providers/*.ts` | One implementation per vendor. `none` (`AI_PROVIDER=none`, the default — every call fails with `AIDisabledError`), `openrouter`, and `mistral` (both Phase 6, real HTTP adapters) are real, resolvable providers today. `gigachat`/`yandex` are recognized but not implemented (see docs/integration-architecture.md#why-gigachatyandex-ai-arent-real-adapters-yet). `fake.ts` is test-only, never reachable from `AI_PROVIDER`. |
+| AIProvider | `src/server/ai/providers/*.ts` | One implementation per vendor. `none` (`AI_PROVIDER=none`, the default — every call fails with `AIDisabledError`), `openrouter`, `mistral` (both Phase 6), `gigachat`, and `yandex` (the Russian AI providers phase — `yandex` selects the YandexGPT adapter) are all real, resolvable providers today. `fake.ts` is test-only, never reachable from `AI_PROVIDER`. |
 
 ## Provider selection
 
@@ -86,7 +87,8 @@ Configuration-driven, via the `AI_PROVIDER` environment variable
 AI_PROVIDER=none        # default — AI features degrade gracefully, no credentials needed
 AI_PROVIDER=mistral     # PAYNORA's primary production provider (Phase 21A) — real adapter, requires MISTRAL_API_KEY/MISTRAL_MODEL
 AI_PROVIDER=openrouter  # also a real adapter (Phase 6); requires OPENROUTER_API_KEY/OPENROUTER_MODEL
-AI_PROVIDER=gigachat    # resolves to AIProviderError today — adapter not implemented yet
+AI_PROVIDER=gigachat    # real adapter; requires GIGACHAT_API_KEY/GIGACHAT_MODEL — see docs/ai-integration-ru-providers.md
+AI_PROVIDER=yandex      # real adapter (selects YandexGPT); requires YANDEXGPT_API_KEY/YANDEXGPT_MODEL/YANDEXGPT_FOLDER_ID
 ```
 
 `src/server/ai/service.ts`'s `resolveProviderByName` is the one place that

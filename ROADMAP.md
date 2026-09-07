@@ -713,6 +713,79 @@ was connected, no domain bought, no database created, nothing deployed.
       suite — 1012 passed, 3 skipped, up from 1003 — production build)
       plus `npm run production:check` end-to-end
 
+### Phase 24 — Russian AI providers: GigaChat and YandexGPT adapters — see `docs/ai-integration-ru-providers.md`
+
+Closed a gap documented since Phase 6: `AI_PROVIDER=gigachat`/`yandex`
+were recognized but resolved to a typed "not implemented yet" error. Both
+now have real adapters, on the existing, unchanged AI Gateway/`AIProvider`
+contract — Mistral and OpenRouter untouched.
+
+- [x] Studied the existing AI Gateway/service/provider architecture before
+      writing anything — confirmed `AIProvider` has exactly one method
+      (`generateStructured`; no separate text-generation, tool-calling, or
+      streaming method exists for *any* vendor), and that
+      `openai-compatible-chat.ts` is the right reuse point for any vendor
+      whose wire contract genuinely matches OpenRouter/Mistral's
+- [x] `GigaChatProvider` (`src/server/ai/providers/gigachat.ts`) — OAuth
+      token exchange (`GIGACHAT_API_KEY` → short-lived access token,
+      cached per provider instance, never trusting the response's own
+      ambiguous `expires_at` units), then delegates the actual completion
+      call to the shared `openai-compatible-chat.ts` helper, since
+      GigaChat's endpoint is genuinely OpenAI-compatible
+- [x] `YandexGPTProvider` (`src/server/ai/providers/yandexgpt.ts`) — a
+      standalone adapter (Yandex's `role`/`text`/`result.alternatives[]`
+      wire shape is genuinely different, not sharing the OpenAI-compatible
+      helper), static `Api-Key` auth (Yandex's own documented simpler
+      alternative to an IAM token), `YANDEXGPT_FOLDER_ID` added as a third
+      required variable beyond the phase brief's two (needed to resolve
+      `modelUri`)
+- [x] `src/lib/env.ts`: six new variables, cross-validated the same way
+      every other provider already is — required only once actually
+      selected, never proactively
+- [x] `resolveProviderByName` (`service.ts`) and the provider registry
+      (`src/server/providers/registry.ts`) updated so both vendors report
+      as real/implemented — Settings → Integrations (Phase 8 UI,
+      unchanged) picks this up automatically, no UI code touched
+- [x] `npm run smoke -- ai gigachat --confirm` / `ai yandex --confirm` —
+      extended the existing Phase 8 smoke-test CLI, no second script
+- [x] **Honest verification limitation, documented rather than hidden**:
+      `developers.sber.ru` and `aistudio.yandex.ru` were unreachable from
+      this environment's network egress policy — every wire-contract
+      detail was corroborated via web search against multiple independent
+      third-party sources (official SDKs, mirrored docs) instead of a
+      direct primary-source fetch, a real step down from Phase 21A's
+      direct-documentation verification for Mistral. Recorded per-claim
+      confidence in `docs/ai-integration-ru-providers.md`'s verification
+      table rather than presenting uniform certainty
+- [x] Corrected a real inaccuracy in the pre-existing docs along the way:
+      GigaChat's TLS requirement is a Russian-CA server-certificate-trust
+      issue (fixable via Node's standard `NODE_EXTRA_CA_CERTS`), not mTLS/
+      client certificates as `docs/integration-architecture.md` previously
+      (and incorrectly) described it
+- [x] Neither vendor's native strict-JSON-Schema structured-output mode
+      was wired in — GigaChat's is beta/model-gated and can't express
+      `anyOf`/`oneOf`/`allOf`; Yandex's exact shape couldn't be confirmed.
+      Both use the same JSON-mode-via-prompt + Zod pattern every other
+      adapter already uses — no loss in practice, since Zod is always the
+      real validation boundary regardless of a vendor's own promises
+- [x] Function/tool calling and streaming: confirmed neither is part of
+      `AIProvider` for *any* vendor in this codebase — correctly out of
+      scope, not a per-vendor gap
+- [x] New tests: `gigachat.test.ts`, `yandexgpt.test.ts` (each covering
+      the 15-point failure-mode checklist plus GigaChat's own token-cache
+      behavior), plus fixes to `service.test.ts`/`registry.test.ts`/
+      `env.test.ts` assertions that depended on the old "not implemented"
+      behavior — all mocked-network, zero real credential anywhere in CI
+- [x] Full validation gate (typecheck, lint, full test suite, production
+      build) — 0 regressions in Mistral/OpenRouter/Gateway behavior
+
+**Neither adapter has been confirmed against a real account** — no
+GigaChat or Yandex Cloud credential was obtained or used in this phase,
+per its own explicit instruction not to request or embed one. This is not
+described as production-ready; see
+`docs/ai-integration-ru-providers.md`'s own "Production readiness" section
+for exactly what a real smoke test still needs to prove.
+
 ## What's still genuinely open (superseding the old Phase 9–13 plan above)
 
 Everything below requires either a deliberate architectural decision, a
