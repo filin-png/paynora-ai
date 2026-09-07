@@ -217,17 +217,25 @@ response parsing (including `usage` mapping), and error classification
 entirely against a mocked `fetch`, with **no real network call and no real
 API key anywhere in the suite**.
 
-### Why GigaChat/Yandex AI aren't real adapters yet
+### GigaChat and YandexGPT adapters (Russian AI providers phase)
 
-Both require an OAuth/token-exchange flow this project cannot build and
-test *correctly* without a real account: GigaChat's authentication is
-mTLS/Russian-CA-certificate-based, and Yandex AI's is an IAM-token flow.
-Building either against guesswork would risk shipping a broken adapter
-that looks implemented — worse than being honest that it isn't. They stay
-selectable (recognized by `AI_PROVIDER`, listed in the provider registry)
-so choosing one gives a clear, typed "not implemented yet" error instead
-of an unrecognized value or silent no-op; implementing either for real is
-future work once there's a real account to test against.
+`gigachat.ts` and `yandexgpt.ts` are also real adapters as of this phase —
+see **[docs/ai-integration-ru-providers.md](./ai-integration-ru-providers.md)**
+for the full production-setup guide (environment variables, wire-contract
+verification against each vendor's official documentation, security
+review, and known limitations), which is the focused companion to this
+section the same way `docs/ai-integration.md` is for Mistral. In short:
+GigaChat's authentication is a two-step OAuth exchange (a static
+"Authorization key" traded for a short-lived access token, cached per
+provider instance), reusing `openai-compatible-chat.ts` for the actual
+completions call since GigaChat's endpoint is genuinely OpenAI-compatible;
+YandexGPT's wire contract (`role`/`text` messages, a
+`result.alternatives[]` response envelope, int64 fields serialized as
+strings) is different enough that it is not built on that shared helper —
+see that file's own doc comment on why sharing is based on a genuinely
+identical contract, not speculative reuse. Both were previously
+recognized-but-unimplemented (resolving to a typed "not implemented yet"
+error); this is the phase that closed that gap.
 
 ## Email: no new adapter needed
 
@@ -559,8 +567,11 @@ documented as planned candidates only:
 
 ### Recognized-but-unimplemented vendors (already covered above)
 
-GigaChat, Yandex AI (see
-[Why GigaChat/Yandex AI aren't real adapters yet](#why-gigachatyandex-ai-arent-real-adapters-yet)),
-Stripe, YooKassa (see [Billing](#billing)) are all selectable via their
-category's env var and all resolve to a clear, typed "not implemented
-yet" error — never a silent no-op, never an unrecognized-value crash.
+Stripe (see [Billing](#billing) — YooKassa is now a real adapter, Phase
+20) is the remaining example of this pattern: selectable via its
+category's env var, resolving to a clear, typed "not implemented yet"
+error — never a silent no-op, never an unrecognized-value crash. GigaChat
+and YandexGPT were also in this category before the Russian AI providers
+phase; see
+[GigaChat and YandexGPT adapters](#gigachat-and-yandexgpt-adapters-russian-ai-providers-phase)
+above for why they moved out of it.

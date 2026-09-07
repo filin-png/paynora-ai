@@ -17,7 +17,7 @@ import type {
  * recognized or a "not implemented" one gets a real adapter.
  */
 const IMPLEMENTED_VENDORS: Record<ProviderCategory, Record<string, boolean>> = {
-  ai: { none: true, openrouter: true, mistral: true, gigachat: false, yandex: false },
+  ai: { none: true, openrouter: true, mistral: true, gigachat: true, yandex: true },
   email: { none: true, smtp: true },
   messaging: { none: true, telegram: true },
   billing: { none: true, stripe: false, yookassa: false },
@@ -36,8 +36,8 @@ const CAPABILITIES: Record<ProviderCategory, Record<string, readonly string[]>> 
     none: [],
     openrouter: ["structured-generation"],
     mistral: ["structured-generation"],
-    gigachat: [],
-    yandex: [],
+    gigachat: ["structured-generation"],
+    yandex: ["structured-generation"],
   },
   email: { none: [], smtp: ["send"] },
   messaging: { none: [], telegram: ["send"] },
@@ -166,6 +166,20 @@ export function getProviderVendorBreakdown(): readonly VendorConfigurationStatus
       configured: Boolean(env.MISTRAL_API_KEY && env.MISTRAL_MODEL),
       implemented: IMPLEMENTED_VENDORS.ai.mistral,
       active: env.AI_PROVIDER === "mistral" || env.AI_PROVIDER_FALLBACK === "mistral",
+    },
+    {
+      category: "ai",
+      vendor: "gigachat",
+      configured: Boolean(env.GIGACHAT_API_KEY && env.GIGACHAT_MODEL),
+      implemented: IMPLEMENTED_VENDORS.ai.gigachat,
+      active: env.AI_PROVIDER === "gigachat" || env.AI_PROVIDER_FALLBACK === "gigachat",
+    },
+    {
+      category: "ai",
+      vendor: "yandex",
+      configured: Boolean(env.YANDEXGPT_API_KEY && env.YANDEXGPT_MODEL && env.YANDEXGPT_FOLDER_ID),
+      implemented: IMPLEMENTED_VENDORS.ai.yandex,
+      active: env.AI_PROVIDER === "yandex" || env.AI_PROVIDER_FALLBACK === "yandex",
     },
     {
       category: "email",

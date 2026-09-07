@@ -14,6 +14,8 @@
  * Usage:
  *   npm run smoke -- ai openrouter --confirm
  *   npm run smoke -- ai mistral --confirm
+ *   npm run smoke -- ai gigachat --confirm
+ *   npm run smoke -- ai yandex --confirm
  *   npm run smoke -- email --to=you@example.com --confirm
  *   npm run smoke -- telegram --to=<chat-id> --confirm
  *   npm run smoke -- analytics --confirm
@@ -84,8 +86,11 @@ function parseArgs(argv: string[]): {
 }
 
 async function runAiSmoke(vendor: string | undefined, confirm: boolean): Promise<void> {
-  if (vendor !== "openrouter" && vendor !== "mistral") {
-    fail('ai target requires a vendor: "openrouter" or "mistral" — e.g. `npm run smoke -- ai openrouter --confirm`.');
+  const knownVendors = ["openrouter", "mistral", "gigachat", "yandex"] as const;
+  if (!vendor || !knownVendors.includes(vendor as (typeof knownVendors)[number])) {
+    fail(
+      `ai target requires a vendor: ${knownVendors.map((v) => `"${v}"`).join(", ")} — e.g. \`npm run smoke -- ai gigachat --confirm\`.`,
+    );
   }
   if (!confirm) {
     fail("refusing to call a real AI vendor without --confirm.");
@@ -93,10 +98,19 @@ async function runAiSmoke(vendor: string | undefined, confirm: boolean): Promise
 
   const { openRouterProvider } = await import("../src/server/ai/providers/openrouter");
   const { mistralProvider } = await import("../src/server/ai/providers/mistral");
+  const { gigachatProvider } = await import("../src/server/ai/providers/gigachat");
+  const { yandexGptProvider } = await import("../src/server/ai/providers/yandexgpt");
   const { runAIGeneration } = await import("../src/server/ai/gateway");
   const { buildReminderEmailRequest } = await import("../src/server/communications/ai-context");
 
-  const provider = vendor === "openrouter" ? openRouterProvider : mistralProvider;
+  const provider =
+    vendor === "openrouter"
+      ? openRouterProvider
+      : vendor === "mistral"
+        ? mistralProvider
+        : vendor === "gigachat"
+          ? gigachatProvider
+          : yandexGptProvider;
 
   // Fixed, synthetic invoice data — never anything drawn from a real
   // customer or a real database. Exercises the exact same request-shaping

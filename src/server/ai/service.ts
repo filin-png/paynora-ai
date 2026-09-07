@@ -1,9 +1,10 @@
 import { env, type Env } from "@/lib/env";
-import { AIProviderError } from "./errors";
 import { runAIGeneration } from "./gateway";
+import { gigachatProvider } from "./providers/gigachat";
 import { noneProvider } from "./providers/none";
 import { mistralProvider } from "./providers/mistral";
 import { openRouterProvider } from "./providers/openrouter";
+import { yandexGptProvider } from "./providers/yandexgpt";
 import type { AIProvider, AIRequest, AIResult } from "./types";
 
 export type AiProviderName = Env["AI_PROVIDER"];
@@ -16,12 +17,12 @@ export function isAIEnabled(): boolean {
 /**
  * Resolves the `AIProvider` implementation for a given configured value.
  * Every real vendor adapter is registered here, and only here — this is
- * the one place that knows OpenRouter/Mistral/GigaChat/Yandex (or any
+ * the one place that knows OpenRouter/Mistral/GigaChat/YandexGPT (or any
  * future provider) exist; nothing else in the codebase imports a provider
- * module directly. `gigachat`/`yandex` are recognized (selectable, listed
- * in the provider registry) but have no real adapter yet — selecting
- * either resolves to a clear, typed error rather than silently doing
- * nothing or falling back unannounced. See
+ * module directly. All four are real adapters as of the Russian AI
+ * providers phase (`"yandex"` selects the YandexGPT adapter — see
+ * docs/ai-integration-ru-providers.md for why the existing enum value name
+ * was kept rather than renamed). See
  * docs/integration-architecture.md#ai-routing.
  */
 export function resolveProviderByName(name: AiProviderName): AIProvider {
@@ -33,11 +34,9 @@ export function resolveProviderByName(name: AiProviderName): AIProvider {
     case "mistral":
       return mistralProvider;
     case "gigachat":
+      return gigachatProvider;
     case "yandex":
-      throw new AIProviderError(
-        name,
-        "not implemented yet — recognized by the provider registry, no real adapter exists; see docs/integration-architecture.md#ai-routing",
-      );
+      return yandexGptProvider;
   }
 }
 
