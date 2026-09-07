@@ -63,11 +63,29 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(bufA, bufB);
 }
 
+/**
+ * Phase 23 production hardening: unlike every other provider adapter in
+ * this codebase (Mistral/OpenRouter/YooKassa authenticate via an
+ * `Authorization` header), Alchemy's own real API embeds the API key
+ * directly in the request URL path (`https://<network>.g.alchemy.com/v2/
+ * <apiKey>`) — that's Alchemy's actual API design, not something this
+ * adapter chose. That makes `url` itself secret-shaped. This function
+ * normalizes every failure (HTTP-status and network-level alike) into a
+ * message built only from the response status or a fixed string — never
+ * from `url`, `error.message`, or anything else that could echo the raw
+ * request back into a log line. See alchemy.test.ts for the regression
+ * test proving the API key never appears in a thrown error.
+ */
 async function fetchJson(url: string, init: RequestInit): Promise<unknown> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    const response = await fetch(url, { ...init, signal: controller.signal });
+    let response: Response;
+    try {
+      response = await fetch(url, { ...init, signal: controller.signal });
+    } catch {
+      throw new Error("Alchemy request failed: network error");
+    }
     if (!response.ok) {
       throw new Error(`Alchemy request failed: ${response.status} ${response.statusText}`);
     }

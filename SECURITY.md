@@ -4,6 +4,14 @@ PAYNORA handles financial data (invoices, payments, customer collection
 communication) for multiple tenants. Security is a baseline requirement,
 not a later add-on.
 
+See `docs/production-readiness.md` (Phase 23) for the production-hardening
+audit built on top of everything below — HTTP security headers, webhook/
+env/secret-redaction regression tests, the automated `npm run
+production:check` gate, and the current state of every integration and
+deployment prerequisite (what's ready, what needs real credentials, and
+the one architectural decision — hosting model vs. Vercel's default
+serverless functions — that's still genuinely open).
+
 ## Trust boundary chain (Operator / AI, Phase 3+)
 
 Every AI-assisted feature in this codebase — currently just the Operator's
