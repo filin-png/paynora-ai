@@ -121,6 +121,15 @@ process starts serving traffic. See `DEPLOYMENT.md#backups--point-in-time-recove
 *hosting model* around that database is the real open question, not the
 database itself.
 
+**Vercel + Neon specifically** (the decided target for the Vercel
+deployment phase): `DATABASE_URL` must be Neon's *pooled* connection
+string (hostname contains `-pooler`), and `DIRECT_URL` (new — see
+`.env.example` and `prisma.config.ts`) must be Neon's *direct* connection
+string, used only by `prisma migrate deploy`/the Prisma CLI. Set
+`DATABASE_POOL_MAX=1` (or similarly low) for this deployment. No code
+changes beyond `prisma.config.ts` reading `DIRECT_URL` were needed — see
+#14 for the full reasoning behind this being sufficient.
+
 ## 5. Authentication — READY
 
 Auth.js v5, JWT sessions, credentials provider, `authenticateCredentials`
@@ -256,48 +265,36 @@ integration itself:
 **What's still needed:** choosing and connecting a real vendor — a
 Phase 24+ decision, not this phase's to make.
 
-## 14. Vercel — BLOCKED
+## 14. Vercel — READY AFTER CONFIG
 
-**This is the one finding in this phase that must not be glossed over.**
-Phase 9 made a deliberate, documented architecture decision
-(`DEPLOYMENT.md#production-hosting-model`): PAYNORA's database layer
-(`src/server/db/client.ts`) creates one `PrismaClient`/`pg.Pool` at
-module load and holds it for the life of the process — the standard
-pattern for a long-lived Node server, and *meaningless* (worse than
-meaningless — actively dangerous) under a per-invocation serverless
-function model, where a fresh pool is created on every cold start and
-exhausts Postgres's `max_connections` at any real concurrency. That
-finding is unchanged by this phase's audit; it is confirmed, not
-theoretical (`createPrismaClient()`'s own doc comment already named this
-exact risk).
+**Corrected from an earlier "BLOCKED" verdict** (Phase 23) after a closer
+re-audit for the Vercel production deployment phase, once Vercel became
+this project's actual, decided target rather than a hypothetical one.
+`src/server/db/client.ts`'s singleton pattern (one `PrismaClient`/
+`pg.Pool` at module load) is not, on its own, incompatible with Vercel —
+it is the officially Prisma-recommended pattern for Next.js on serverless
+too (module-scope caching survives across warm invocations of the same
+instance automatically; no code needed to make that true). The real risk
+was mischaracterized as "the pattern is wrong" when it is actually
+"*aggregate* connections across many concurrently warm serverless
+instances can exceed Postgres's `max_connections`" — a real risk, but the
+well-known, standard-solution kind, not an architectural rewrite.
 
-Vercel's default Next.js deployment model is per-invocation serverless
-functions for Route Handlers and Server Actions. Deploying this codebase
-to Vercel *as-is*, with a normal Postgres connection string, would hit
-exactly the failure mode Phase 9 designed around — not a hypothetical,
-a documented architectural incompatibility.
-
-Two real paths forward, neither implemented in this phase (both are
-infrastructure/business decisions, not something Phase 23 was asked or
-should decide unilaterally):
-
-1. **Don't use Vercel's default serverless functions.** Run
-   `next build && next start` as a persistent container on Vercel (if
-   its current product supports a genuinely persistent Node process for
-   this app's traffic pattern — verify against Vercel's current offering
-   before assuming) or on any other host that can run a long-lived
-   Node.js 22+ process — a VPS, Railway, Fly.io, a container platform.
-   This is the path `DEPLOYMENT.md` already recommends and requires no
-   new code.
-2. **Add a serverless-safe database connection strategy** if Vercel's
-   serverless functions are a hard requirement — an external pooler
-   (PgBouncer), Prisma Accelerate, or a provider's serverless-native
-   driver (e.g. Neon's HTTP/edge driver). This is real new
-   infrastructure and a real behavior change to `src/server/db/client.ts`
-   — explicitly out of scope for this phase ("не подключай реальные
-   API-ключи", "не создавай дублирующие системы", "не деплой") and not
-   something to add speculatively before a real deployment target
-   requires it.
+**Resolution, implemented this phase — zero business-logic changes:**
+1. `prisma.config.ts` now reads an optional `DIRECT_URL` (falls back to
+   `DATABASE_URL` when unset) for its own CLI-only connection — Prisma's
+   migration engine needs a session-persistent (non-pooled) connection for
+   its advisory lock, which a transaction-mode pooler can't provide. The
+   *running app* is untouched: it always connects via `DATABASE_URL`
+   directly (`src/server/db/client.ts`), never through this file.
+2. `.env.example` and `DEPLOYMENT.md#production-hosting-model` document
+   the two values a Vercel deployment needs: `DATABASE_URL` = a *pooled*
+   connection string (Neon's pooled endpoint, Supabase's port-6543
+   pooler, or PgBouncer), `DIRECT_URL` = the *non-pooled* one for
+   migrations.
+3. `DATABASE_POOL_MAX` should be set low (1–3) for this deployment via a
+   Vercel environment variable — no code change, the field already exists
+   and is already read from the environment.
 
 No filesystem, in-memory-between-requests, or local-scheduler assumptions
 were found elsewhere (`grep` for `fs`/`writeFileSync`/`setInterval`/
@@ -307,13 +304,29 @@ which is dev-only and already guarded by `NODE_ENV !== "production"`).
 Rate limiting is already Postgres-backed, not in-memory
 (`src/server/rate-limit/service.ts`) — genuinely serverless-safe on its
 own. The scheduler (`/internal/automation/tick`) is already an
-externally-triggered HTTP endpoint, not an in-process timer — also
-serverless-compatible on its own. **The database connection model is the
-only real blocker**, and it is a decision for you to make, not a bug for
-this phase to silently patch.
+externally-triggered HTTP endpoint, not an in-process timer — Vercel Cron
+(or any scheduler capable of an authenticated HTTPS POST) can drive it,
+though no `vercel.json` cron entry has been added (automation is
+opt-in/off by default — add one only once automation is actually wanted
+in production). No route opts into Vercel's Edge Runtime (which genuinely
+would be incompatible with the `pg` driver) — confirmed by direct search,
+not assumed.
 
-**What's still needed:** an explicit decision between the two paths
-above, made by you, before any real deployment attempt.
+**Not independently confirmed by this phase** (requires a real Neon
+account, which this phase was explicitly told not to create): that Neon's
+actual pooled-connection behavior under the `@prisma/adapter-pg` +
+node-postgres driver combination this codebase uses is fully
+prepared-statement-safe under real concurrent load. The `DIRECT_URL`/
+migration-engine finding above is confirmed against Prisma's own current
+documentation with high confidence; this narrower runtime-driver nuance
+is lower-confidence and worth confirming with a real smoke test once a
+real Neon database exists (see the Vercel deployment phase's own report
+for the exact provisioning steps).
+
+**What's still needed:** you provision the real Neon database (this phase
+was explicitly told not to) and set the resulting `DATABASE_URL`/
+`DIRECT_URL`/`DATABASE_POOL_MAX` as Vercel environment variables — see
+that phase's final report for the exact steps.
 
 ## 15. Domain — NOT IMPLEMENTED (documentation only, no domain purchased)
 

@@ -204,36 +204,54 @@ secret, a raw response body, or a request header.
 ## Production hosting model
 
 Decided in Phase 9 (see `docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md`
-P1-8) — a hard requirement for any production deployment, not a TODO.
+P1-8), refined in the Vercel production deployment phase once Vercel
+became this project's actual, decided deployment target (see
+`docs/production-readiness.md#database` for the full audit this section
+summarizes). Two supported hosting models exist; pick one per real
+deployment, don't mix reasoning between them.
 
-**Runtime: a long-lived Node.js process, not an edge/serverless function
-model.** This is not a preference — it's what the app's existing database
-layer already assumes and requires:
+**`src/server/db/client.ts`'s actual behavior, precisely**: it creates one
+`PrismaClient`/`pg.Pool` at module load and reuses it for the life of the
+*module instance* — the officially Prisma-recommended pattern for both a
+persistent Node.js process (the module loads once, ever) and a serverless
+function (the module loads once per cold start, then is reused across
+every "warm" invocation of that same instance — standard Node.js module
+caching, not something this codebase has to build). `DATABASE_POOL_MAX`
+(default 10, env-configurable) bounds *that one instance's own* pool size.
 
-- `src/server/db/client.ts` creates one `PrismaClient`/`pg.Pool` at module
-  load and reuses it for the life of the process (a global singleton —
-  the standard pattern for a persistent server). `DATABASE_POOL_MAX`
-  (default 10, env-configurable) bounds *that one process's* pool size.
-- A per-invocation serverless/edge model (Vercel Edge Functions, a bare
-  AWS Lambda, Cloudflare Workers) would instead create a fresh pool on
-  every cold start. At any real concurrency this exhausts Postgres's
-  `max_connections` long before the app hits any other limit — the
-  well-known "serverless + Postgres" problem, normally solved with an
-  external pooler (PgBouncer, Prisma Accelerate, a provider's built-in
-  HTTP/edge driver such as Neon's). This codebase includes none of that,
-  and adding one speculatively — before a real deployment target requires
-  it — is exactly the over-engineering the Phase 9 brief warns against.
-  The chosen fix is simpler: don't run in that model.
-
-**Deploy target:** `next build && next start` (or an equivalent container
-running that build) on any host that can run a long-lived Node.js 22+
-process with a reachable Postgres 14+ — a VPS, any container platform, or
-self-hosted infrastructure. This satisfies the project brief's constraint
+**Model A — long-lived process** (a VPS, any container platform,
+self-hosted infrastructure running `next build && next start` against a
+Node.js 22+ runtime): exactly one process, one pool, for the app's entire
+uptime. `DATABASE_POOL_MAX`'s default (10) is a reasonable starting point;
+size it up for real concurrency. No pooler required — a direct Postgres
+connection string is fine. This satisfies the project brief's constraint
 that the core workflow must not depend on a foreign-only service that may
 be inaccessible from Russia (Vercel, alongside Stripe/OpenAI/Anthropic/
-Clerk, is never a requirement). Vercel itself still works if chosen — this
-app never opts into Vercel's Edge Runtime — but nothing here is
-Vercel-specific.
+Clerk, is never a *requirement*) — still fully supported, unchanged.
+
+**Model B — Vercel serverless functions** (this app never opts into
+Vercel's Edge Runtime — no route sets `export const runtime = "edge"`,
+which would be genuinely incompatible with the `pg` driver this app
+uses): the real risk here is not the singleton pattern above — it's
+*aggregate* connections across many concurrently warm serverless
+instances, each with its own small pool. At real concurrency (e.g. 50
+warm instances × `DATABASE_POOL_MAX`) this can exhaust a normal Postgres
+server's `max_connections` — the well-known "serverless + Postgres"
+problem. The fix is standard and requires **no code change**, only
+deployment configuration:
+1. `DATABASE_URL` must be a *pooled* (transaction-mode) connection string
+   — a provider's built-in pooler (Neon's pooled endpoint, Supabase's on
+   port 6543) or an external PgBouncer. A direct connection string here
+   is the actual risk, not the app code.
+2. `DATABASE_POOL_MAX` should be set low (1–3) for this deployment — this
+   bounds *each instance's own* pool, and many instances can run
+   concurrently.
+3. `DIRECT_URL` (see `.env.example`) must be set to the *non-pooled*
+   connection string — `prisma migrate deploy`'s advisory lock and
+   session state don't survive a transaction pooler, so migrations always
+   need the direct connection even when the running app uses the pooled
+   one. `prisma.config.ts` already reads this (falls back to
+   `DATABASE_URL` when unset, so Model A needs no `DIRECT_URL` at all).
 
 **Database:** a single reachable Postgres 14+ instance (required since
 Phase 1). No read replicas or multi-region setup — out of scope until a
