@@ -263,7 +263,12 @@ pipeline stage, or container entrypoint ordering) — never `prisma migrate
 dev` in production (that's the interactive, dev-only command used
 elsewhere in this doc), and never triggered automatically by the running
 app at request time, which could race a live request against an
-in-progress schema change.
+in-progress schema change. For Model B, `package.json`'s `vercel-build`
+script runs this automatically as part of the build (gated on
+`VERCEL_ENV=production`, so preview builds never touch production
+migrations) — Vercel's build environment sits close to most providers'
+database regions, avoiding the advisory-lock timeout `prisma migrate
+deploy` can hit over a slow connection run from further away.
 
 **Scheduler:** unchanged from
 [Collections automation scheduler](#collections-automation-scheduler)
