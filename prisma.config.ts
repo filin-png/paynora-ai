@@ -13,6 +13,20 @@ loadEnv();
 export default defineConfig({
   schema: "prisma/schema.prisma",
   datasource: {
-    url: env("DATABASE_URL"),
+    // DIRECT_URL (optional): a non-pooled Postgres connection string.
+    // Required only when DATABASE_URL points at a transaction-mode pooler
+    // (Neon's pooled endpoint, PgBouncer, etc — the recommended setup for
+    // any per-invocation serverless deployment, see
+    // docs/production-readiness.md#database). Prisma's migration engine
+    // holds an advisory lock and session state across statements, which a
+    // transaction-pooled connection cannot provide — so `prisma migrate
+    // deploy`/`dev`/`db push` must always go through the *direct*
+    // connection, never the pooled one. Falls back to DATABASE_URL so a
+    // single-URL Postgres (local dev, a long-lived-process deployment
+    // with no pooler in front) needs no extra configuration. Only ever
+    // read here, by the Prisma CLI — the running app always connects via
+    // DATABASE_URL directly (src/server/db/client.ts), never through this
+    // file.
+    url: process.env.DIRECT_URL ?? env("DATABASE_URL"),
   },
 });
