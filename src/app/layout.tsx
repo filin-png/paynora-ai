@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 
+import { Analytics } from "@vercel/analytics/next";
 import { CookieConsentBanner } from "@/components/cookie-consent-banner";
 import { getCookieConsent } from "@/lib/privacy/get-cookie-consent";
 
@@ -18,6 +19,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
       <body className="min-h-full flex flex-col font-sans">
         {children}
         <CookieConsentBanner initialConsent={cookieConsent} />
+        <Analytics />
       </body>
     </html>
   );
