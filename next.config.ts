@@ -15,15 +15,21 @@ const isProd = process.env.NODE_ENV === "production";
  * uses inline `style` attributes for dynamic values (chart colors,
  * per-row accents) — CSP's `style-src` covers style attributes as well as
  * `<style>` elements, and nonce-based styling would need per-request
- * middleware this app doesn't have. `script-src` does not need it: this
- * app has no inline `<script>` tags of its own, and Next.js's own
- * App Router hydration payload does not require `'unsafe-inline'` to run.
- * Development keeps `'unsafe-eval'`/`'unsafe-inline'` for script-src and
- * allows the HMR websocket — never relaxed in production.
+ * middleware this app doesn't have. `script-src` needs `'unsafe-inline'`
+ * too, for the same reason: Next.js's own App Router hydration payload
+ * (the `self.__next_f.push(...)` inline scripts it streams for
+ * Suspense/`loading.tsx` boundaries) does require it — confirmed by a
+ * real production-build repro (`next build && next start`) where
+ * dropping it broke hydration on any route that streams, e.g. `/app` for
+ * a first-time user, with `Minified React error #412`. A nonce-based
+ * script-src would remove the need for this and is stricter, but (like
+ * style-src above) needs per-request middleware this app doesn't have.
+ * Development also keeps `'unsafe-eval'` for script-src and allows the
+ * HMR websocket — the one difference that's still dev-only.
  */
 const csp = [
   "default-src 'self'",
-  `script-src 'self'${isProd ? "" : " 'unsafe-eval' 'unsafe-inline'"}`,
+  `script-src 'self' 'unsafe-inline'${isProd ? "" : " 'unsafe-eval'"}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data:",
   "font-src 'self'",
