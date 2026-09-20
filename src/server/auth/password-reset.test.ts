@@ -90,7 +90,7 @@ describe("requestPasswordReset", () => {
     await expect(resetPassword(firstToken, "new-password-123")).rejects.toThrow(
       InvalidOrExpiredResetTokenError,
     );
-    await expect(resetPassword(secondToken, "new-password-123")).resolves.toBeUndefined();
+    await expect(resetPassword(secondToken, "new-password-123")).resolves.toBe(user.email);
   });
 
   it("blocks further requests once the per-account threshold is exceeded", async () => {

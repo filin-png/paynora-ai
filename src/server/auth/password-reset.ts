@@ -146,11 +146,14 @@ export async function resetPassword(
   rawToken: string,
   newPassword: string,
   now: Date = new Date(),
-): Promise<void> {
+): Promise<string> {
   passwordSchema.parse(newPassword);
   const tokenHash = hashToken(rawToken);
 
-  const resetToken = await prisma.passwordResetToken.findUnique({ where: { tokenHash } });
+  const resetToken = await prisma.passwordResetToken.findUnique({
+    where: { tokenHash },
+    include: { user: { select: { email: true } } },
+  });
   if (!resetToken) throw new InvalidOrExpiredResetTokenError();
 
   const passwordHash = await hashPassword(newPassword);
@@ -164,4 +167,11 @@ export async function resetPassword(
 
     await tx.user.update({ where: { id: resetToken.userId }, data: { passwordHash } });
   });
+
+  // Returned so the caller (src/app/reset-password/actions.ts) can sign the
+  // user straight in with their new password — matches sign-up's
+  // auto-sign-in (src/app/sign-up/actions.ts), instead of making someone
+  // who just proved control of their email and chose a new password go
+  // re-enter both on a separate sign-in screen.
+  return resetToken.user.email;
 }

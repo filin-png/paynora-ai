@@ -1,7 +1,9 @@
 "use server";
 
+import { AuthError } from "next-auth";
 import { z } from "zod";
 
+import { signIn } from "@/server/auth/config";
 import { InvalidOrExpiredResetTokenError, resetPassword } from "@/server/auth/password-reset";
 
 export type ResetPasswordFormState = { message: string; tone: "success" | "danger" } | null;
@@ -17,8 +19,9 @@ export async function resetPasswordAction(
     return { message: "This password reset link is invalid or has expired.", tone: "danger" };
   }
 
+  let email: string;
   try {
-    await resetPassword(token, password);
+    email = await resetPassword(token, password);
   } catch (error) {
     if (error instanceof InvalidOrExpiredResetTokenError) {
       return { message: error.message, tone: "danger" };
@@ -29,8 +32,19 @@ export async function resetPasswordAction(
     throw error;
   }
 
-  return {
-    message: "Your password has been reset. You can now sign in with your new password.",
-    tone: "success",
-  };
+  try {
+    await signIn("credentials", { email, password, redirectTo: "/app" });
+    return null;
+  } catch (error) {
+    if (error instanceof AuthError) {
+      // Password was reset either way — only the automatic sign-in step
+      // failed, so send them to sign in manually instead of surfacing an
+      // opaque error for a reset that actually succeeded.
+      return {
+        message: "Your password has been reset. You can now sign in with your new password.",
+        tone: "success",
+      };
+    }
+    throw error;
+  }
 }
