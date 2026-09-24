@@ -488,16 +488,16 @@ function SiteFooter() {
       <div className="mx-auto flex w-full max-w-6xl flex-col items-center justify-between gap-4 px-5 py-8 text-sm text-muted sm:flex-row sm:px-6">
         <PaynoraLogo size={20} className="opacity-80" />
         <nav className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs">
-          <Link href="/privacy-policy" className="hover:text-foreground">
+          <Link href="/privacy-policy" className="-my-2 py-2 hover:text-foreground">
             Privacy Policy
           </Link>
-          <Link href="/terms-of-service" className="hover:text-foreground">
+          <Link href="/terms-of-service" className="-my-2 py-2 hover:text-foreground">
             Terms of Service
           </Link>
-          <Link href="/data-retention" className="hover:text-foreground">
+          <Link href="/data-retention" className="-my-2 py-2 hover:text-foreground">
             Data Retention
           </Link>
-          <Link href="/subprocessors" className="hover:text-foreground">
+          <Link href="/subprocessors" className="-my-2 py-2 hover:text-foreground">
             Subprocessors
           </Link>
         </nav>

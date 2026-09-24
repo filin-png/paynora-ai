@@ -51,6 +51,12 @@ const securityHeaders = [
   // exhaustive allowlist of every Permissions-Policy feature, just the
   // ones worth being explicit about.
   { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), interest-cohort=()" },
+  // Production is only ever served over HTTPS (Vercel + Cloudflare in
+  // front) — harmless to set unconditionally, but scoped to prod anyway
+  // to keep local `next dev` over plain HTTP unaffected.
+  ...(isProd
+    ? [{ key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains; preload" }]
+    : []),
 ];
 
 const nextConfig: NextConfig = {

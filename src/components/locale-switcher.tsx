@@ -42,7 +42,7 @@ export function LocaleSwitcher({ locale, dark = false }: { locale: Locale; dark?
           aria-pressed={locale === value}
           disabled={isPending}
           className={cn(
-            "rounded-full px-2 py-0.5 transition-colors disabled:opacity-60",
+            "min-h-6 min-w-6 rounded-full px-2 py-1 transition-colors disabled:opacity-60",
             locale === value
               ? dark
                 ? "bg-white/15 text-white"
