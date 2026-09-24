@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Plus, Receipt, Upload } from "lucide-react";
+import type { InsightPriority } from "@prisma/client";
 
 import type { BadgeProps } from "@/components/ui/badge";
 import { Badge } from "@/components/ui/badge";
@@ -8,12 +9,15 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { Table, TableBody, TableCell, TableContainer, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs } from "@/components/ui/tabs";
+import { getDictionary } from "@/lib/i18n";
+import { getLocale } from "@/lib/i18n/get-locale";
+import { pluralForm } from "@/lib/i18n/plural";
 import { cn } from "@/lib/utils";
 import type { Currency } from "@/server/ar/currency";
 import { daysBetween, getBusinessToday, toDateOnlyString } from "@/server/ar/dates";
 import { listInvoicesWithFinancials, type InvoiceListFilter } from "@/server/ar/invoices";
 import { formatMoney } from "@/server/ar/money";
-import { getPaymentOutlookForInvoiceIds, paymentOutlookLabel, type PaymentOutlookBand } from "@/server/attention/payment-outlook";
+import { getPaymentOutlookForInvoiceIds, type PaymentOutlookBand } from "@/server/attention/payment-outlook";
 import { computeOverduePriority } from "@/server/operator/insights";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
 import { getCollectionsBadgesForInvoices } from "../collections-badge";
@@ -30,18 +34,13 @@ const OUTLOOK_TONE: Record<PaymentOutlookBand, NonNullable<BadgeProps["tone"]>> 
 // for its insight priority (src/server/operator/insights.ts) — never a
 // second "how urgent is this" calculation. Only overdue invoices get a
 // priority badge; a not-yet-overdue invoice has nothing to prioritize yet.
-const PRIORITY_TONE: Record<string, NonNullable<BadgeProps["tone"]>> = {
+const PRIORITY_TONE: Record<InsightPriority, NonNullable<BadgeProps["tone"]>> = {
   HIGH: "danger",
   MEDIUM: "warning",
   LOW: "neutral",
 };
 
-const FILTERS: { value: InvoiceListFilter; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "open", label: "Open" },
-  { value: "overdue", label: "Overdue" },
-  { value: "paid", label: "Paid" },
-];
+const FILTER_VALUES: InvoiceListFilter[] = ["all", "open", "overdue", "paid"];
 
 // Bounds the invoices list page's query cost regardless of organization
 // size — see docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-6. `+1` is
@@ -58,9 +57,29 @@ export default async function InvoicesPage({
 }) {
   const { orgSlug } = await params;
   const { filter: rawFilter, cursor } = await searchParams;
-  const filter: InvoiceListFilter = FILTERS.some((f) => f.value === rawFilter)
+  const filter: InvoiceListFilter = FILTER_VALUES.includes(rawFilter as InvoiceListFilter)
     ? (rawFilter as InvoiceListFilter)
     : "all";
+  const locale = await getLocale();
+  const dict = getDictionary(locale);
+  const t = dict.invoices;
+  const FILTERS: { value: InvoiceListFilter; label: string }[] = [
+    { value: "all", label: t.filterAll },
+    { value: "open", label: t.filterOpen },
+    { value: "overdue", label: t.filterOverdue },
+    { value: "paid", label: t.filterPaid },
+  ];
+  const PRIORITY_LABEL: Record<InsightPriority, string> = {
+    HIGH: t.priorityHigh,
+    MEDIUM: t.priorityMedium,
+    LOW: t.priorityLow,
+  };
+  const OUTLOOK_LABEL: Record<PaymentOutlookBand, string> = {
+    "on-track": t.outlookOnTrack,
+    likely: t.outlookLikely,
+    "at-risk": t.outlookAtRisk,
+    "insufficient-history": t.outlookInsufficientHistory,
+  };
   const context = await requireOrganizationMembershipForPage(orgSlug);
   const page = await listInvoicesWithFinancials(context.organization.id, filter, {
     cursor,
@@ -90,11 +109,15 @@ export default async function InvoicesPage({
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        title="Invoices"
+        title={t.title}
         description={
           invoices.length === 0
-            ? "No invoices to show."
-            : `${invoices.length}${hasMore ? "+" : ""} invoice${invoices.length === 1 && !hasMore ? "" : "s"}.`
+            ? t.noInvoices
+            : `${invoices.length}${hasMore ? "+" : ""} ${pluralForm(invoices.length, locale, {
+                one: t.countOne,
+                few: t.countFew,
+                many: t.countMany,
+              })}`
         }
         actions={
           <div className="flex gap-2">
@@ -103,11 +126,11 @@ export default async function InvoicesPage({
               className={cn(buttonVariants({ variant: "outline" }))}
             >
               <Upload className="size-4" />
-              Import
+              {dict.common.import}
             </Link>
             <Link href={`/app/${orgSlug}/invoices/new`} className={cn(buttonVariants())}>
               <Plus className="size-4" />
-              New invoice
+              {t.newInvoice}
             </Link>
           </div>
         }
@@ -126,20 +149,20 @@ export default async function InvoicesPage({
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Invoice</TableHead>
-                <TableHead>Customer</TableHead>
-                <TableHead className="text-right">Amount</TableHead>
-                <TableHead className="text-right">Outstanding</TableHead>
-                <TableHead>Due</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Priority</TableHead>
-                <TableHead>Payment outlook</TableHead>
-                <TableHead>Collections</TableHead>
+                <TableHead>{t.columnInvoice}</TableHead>
+                <TableHead>{t.columnCustomer}</TableHead>
+                <TableHead className="text-right">{t.columnAmount}</TableHead>
+                <TableHead className="text-right">{t.columnOutstanding}</TableHead>
+                <TableHead>{t.columnDue}</TableHead>
+                <TableHead>{t.columnStatus}</TableHead>
+                <TableHead>{t.columnPriority}</TableHead>
+                <TableHead>{t.columnPaymentOutlook}</TableHead>
+                <TableHead>{t.columnCollections}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {invoices.map(({ invoice, financials }) => {
-                const status = getInvoiceStatusDisplay(invoice, financials);
+                const status = getInvoiceStatusDisplay(invoice, financials, t);
                 const collectionsBadge = collectionsBadges.get(invoice.id) ?? null;
                 const daysOverdue = financials.isOverdue ? daysBetween(toDateOnlyString(invoice.dueDate), today) : 0;
                 const priority = financials.isOverdue ? computeOverduePriority(daysOverdue) : null;
@@ -167,7 +190,7 @@ export default async function InvoicesPage({
                     <TableCell>
                       {priority ? (
                         <Badge tone={PRIORITY_TONE[priority]}>
-                          {priority.charAt(0) + priority.slice(1).toLowerCase()} · {daysOverdue}d
+                          {PRIORITY_LABEL[priority]} · {daysOverdue}{t.daysAbbrev}
                         </Badge>
                       ) : (
                         <span className="text-xs text-muted-foreground">—</span>
@@ -179,7 +202,7 @@ export default async function InvoicesPage({
                         if (!outlook) return <span className="text-xs text-muted-foreground">—</span>;
                         return (
                           <Badge tone={OUTLOOK_TONE[outlook.band]} title={outlook.explanation}>
-                            {paymentOutlookLabel(outlook.band)}
+                            {OUTLOOK_LABEL[outlook.band]}
                           </Badge>
                         );
                       })()}
@@ -196,11 +219,11 @@ export default async function InvoicesPage({
       ) : (
         <EmptyState
           icon={Receipt}
-          title="No invoices yet"
-          description="Create your first invoice to start tracking receivables."
+          title={t.emptyTitle}
+          description={t.emptyDescription}
           action={
             <Link href={`/app/${orgSlug}/invoices/new`} className={cn(buttonVariants())}>
-              Create your first invoice
+              {t.emptyAction}
             </Link>
           }
         />
@@ -208,7 +231,7 @@ export default async function InvoicesPage({
 
       {hasMore ? (
         <Link href={pageHref(nextCursor)} className={cn(buttonVariants({ variant: "outline" }), "self-center")}>
-          Next page
+          {dict.common.nextPage}
         </Link>
       ) : null}
     </div>

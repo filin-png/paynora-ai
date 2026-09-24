@@ -7,6 +7,9 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { Table, TableBody, TableCell, TableContainer, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs } from "@/components/ui/tabs";
+import { getDictionary } from "@/lib/i18n";
+import { getLocale } from "@/lib/i18n/get-locale";
+import { pluralForm } from "@/lib/i18n/plural";
 import { cn } from "@/lib/utils";
 import { listCustomers } from "@/server/ar/customers";
 import { formatMoney } from "@/server/ar/money";
@@ -28,6 +31,9 @@ export default async function CustomersPage({
 }) {
   const { orgSlug } = await params;
   const { archived, cursor } = await searchParams;
+  const locale = await getLocale();
+  const dict = getDictionary(locale);
+  const t = dict.customers;
   const context = await requireOrganizationMembershipForPage(orgSlug);
   const showArchived = archived === "1";
   const [page, receivables] = await Promise.all([
@@ -53,11 +59,15 @@ export default async function CustomersPage({
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        title="Customers"
+        title={t.title}
         description={
           customers.length === 0
-            ? "No customers yet."
-            : `${customers.length}${hasMore ? "+" : ""} customer${customers.length === 1 && !hasMore ? "" : "s"}.`
+            ? t.noCustomers
+            : `${customers.length}${hasMore ? "+" : ""} ${pluralForm(customers.length, locale, {
+                one: t.countOne,
+                few: t.countFew,
+                many: t.countMany,
+              })}`
         }
         actions={
           <div className="flex gap-2">
@@ -66,11 +76,11 @@ export default async function CustomersPage({
               className={cn(buttonVariants({ variant: "outline" }))}
             >
               <Upload className="size-4" />
-              Import
+              {dict.common.import}
             </Link>
             <Link href={`/app/${orgSlug}/customers/new`} className={cn(buttonVariants())}>
               <Plus className="size-4" />
-              New customer
+              {t.newCustomer}
             </Link>
           </div>
         }
@@ -78,8 +88,8 @@ export default async function CustomersPage({
 
       <Tabs
         items={[
-          { href: `/app/${orgSlug}/customers`, label: "Active", active: !showArchived },
-          { href: `/app/${orgSlug}/customers?archived=1`, label: "Include archived", active: showArchived },
+          { href: `/app/${orgSlug}/customers`, label: t.filterActive, active: !showArchived },
+          { href: `/app/${orgSlug}/customers?archived=1`, label: t.filterIncludeArchived, active: showArchived },
         ]}
       />
 
@@ -88,10 +98,10 @@ export default async function CustomersPage({
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Customer</TableHead>
-                <TableHead>Email</TableHead>
-                <TableHead className="text-right">Open invoices</TableHead>
-                <TableHead className="text-right">Outstanding</TableHead>
+                <TableHead>{t.columnCustomer}</TableHead>
+                <TableHead>{t.columnEmail}</TableHead>
+                <TableHead className="text-right">{t.columnOpenInvoices}</TableHead>
+                <TableHead className="text-right">{t.columnOutstanding}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -102,7 +112,7 @@ export default async function CustomersPage({
                     <TableCell className="p-0">
                       <Link href={`/app/${orgSlug}/customers/${customer.id}`} className="flex items-center gap-2 px-4 py-3.5 font-medium text-foreground">
                         {customer.name}
-                        {customer.archivedAt ? <Badge tone="neutral">Archived</Badge> : null}
+                        {customer.archivedAt ? <Badge tone="neutral">{t.archived}</Badge> : null}
                       </Link>
                     </TableCell>
                     <TableCell className="text-muted">{customer.email ?? "—"}</TableCell>
@@ -123,11 +133,11 @@ export default async function CustomersPage({
       ) : (
         <EmptyState
           icon={Users}
-          title="No customers yet"
-          description="Add your first customer to start invoicing them."
+          title={t.emptyTitle}
+          description={t.emptyDescription}
           action={
             <Link href={`/app/${orgSlug}/customers/new`} className={cn(buttonVariants())}>
-              Add your first customer
+              {t.emptyAction}
             </Link>
           }
         />
@@ -135,7 +145,7 @@ export default async function CustomersPage({
 
       {hasMore ? (
         <Link href={pageHref(nextCursor)} className={cn(buttonVariants({ variant: "outline" }), "self-center")}>
-          Next page
+          {dict.common.nextPage}
         </Link>
       ) : null}
     </div>
