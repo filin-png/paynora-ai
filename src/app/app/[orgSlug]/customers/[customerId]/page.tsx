@@ -10,6 +10,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { SectionHeader } from "@/components/ui/page-header";
 import { TrendBadge } from "@/components/ui/trend-indicator";
 import { CopilotPanel } from "@/components/copilot/copilot-panel";
+import { getDictionary } from "@/lib/i18n";
+import { getLocale } from "@/lib/i18n/get-locale";
 import { cn } from "@/lib/utils";
 import { isResourceNotFoundError } from "@/lib/not-found";
 import { resolveCommunicationDestination } from "@/server/communications/channel";
@@ -30,13 +32,6 @@ const RISK_TONE: Record<CustomerRiskLevel, NonNullable<BadgeProps["tone"]>> = {
   high: "danger",
 };
 
-const RISK_LABEL: Record<CustomerRiskLevel, string> = {
-  none: "No risk",
-  low: "Low risk",
-  medium: "Medium risk",
-  high: "High risk",
-};
-
 // See docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-6 — bounds a
 // long-lived customer's activity timeline.
 const ACTIVITY_PAGE_SIZE = 25;
@@ -50,6 +45,15 @@ export default async function CustomerDetailPage({
 }) {
   const { orgSlug, customerId } = await params;
   const { activityCursor } = await searchParams;
+  const locale = await getLocale();
+  const dict = getDictionary(locale);
+  const t = dict.customerDetail;
+  const RISK_LABEL: Record<CustomerRiskLevel, string> = {
+    none: t.riskNone,
+    low: t.riskLow,
+    medium: t.riskMedium,
+    high: t.riskHigh,
+  };
   const context = await requireOrganizationMembershipForPage(orgSlug);
   const customer = await getCustomer(context.organization.id, customerId).catch((error: unknown) => {
     if (isResourceNotFoundError(error)) notFound();
@@ -80,14 +84,14 @@ export default async function CustomerDetailPage({
           className="inline-flex items-center gap-1.5 text-xs font-medium text-muted hover:text-foreground"
         >
           <ArrowLeft className="size-3.5" />
-          Customers
+          {dict.customers.title}
         </Link>
 
         <div className="mt-3 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-2xl font-semibold tracking-tight text-foreground">{customer.name}</h1>
-              {customer.archivedAt ? <Badge tone="neutral">Archived</Badge> : null}
+              {customer.archivedAt ? <Badge tone="neutral">{dict.customers.archived}</Badge> : null}
             </div>
             <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted">
               {customer.email ? (
@@ -118,7 +122,7 @@ export default async function CustomerDetailPage({
                 return (
                   <span className="inline-flex items-center gap-1.5 text-xs text-muted">
                     <Send className="size-3.5" />
-                    Reminders go to {destination.channel === "EMAIL" ? "email" : "Telegram"}: {destination.destination}
+                    {t.remindersGoToPrefix} {destination.channel === "EMAIL" ? t.channelEmail : t.channelTelegram}: {destination.destination}
                   </span>
                 );
               })()}
@@ -126,19 +130,19 @@ export default async function CustomerDetailPage({
           </div>
           <div className="flex shrink-0 gap-2">
             <Link href={`/app/${orgSlug}/customers/${customerId}/edit`} className={cn(buttonVariants({ variant: "outline" }))}>
-              Edit
+              {t.edit}
             </Link>
             {!customer.archivedAt ? (
               <Dialog
-                trigger={<Button type="button" variant="outline">Archive</Button>}
-                title="Archive this customer?"
-                description="Archived customers are hidden from the invoice picker, but their existing invoices and payments are unaffected."
+                trigger={<Button type="button" variant="outline">{t.archive}</Button>}
+                title={t.archiveDialogTitle}
+                description={t.archiveDialogDescription}
               >
                 <div className="flex justify-end gap-2">
                   <DialogCancelButton className={cn(buttonVariants({ variant: "outline", size: "sm" }))} />
                   <form action={boundArchive}>
                     <button type="submit" className={cn(buttonVariants({ size: "sm" }))}>
-                      Archive customer
+                      {t.archiveCustomer}
                     </button>
                   </form>
                 </div>
@@ -152,14 +156,14 @@ export default async function CustomerDetailPage({
         <Card className="flex flex-wrap gap-8 p-5">
           {Array.from(outstandingByCurrency.entries()).map(([currency, amount]) => (
             <div key={currency}>
-              <p className="text-xs font-medium text-muted-foreground">Outstanding ({currency})</p>
+              <p className="text-xs font-medium text-muted-foreground">{t.outstandingCurrency.replace("{currency}", currency)}</p>
               <p className="mt-1 text-xl font-semibold tabular-nums text-foreground">
                 {formatMoney(amount, currency as Currency)}
               </p>
             </div>
           ))}
           <div>
-            <p className="text-xs font-medium text-muted-foreground">Open invoices</p>
+            <p className="text-xs font-medium text-muted-foreground">{dict.customers.columnOpenInvoices}</p>
             <p className="mt-1 text-xl font-semibold tabular-nums text-foreground">{openInvoices.length}</p>
           </div>
         </Card>
@@ -167,14 +171,14 @@ export default async function CustomerDetailPage({
 
       {customer.notes ? (
         <Card className="p-5">
-          <p className="text-xs font-medium text-muted-foreground">Notes</p>
+          <p className="text-xs font-medium text-muted-foreground">{dict.invoiceDetail.notes}</p>
           <p className="mt-1.5 whitespace-pre-wrap text-sm text-foreground">{customer.notes}</p>
         </Card>
       ) : null}
 
       <Card className="p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-xs font-medium text-muted-foreground">Payment behavior trend</p>
+          <p className="text-xs font-medium text-muted-foreground">{t.paymentBehaviorTrend}</p>
           <div className="flex items-center gap-2">
             <Badge tone={RISK_TONE[riskProfile.riskLevel]}>{RISK_LABEL[riskProfile.riskLevel]}</Badge>
             <TrendBadge trend={riskProfile.trend} />
@@ -182,8 +186,12 @@ export default async function CustomerDetailPage({
         </div>
         <p className="mt-1.5 text-sm text-foreground">
           {riskProfile.trend.status === "insufficient-history"
-            ? "Not enough payment history yet to identify a trend — this needs at least two recorded payments in each of two comparison windows."
-            : `Recent average delay: ${riskProfile.trend.recentAvgDelayDays} day(s) (was ${riskProfile.trend.previousAvgDelayDays} day(s)), based on ${riskProfile.trend.recentPaymentCount} recent and ${riskProfile.trend.previousPaymentCount} prior payment(s).`}
+            ? t.insufficientTrendHistory
+            : t.recentAvgDelay
+                .replace("{recent}", String(riskProfile.trend.recentAvgDelayDays))
+                .replace("{previous}", String(riskProfile.trend.previousAvgDelayDays))
+                .replace("{recentCount}", String(riskProfile.trend.recentPaymentCount))
+                .replace("{previousCount}", String(riskProfile.trend.previousPaymentCount))}
         </p>
         <p className="mt-2 text-xs text-muted-foreground">{riskProfile.recommendedNextAction}</p>
       </Card>
@@ -191,17 +199,17 @@ export default async function CustomerDetailPage({
       <CopilotPanel
         orgSlug={orgSlug}
         targetId={customerId}
-        questions={[{ type: "explain_customer", label: `Explain ${customer.name}'s risk` }]}
+        questions={[{ type: "explain_customer", label: t.copilotQuestion.replace("{name}", customer.name) }]}
       />
 
       <div>
         <SectionHeader
-          title="Invoices"
+          title={dict.invoices.title}
           actions={
             !customer.archivedAt ? (
               <Link href={`/app/${orgSlug}/invoices/new?customerId=${customerId}`} className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
                 <Plus className="size-4" />
-                New invoice
+                {dict.invoices.newInvoice}
               </Link>
             ) : undefined
           }
@@ -210,7 +218,7 @@ export default async function CustomerDetailPage({
           <Card className="mt-3 overflow-hidden">
             <ul className="divide-y divide-border">
               {invoices.map(({ invoice, financials }) => {
-                const status = getInvoiceStatusDisplay(invoice, financials);
+                const status = getInvoiceStatusDisplay(invoice, financials, dict.invoices);
                 return (
                   <li key={invoice.id}>
                     <Link
@@ -220,7 +228,7 @@ export default async function CustomerDetailPage({
                       <span className="font-medium text-foreground">{invoice.number}</span>
                       <div className="flex items-center gap-3">
                         <span className="tabular-nums text-muted">
-                          {formatMoney(financials.outstandingMinor, invoice.currency as Currency)} outstanding
+                          {formatMoney(financials.outstandingMinor, invoice.currency as Currency)} {t.outstandingSuffix}
                         </span>
                         <Badge tone={status.tone}>{status.label}</Badge>
                       </div>
@@ -231,12 +239,12 @@ export default async function CustomerDetailPage({
             </ul>
           </Card>
         ) : (
-          <EmptyState className="mt-3 py-10" title="No invoices for this customer yet" />
+          <EmptyState className="mt-3 py-10" title={t.noInvoicesYet} />
         )}
       </div>
 
       <div>
-        <SectionHeader title="Activity" />
+        <SectionHeader title={dict.invoiceDetail.activity} />
         {activity.length > 0 ? (
           <ul className="mt-3 flex flex-col gap-2.5 text-sm">
             {activity.map((event) => (
@@ -247,14 +255,14 @@ export default async function CustomerDetailPage({
             ))}
           </ul>
         ) : (
-          <p className="mt-3 text-sm text-muted">No activity yet.</p>
+          <p className="mt-3 text-sm text-muted">{dict.invoiceDetail.noActivityYet}</p>
         )}
         {activityHasMore ? (
           <Link
             href={`/app/${orgSlug}/customers/${customerId}?activityCursor=${nextActivityCursor}`}
             className="mt-3 inline-block text-xs font-medium text-primary hover:underline"
           >
-            Older activity
+            {dict.invoiceDetail.olderActivity}
           </Link>
         ) : null}
       </div>

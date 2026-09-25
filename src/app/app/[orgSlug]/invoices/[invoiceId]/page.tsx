@@ -10,6 +10,9 @@ import { Dialog, DialogCancelButton } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SectionHeader } from "@/components/ui/page-header";
 import { CopilotPanel } from "@/components/copilot/copilot-panel";
+import { getDictionary, type Dictionary } from "@/lib/i18n";
+import { getLocale } from "@/lib/i18n/get-locale";
+import { pluralForm } from "@/lib/i18n/plural";
 import { cn } from "@/lib/utils";
 import { isResourceNotFoundError } from "@/lib/not-found";
 import { listInvoiceActivity } from "@/server/ar/activity";
@@ -18,7 +21,7 @@ import { daysBetween, getBusinessToday, toDateOnlyString } from "@/server/ar/dat
 import { getInvoiceWithFinancials } from "@/server/ar/invoices";
 import { formatMoney } from "@/server/ar/money";
 import { listPaymentsForInvoice } from "@/server/ar/payments";
-import { getPaymentOutlookForInvoiceIds, paymentOutlookLabel, type PaymentOutlookBand } from "@/server/attention/payment-outlook";
+import { getPaymentOutlookForInvoiceIds, type PaymentOutlookBand } from "@/server/attention/payment-outlook";
 import { getCollectionStatusForInvoice, type CollectionStatusView } from "@/server/collections/sequences";
 
 const OUTLOOK_TONE: Record<PaymentOutlookBand, NonNullable<BadgeProps["tone"]>> = {
@@ -54,6 +57,21 @@ export default async function InvoiceDetailPage({
 }) {
   const { orgSlug, invoiceId } = await params;
   const { activityCursor } = await searchParams;
+  const locale = await getLocale();
+  const dict = getDictionary(locale);
+  const t = dict.invoiceDetail;
+  const OUTLOOK_LABEL: Record<PaymentOutlookBand, string> = {
+    "on-track": dict.invoices.outlookOnTrack,
+    likely: dict.invoices.outlookLikely,
+    "at-risk": dict.invoices.outlookAtRisk,
+    "insufficient-history": dict.invoices.outlookInsufficientHistory,
+  };
+  const CRYPTO_STATUS_LABEL: Record<string, string> = {
+    OPEN: t.cryptoStatusOpen,
+    FULFILLED: t.cryptoStatusFulfilled,
+    CANCELLED: t.cryptoStatusCancelled,
+    EXPIRED: t.cryptoStatusExpired,
+  };
   const context = await requireOrganizationMembershipForPage(orgSlug);
   const { invoice, financials } = await getInvoiceWithFinancials(context.organization.id, invoiceId).catch(
     (error: unknown) => {
@@ -80,7 +98,7 @@ export default async function InvoiceDetailPage({
   const nextActivityCursor = activityHasMore ? activity.at(-1)!.id : null;
 
   const currency = invoice.currency as Currency;
-  const status = getInvoiceStatusDisplay(invoice, financials);
+  const status = getInvoiceStatusDisplay(invoice, financials, dict.invoices);
   const canCancel = invoice.status === "OPEN" && financials.paidMinor === 0n;
   const overdueDays = financials.isOverdue ? daysBetween(toDateOnlyString(invoice.dueDate), getBusinessToday()) : 0;
   const cryptoAvailable = isWalletEnabled() && activeWallets.length > 0;
@@ -96,7 +114,7 @@ export default async function InvoiceDetailPage({
           className="inline-flex items-center gap-1.5 text-xs font-medium text-muted hover:text-foreground"
         >
           <ArrowLeft className="size-3.5" />
-          Invoices
+          {t.backToInvoices}
         </Link>
 
         <div className="mt-3 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -107,7 +125,11 @@ export default async function InvoiceDetailPage({
               {financials.isOverdue ? (
                 <span className="inline-flex items-center gap-1 text-xs font-medium text-danger">
                   <CalendarClock className="size-3.5" />
-                  Overdue {overdueDays} day{overdueDays === 1 ? "" : "s"}
+                  {pluralForm(overdueDays, locale, {
+                    one: t.overdueDayOne,
+                    few: t.overdueDayFew,
+                    many: t.overdueDayMany,
+                  }).replace("{n}", String(overdueDays))}
                 </span>
               ) : null}
             </div>
@@ -129,15 +151,17 @@ export default async function InvoiceDetailPage({
       {canCancel ? (
         <div className="flex justify-end">
           <Dialog
-            trigger={<Button type="button" variant="outline">Cancel invoice</Button>}
-            title="Cancel this invoice?"
-            description={`${invoice.number} for ${invoice.customer.name} will be marked cancelled. This cannot be undone.`}
+            trigger={<Button type="button" variant="outline">{t.cancelInvoice}</Button>}
+            title={t.cancelDialogTitle}
+            description={t.cancelDialogDescription
+              .replace("{number}", invoice.number)
+              .replace("{customer}", invoice.customer.name)}
           >
             <div className="flex justify-end gap-2">
               <DialogCancelButton className={cn(buttonVariants({ variant: "outline", size: "sm" }))} />
               <form action={boundCancel}>
                 <button type="submit" className={cn(buttonVariants({ variant: "destructive", size: "sm" }))}>
-                  Cancel invoice
+                  {t.cancelInvoice}
                 </button>
               </form>
             </div>
@@ -146,15 +170,15 @@ export default async function InvoiceDetailPage({
       ) : null}
 
       <Card className="grid grid-cols-2 gap-6 p-6 sm:grid-cols-4">
-        <Stat label="Original amount" value={formatMoney(financials.amountMinor, currency)} />
-        <Stat label="Paid" value={formatMoney(financials.paidMinor, currency)} tone="success" />
-        <Stat label="Outstanding" value={formatMoney(financials.outstandingMinor, currency)} />
-        <Stat label="Due date" value={invoice.dueDate.toISOString().slice(0, 10)} />
+        <Stat label={t.statOriginalAmount} value={formatMoney(financials.amountMinor, currency)} />
+        <Stat label={t.statPaid} value={formatMoney(financials.paidMinor, currency)} tone="success" />
+        <Stat label={t.statOutstanding} value={formatMoney(financials.outstandingMinor, currency)} />
+        <Stat label={t.statDueDate} value={invoice.dueDate.toISOString().slice(0, 10)} />
       </Card>
 
       {invoice.notes ? (
         <Card className="p-5">
-          <p className="text-xs font-medium text-muted-foreground">Notes</p>
+          <p className="text-xs font-medium text-muted-foreground">{t.notes}</p>
           <p className="mt-1.5 whitespace-pre-wrap text-sm text-foreground">{invoice.notes}</p>
         </Card>
       ) : null}
@@ -164,36 +188,37 @@ export default async function InvoiceDetailPage({
         invoiceId={invoiceId}
         status={collectionsStatus}
         isOwner={context.role === "OWNER"}
+        t={t}
       />
 
       {outlook ? (
         <Card className="flex flex-wrap items-center justify-between gap-3 p-5">
           <div>
-            <p className="text-xs font-medium text-muted-foreground">Payment outlook</p>
+            <p className="text-xs font-medium text-muted-foreground">{t.paymentOutlook}</p>
             <p className="mt-1 text-sm text-foreground">{outlook.explanation}</p>
           </div>
-          <Badge tone={OUTLOOK_TONE[outlook.band]}>{paymentOutlookLabel(outlook.band)}</Badge>
+          <Badge tone={OUTLOOK_TONE[outlook.band]}>{OUTLOOK_LABEL[outlook.band]}</Badge>
         </Card>
       ) : null}
 
       <CopilotPanel
         orgSlug={orgSlug}
         targetId={invoiceId}
-        questions={[{ type: "explain_invoice", label: "Why this risk level?" }]}
+        questions={[{ type: "explain_invoice", label: t.copilotQuestion }]}
       />
 
       {canRecordPayment ? (
         <div className="flex flex-col gap-6">
-          <SectionHeader title="Payment methods" />
+          <SectionHeader title={t.paymentMethods} />
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Bank / card</p>
+              <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">{t.bankCard}</p>
               <Card className="mt-2 p-5">
                 <RecordPaymentForm action={boundRecordPayment} today={getBusinessToday()} />
               </Card>
             </div>
             <div>
-              <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Crypto</p>
+              <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">{t.crypto}</p>
               <Card className="mt-2 p-5">
                 {cryptoAvailable ? (
                   cryptoRequests.length > 0 ? (
@@ -201,31 +226,30 @@ export default async function InvoiceDetailPage({
                       {cryptoRequests.map((request) => (
                         <li key={request.id} className="flex items-center justify-between gap-3">
                           <span className="text-foreground">
-                            {request.asset} on {request.network}
+                            {t.cryptoRequestLabel.replace("{asset}", request.asset).replace("{network}", request.network)}
                           </span>
                           <Badge tone={request.status === "OPEN" ? "info" : request.status === "FULFILLED" ? "success" : "neutral"}>
-                            {request.status}
+                            {CRYPTO_STATUS_LABEL[request.status] ?? request.status}
                           </Badge>
                         </li>
                       ))}
                     </ul>
                   ) : (
                     <p className="text-sm text-muted">
-                      No crypto payment request has been created for this invoice yet. Create one from{" "}
+                      {t.noCryptoRequestYet}{" "}
                       <Link href={`/app/${orgSlug}/wallet`} className="font-medium text-primary hover:underline">
-                        Wallet
+                        {t.walletLink}
                       </Link>
                       .
                     </p>
                   )
                 ) : (
                   <p className="text-sm text-muted">
-                    Crypto payments aren&rsquo;t available yet — no wallet provider is connected in this deployment.
-                    See{" "}
+                    {t.cryptoNotAvailable}{" "}
                     <Link href={`/app/${orgSlug}/wallet`} className="font-medium text-primary hover:underline">
-                      Wallet
+                      {t.walletLink}
                     </Link>{" "}
-                    for details.
+                    {t.forDetails}
                   </p>
                 )}
               </Card>
@@ -235,7 +259,7 @@ export default async function InvoiceDetailPage({
       ) : null}
 
       <div>
-        <SectionHeader title="Payment history" />
+        <SectionHeader title={t.paymentHistory} />
         {payments.length > 0 ? (
           <Card className="mt-3 overflow-hidden">
             <ul className="divide-y divide-border">
@@ -253,12 +277,12 @@ export default async function InvoiceDetailPage({
             </ul>
           </Card>
         ) : (
-          <EmptyState className="mt-3 py-10" title="No payments recorded yet" />
+          <EmptyState className="mt-3 py-10" title={t.noPaymentsYet} />
         )}
       </div>
 
       <div>
-        <SectionHeader title="Activity" />
+        <SectionHeader title={t.activity} />
         {activity.length > 0 ? (
           <ul className="mt-3 flex flex-col gap-2.5 text-sm">
             {activity.map((event) => (
@@ -271,14 +295,14 @@ export default async function InvoiceDetailPage({
             ))}
           </ul>
         ) : (
-          <p className="mt-3 text-sm text-muted">No activity yet.</p>
+          <p className="mt-3 text-sm text-muted">{t.noActivityYet}</p>
         )}
         {activityHasMore ? (
           <Link
             href={`/app/${orgSlug}/invoices/${invoiceId}?activityCursor=${nextActivityCursor}`}
             className="mt-3 inline-block text-xs font-medium text-primary hover:underline"
           >
-            Older activity
+            {t.olderActivity}
           </Link>
         ) : null}
       </div>
@@ -310,40 +334,44 @@ function CollectionsStatusBlock({
   invoiceId,
   status,
   isOwner,
+  t,
 }: {
   orgSlug: string;
   invoiceId: string;
   status: CollectionStatusView;
   isOwner: boolean;
+  t: Dictionary["invoiceDetail"];
 }) {
   if (status.kind === "not_enrolled") return null;
   const badge = getCollectionsBadgeView(status);
 
   if (status.kind === "completed") {
     return (
-      <Alert tone="success" title="Collections completed">
-        This invoice was paid — no further follow-up is scheduled.
+      <Alert tone="success" title={t.collectionsCompletedTitle}>
+        {t.collectionsCompletedDescription}
       </Alert>
     );
   }
 
   if (status.kind === "stopped") {
     return (
-      <Alert tone="neutral" title="Collections stopped">
-        {status.stopReason ? `Reason: ${formatStopReason(status.stopReason)}.` : "No further follow-up is scheduled."}
+      <Alert tone="neutral" title={t.collectionsStoppedTitle}>
+        {status.stopReason
+          ? t.collectionsStopReasonPrefix.replace("{reason}", formatStopReason(status.stopReason))
+          : t.noFurtherFollowUp}
       </Alert>
     );
   }
 
   if (status.kind === "blocked_uncertain") {
     return (
-      <Alert tone="warning" title="Automation paused — delivery status uncertain">
-        <p>A previous reminder&rsquo;s delivery status couldn&rsquo;t be confirmed. Manual review is required before another reminder can be scheduled automatically.</p>
+      <Alert tone="warning" title={t.collectionsBlockedTitle}>
+        <p>{t.collectionsBlockedDescription}</p>
         {isOwner ? (
           <form action={pauseInvoiceCollectionsAction.bind(null, orgSlug, invoiceId, status.sequenceId)} className="mt-3">
             <button type="submit" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
               <PauseCircle className="size-4" />
-              Pause collections
+              {t.pauseCollections}
             </button>
           </form>
         ) : null}
@@ -356,13 +384,13 @@ function CollectionsStatusBlock({
       <Card className="flex items-center justify-between gap-4 p-5">
         <div className="flex items-center gap-2.5">
           {badge ? <Badge tone={badge.tone}>{badge.label}</Badge> : null}
-          <span className="text-sm text-muted">Collections follow-up is paused for this invoice.</span>
+          <span className="text-sm text-muted">{t.collectionsPausedDescription}</span>
         </div>
         {isOwner ? (
           <form action={resumeInvoiceCollectionsAction.bind(null, orgSlug, invoiceId, status.sequenceId)}>
             <button type="submit" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
               <PlayCircle className="size-4" />
-              Resume
+              {t.resume}
             </button>
           </form>
         ) : null}
@@ -375,12 +403,14 @@ function CollectionsStatusBlock({
       <div className="flex items-center gap-2.5">
         {badge ? <Badge tone={badge.tone}>{badge.label}</Badge> : null}
         <div className="text-sm">
-          <span className="font-medium text-foreground">Collections in progress</span>{" "}
+          <span className="font-medium text-foreground">{t.collectionsInProgress}</span>{" "}
           <span className="text-muted">
-            — step {status.stepsCompleted} of {status.stepCount}
+            {t.stepProgress
+              .replace("{completed}", String(status.stepsCompleted))
+              .replace("{total}", String(status.stepCount))}
             {status.nextStepDaysAfterDue !== undefined
-              ? `, next reminder at day +${status.nextStepDaysAfterDue} overdue`
-              : ", all configured steps have run"}
+              ? t.nextReminderAt.replace("{days}", String(status.nextStepDaysAfterDue))
+              : t.allStepsRun}
           </span>
         </div>
       </div>
@@ -388,7 +418,7 @@ function CollectionsStatusBlock({
         <form action={pauseInvoiceCollectionsAction.bind(null, orgSlug, invoiceId, status.sequenceId)}>
           <button type="submit" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
             <PauseCircle className="size-4" />
-            Pause
+            {t.pause}
           </button>
         </form>
       ) : null}
