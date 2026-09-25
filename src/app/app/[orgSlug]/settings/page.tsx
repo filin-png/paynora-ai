@@ -7,7 +7,7 @@ import { Card } from "@/components/ui/card";
 import { ConfirmActionButton } from "@/components/ui/confirm-action-button";
 import { PageHeader } from "@/components/ui/page-header";
 import { Tabs } from "@/components/ui/tabs";
-import { getDictionary } from "@/lib/i18n";
+import { getDictionary, type Dictionary } from "@/lib/i18n";
 import { getLocale } from "@/lib/i18n/get-locale";
 import { cn } from "@/lib/utils";
 import { getCookieConsent } from "@/lib/privacy/get-cookie-consent";
@@ -27,13 +27,15 @@ import { setAnalyticsEnabledAction } from "./privacy-actions";
 import { SupportForm } from "./support-form";
 import { RenameOrganizationForm } from "./rename-organization-form";
 
-const HEALTH_DISPLAY: Record<ProviderHealthStatus, { label: string; tone: NonNullable<BadgeProps["tone"]>; icon: typeof CircleCheck }> = {
-  HEALTHY: { label: "Configured", tone: "success", icon: CircleCheck },
-  DEGRADED: { label: "Degraded", tone: "warning", icon: CircleHelp },
-  DOWN: { label: "Down", tone: "danger", icon: CircleOff },
-  DISABLED: { label: "Not configured", tone: "neutral", icon: CircleOff },
-  UNKNOWN: { label: "Not available yet", tone: "neutral", icon: CircleHelp },
-};
+function healthDisplay(t: Dictionary["settings"]): Record<ProviderHealthStatus, { label: string; tone: NonNullable<BadgeProps["tone"]>; icon: typeof CircleCheck }> {
+  return {
+    HEALTHY: { label: t.healthConfigured, tone: "success", icon: CircleCheck },
+    DEGRADED: { label: t.healthDegraded, tone: "warning", icon: CircleHelp },
+    DOWN: { label: t.healthDown, tone: "danger", icon: CircleOff },
+    DISABLED: { label: t.healthNotConfigured, tone: "neutral", icon: CircleOff },
+    UNKNOWN: { label: t.healthNotAvailableYet, tone: "neutral", icon: CircleHelp },
+  };
+}
 
 const VENDOR_LABEL: Record<string, string> = {
   openrouter: "OpenRouter",
@@ -44,11 +46,13 @@ const VENDOR_LABEL: Record<string, string> = {
   anthropic: "Anthropic",
 };
 
-const VENDOR_GROUP_LABEL: Record<"ai" | "email" | "messaging", string> = {
-  ai: "AI",
-  email: "Email",
-  messaging: "Messaging",
-};
+function vendorGroupLabel(t: Dictionary["settings"]): Record<"ai" | "email" | "messaging", string> {
+  return {
+    ai: t.groupAi,
+    email: t.groupEmail,
+    messaging: t.groupMessaging,
+  };
+}
 
 const TABS = ["general", "members", "integrations", "security", "privacy", "billing", "readiness"] as const;
 type SettingsTab = (typeof TABS)[number];
@@ -64,94 +68,101 @@ export default async function OrganizationSettingsPage({
   const { tab: rawTab } = await searchParams;
   const tab: SettingsTab = TABS.includes(rawTab as SettingsTab) ? (rawTab as SettingsTab) : "general";
   const context = await requireOrganizationMembershipForPage(orgSlug);
+  const locale = await getLocale();
+  const dict = getDictionary(locale);
+  const t = dict.settings;
 
   return (
     <div className="flex flex-col gap-6">
-      <PageHeader title="Settings" description={context.organization.name} />
+      <PageHeader title={t.title} description={context.organization.name} />
 
       <Tabs
         items={[
-          { href: `/app/${orgSlug}/settings`, label: "General", active: tab === "general" },
-          { href: `/app/${orgSlug}/settings?tab=members`, label: "Members", active: tab === "members" },
-          { href: `/app/${orgSlug}/settings?tab=integrations`, label: "Integrations", active: tab === "integrations" },
-          { href: `/app/${orgSlug}/settings?tab=security`, label: "Security", active: tab === "security" },
-          { href: `/app/${orgSlug}/settings?tab=privacy`, label: "Privacy", active: tab === "privacy" },
-          { href: `/app/${orgSlug}/settings?tab=billing`, label: "Billing", active: tab === "billing" },
-          { href: `/app/${orgSlug}/settings?tab=readiness`, label: "Readiness", active: tab === "readiness" },
+          { href: `/app/${orgSlug}/settings`, label: t.tabGeneral, active: tab === "general" },
+          { href: `/app/${orgSlug}/settings?tab=members`, label: t.tabMembers, active: tab === "members" },
+          { href: `/app/${orgSlug}/settings?tab=integrations`, label: t.tabIntegrations, active: tab === "integrations" },
+          { href: `/app/${orgSlug}/settings?tab=security`, label: t.tabSecurity, active: tab === "security" },
+          { href: `/app/${orgSlug}/settings?tab=privacy`, label: t.tabPrivacy, active: tab === "privacy" },
+          { href: `/app/${orgSlug}/settings?tab=billing`, label: t.tabBilling, active: tab === "billing" },
+          { href: `/app/${orgSlug}/settings?tab=readiness`, label: t.tabReadiness, active: tab === "readiness" },
         ]}
       />
 
-      {tab === "general" ? <GeneralTab orgSlug={orgSlug} name={context.organization.name} role={context.role} /> : null}
+      {tab === "general" ? <GeneralTab orgSlug={orgSlug} name={context.organization.name} role={context.role} t={t} /> : null}
       {tab === "members" ? (
-        <MembersTab organizationId={context.organization.id} orgSlug={orgSlug} role={context.role} />
+        <MembersTab organizationId={context.organization.id} orgSlug={orgSlug} role={context.role} t={t} />
       ) : null}
       {tab === "integrations" ? <IntegrationsTab /> : null}
-      {tab === "security" ? <SecurityTab email={context.user.email} role={context.role} /> : null}
+      {tab === "security" ? <SecurityTab email={context.user.email} role={context.role} t={t} /> : null}
       {tab === "privacy" ? (
-        <PrivacyTab orgSlug={orgSlug} organizationId={context.organization.id} userId={context.user.id} role={context.role} />
+        <PrivacyTab orgSlug={orgSlug} organizationId={context.organization.id} userId={context.user.id} role={context.role} t={t} />
       ) : null}
       {tab === "billing" ? (
         <BillingTab organizationId={context.organization.id} orgSlug={orgSlug} role={context.role} />
       ) : null}
-      {tab === "readiness" ? <ReadinessTab organizationId={context.organization.id} role={context.role} /> : null}
+      {tab === "readiness" ? <ReadinessTab organizationId={context.organization.id} role={context.role} t={t} /> : null}
     </div>
   );
 }
 
-async function GeneralTab({ orgSlug, name, role }: { orgSlug: string; name: string; role: string }) {
+async function GeneralTab({
+  orgSlug,
+  name,
+  role,
+  t,
+}: {
+  orgSlug: string;
+  name: string;
+  role: string;
+  t: Dictionary["settings"];
+}) {
   if (role !== "OWNER") {
-    return <p className="text-sm text-muted">Only an organization owner can change these settings.</p>;
+    return <p className="text-sm text-muted">{t.ownerOnly}</p>;
   }
   const boundSeed = seedDemoDataAction.bind(null, orgSlug);
   const boundClear = clearDemoDataAction.bind(null, orgSlug);
   return (
     <div className="flex flex-col gap-4">
       <Card className="max-w-md p-6">
-        <p className="text-sm font-semibold text-foreground">Organization name</p>
+        <p className="text-sm font-semibold text-foreground">{t.orgNameLabel}</p>
         <RenameOrganizationForm orgSlug={orgSlug} currentName={name} />
       </Card>
 
       <Card className="max-w-md p-6">
-        <p className="text-sm font-semibold text-foreground">Sample data</p>
-        <p className="mt-1 text-xs text-muted">
-          Add a handful of fictional B2B customers and invoices — current, overdue, partially paid, and paid — to try
-          out PAYNORA before importing your real data. Clearly marked and safe to remove at any time.
-        </p>
+        <p className="text-sm font-semibold text-foreground">{t.sampleDataLabel}</p>
+        <p className="mt-1 text-xs text-muted">{t.sampleDataDescription}</p>
         <div className="mt-4 flex gap-2">
           <form action={boundSeed}>
             <Button type="submit" variant="outline" size="sm">
-              Add sample data
+              {t.addSampleData}
             </Button>
           </form>
           <ConfirmActionButton
             trigger={
               <button type="button" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
-                Remove sample data
+                {t.removeSampleData}
               </button>
             }
             action={boundClear}
-            confirmTitle="Remove sample data?"
-            confirmDescription="Archives every sample customer created by this action and cancels their still-open, unpaid sample invoices. Sample invoices that already have a recorded payment are kept as history, exactly like any other invoice."
-            confirmLabel="Remove sample data"
+            confirmTitle={t.removeSampleDataConfirmTitle}
+            confirmDescription={t.removeSampleDataConfirmDescription}
+            confirmLabel={t.removeSampleData}
           />
         </div>
       </Card>
 
       <Card className="max-w-md p-6">
-        <p className="text-sm font-semibold text-foreground">Export your data</p>
-        <p className="mt-1 text-xs text-muted">
-          Download your organization&rsquo;s customers, invoices, or payments as CSV — the same records you already
-          see in the app, packaged as a file.
-        </p>
+        <p className="text-sm font-semibold text-foreground">{t.exportDataLabel}</p>
+        <p className="mt-1 text-xs text-muted">{t.exportDataDescription}</p>
         <div className="mt-4 flex flex-wrap gap-2">
           <a href={`/api/organizations/${orgSlug}/export/customers`} className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
-            Customers CSV
+            {t.customersCsv}
           </a>
           <a href={`/api/organizations/${orgSlug}/export/invoices`} className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
-            Invoices CSV
+            {t.invoicesCsv}
           </a>
           <a href={`/api/organizations/${orgSlug}/export/payments`} className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
-            Payments CSV
+            {t.paymentsCsv}
           </a>
         </div>
       </Card>
@@ -163,10 +174,12 @@ async function MembersTab({
   organizationId,
   orgSlug,
   role,
+  t,
 }: {
   organizationId: string;
   orgSlug: string;
   role: string;
+  t: Dictionary["settings"];
 }) {
   const [members, pendingInvitations] = await Promise.all([
     listOrganizationMembers(organizationId),
@@ -177,7 +190,7 @@ async function MembersTab({
     <div className="flex flex-col gap-4">
       {role === "OWNER" ? (
         <Card className="p-6">
-          <p className="text-sm font-semibold text-foreground">Invite a member</p>
+          <p className="text-sm font-semibold text-foreground">{t.inviteMember}</p>
           <div className="mt-4">
             <InviteMemberForm orgSlug={orgSlug} />
           </div>
@@ -198,17 +211,14 @@ async function MembersTab({
           {members.map((member) => (
             <li key={member.userId} className="flex items-center justify-between px-5 py-3.5 text-sm">
               <span className="text-foreground">{member.name ?? member.email}</span>
-              <Badge tone={member.role === "OWNER" ? "info" : "neutral"}>{member.role === "OWNER" ? "Owner" : "Member"}</Badge>
+              <Badge tone={member.role === "OWNER" ? "info" : "neutral"}>{member.role === "OWNER" ? t.owner : t.member}</Badge>
             </li>
           ))}
         </ul>
       </Card>
 
       {role === "OWNER" && members.length === 1 && pendingInvitations.length === 0 ? (
-        <p className="text-xs text-muted">
-          You&rsquo;re the only member of this organization. Invite a teammate above to share reviewing Action Center
-          recommendations and following up on overdue invoices.
-        </p>
+        <p className="text-xs text-muted">{t.onlyMemberNote}</p>
       ) : null}
     </div>
   );
@@ -223,6 +233,9 @@ async function MembersTab({
 async function IntegrationsTab() {
   const dict = getDictionary(await getLocale());
   const categoryLabel = dict.settingsIntegrations;
+  const t = dict.settings;
+  const HEALTH_DISPLAY = healthDisplay(t);
+  const VENDOR_GROUP_LABEL = vendorGroupLabel(t);
   const snapshot = getProviderRegistrySnapshot();
   const vendors = getProviderVendorBreakdown();
   const vendorsByGroup = {
@@ -234,9 +247,8 @@ async function IntegrationsTab() {
   return (
     <div className="flex flex-col gap-6">
       <p className="text-sm text-muted">
-        Deployment profile: <span className="font-medium text-foreground">{snapshot.deploymentProfile}</span>. Configured
-        via environment variables — see DEPLOYMENT.md. Never shows a secret value; this only reflects whether the
-        required variables are present.
+        {t.deploymentProfileLabel} <span className="font-medium text-foreground">{snapshot.deploymentProfile}</span>.{" "}
+        {t.deploymentProfileNote}
       </p>
 
       {(["ai", "email", "messaging"] as const).map((group) => (
@@ -248,10 +260,10 @@ async function IntegrationsTab() {
                 <li key={vendor.vendor} className="flex items-center justify-between gap-4 px-5 py-3.5 text-sm">
                   <div>
                     <p className="font-medium text-foreground">{VENDOR_LABEL[vendor.vendor] ?? vendor.vendor}</p>
-                    {vendor.active ? <p className="text-xs text-muted-foreground">Currently selected</p> : null}
+                    {vendor.active ? <p className="text-xs text-muted-foreground">{t.currentlySelected}</p> : null}
                   </div>
                   <Badge tone={vendor.configured ? "success" : "neutral"}>
-                    {vendor.configured ? "Configured" : "Not configured"}
+                    {vendor.configured ? t.configured : t.notConfigured}
                   </Badge>
                 </li>
               ))}
@@ -274,8 +286,8 @@ async function IntegrationsTab() {
                       <div>
                         <p className="font-medium text-foreground">{categoryLabel[entry.category]}</p>
                         <p className="text-xs text-muted-foreground">
-                          {entry.vendor === "none" ? "Not connected" : entry.vendor}
-                          {!entry.implemented && entry.vendor !== "none" ? " — not implemented yet" : ""}
+                          {entry.vendor === "none" ? t.notConnected : entry.vendor}
+                          {!entry.implemented && entry.vendor !== "none" ? t.notImplementedYet : ""}
                         </p>
                       </div>
                       <Badge tone={health.tone}>{health.label}</Badge>
@@ -290,20 +302,20 @@ async function IntegrationsTab() {
   );
 }
 
-function SecurityTab({ email, role }: { email: string; role: string }) {
+function SecurityTab({ email, role, t }: { email: string; role: string; t: Dictionary["settings"] }) {
   return (
     <Card className="flex flex-col divide-y divide-border p-0">
       <div className="flex items-center justify-between px-5 py-3.5 text-sm">
-        <span className="text-muted-foreground">Signed in as</span>
+        <span className="text-muted-foreground">{t.signedInAs}</span>
         <span className="font-medium text-foreground">{email}</span>
       </div>
       <div className="flex items-center justify-between px-5 py-3.5 text-sm">
-        <span className="text-muted-foreground">Your role in this organization</span>
-        <Badge tone={role === "OWNER" ? "info" : "neutral"}>{role === "OWNER" ? "Owner" : "Member"}</Badge>
+        <span className="text-muted-foreground">{t.yourRole}</span>
+        <Badge tone={role === "OWNER" ? "info" : "neutral"}>{role === "OWNER" ? t.owner : t.member}</Badge>
       </div>
       <div className="flex items-center justify-between px-5 py-3.5 text-sm">
-        <span className="text-muted-foreground">Every action is re-authorized server-side</span>
-        <Badge tone="success">Always on</Badge>
+        <span className="text-muted-foreground">{t.everyActionReauthorized}</span>
+        <Badge tone="success">{t.alwaysOn}</Badge>
       </div>
     </Card>
   );
@@ -323,11 +335,13 @@ async function PrivacyTab({
   organizationId,
   userId,
   role,
+  t,
 }: {
   orgSlug: string;
   organizationId: string;
   userId: string;
   role: string;
+  t: Dictionary["settings"];
 }) {
   const [{ analyticsEnabled }, cookieConsent, { soleOwnerOfOrganizations }] = await Promise.all([
     getOrganizationPrivacySettings(organizationId),
@@ -335,48 +349,38 @@ async function PrivacyTab({
     getAccountDeletionWarnings(userId),
   ]);
   const cookieConsentLabel =
-    cookieConsent === "accepted" ? "Accepted" : cookieConsent === "rejected" ? "Rejected" : "Not yet decided";
+    cookieConsent === "accepted" ? t.consentAccepted : cookieConsent === "rejected" ? t.consentRejected : t.consentNotDecided;
   const deleteConfirmDescription =
     soleOwnerOfOrganizations.length > 0
-      ? `This permanently anonymizes your account and signs you out. You are the sole owner of ${soleOwnerOfOrganizations
-          .map((org) => org.name)
-          .join(", ")} — deleting your account leaves that organization with no owner. This cannot be undone.`
-      : "This permanently anonymizes your account (email and password are replaced and can never be used to sign in again) and signs you out. This cannot be undone.";
+      ? t.deleteAccountSoleOwnerDescription.replace("{orgs}", soleOwnerOfOrganizations.map((org) => org.name).join(", "))
+      : t.deleteAccountDescription;
 
   return (
     <div className="flex flex-col gap-4">
       <Card className="max-w-md p-6">
         <div className="flex items-center justify-between gap-4">
           <div>
-            <p className="text-sm font-semibold text-foreground">Analytics</p>
-            <p className="mt-1 text-xs text-muted">
-              Product usage events (e.g. invoice sent, payment recorded) sent to PostHog when configured for this
-              deployment. Never includes secrets, passwords, or full customer records — see
-              docs/privacy-data-inventory.md.
-            </p>
+            <p className="text-sm font-semibold text-foreground">{t.analyticsLabel}</p>
+            <p className="mt-1 text-xs text-muted">{t.analyticsDescription}</p>
           </div>
-          <Badge tone={analyticsEnabled ? "success" : "neutral"}>{analyticsEnabled ? "Enabled" : "Disabled"}</Badge>
+          <Badge tone={analyticsEnabled ? "success" : "neutral"}>{analyticsEnabled ? t.statusEnabled : t.statusDisabled}</Badge>
         </div>
         {role === "OWNER" ? (
           <form action={setAnalyticsEnabledAction.bind(null, orgSlug, !analyticsEnabled)} className="mt-4">
             <Button type="submit" variant="outline" size="sm">
-              {analyticsEnabled ? "Disable analytics" : "Enable analytics"}
+              {analyticsEnabled ? t.disableAnalytics : t.enableAnalytics}
             </Button>
           </form>
         ) : (
-          <p className="mt-4 text-xs text-muted">Only an organization owner can change this.</p>
+          <p className="mt-4 text-xs text-muted">{t.onlyOwnerCanChange}</p>
         )}
       </Card>
 
       <Card className="max-w-md p-6">
-        <p className="text-sm font-semibold text-foreground">Cookies</p>
-        <p className="mt-1 text-xs text-muted">
-          PAYNORA sets a strictly necessary session cookie and a language-preference cookie — neither requires
-          consent. Your analytics-cookie-consent choice (currently not technically enforced — see
-          docs/privacy-data-inventory.md#technical-data) is recorded below.
-        </p>
+        <p className="text-sm font-semibold text-foreground">{t.cookiesLabel}</p>
+        <p className="mt-1 text-xs text-muted">{t.cookiesDescription}</p>
         <div className="mt-4 flex items-center justify-between text-sm">
-          <span className="text-muted-foreground">Analytics cookie consent</span>
+          <span className="text-muted-foreground">{t.analyticsCookieConsent}</span>
           <Badge tone={cookieConsent === "accepted" ? "success" : cookieConsent === "rejected" ? "neutral" : "warning"}>
             {cookieConsentLabel}
           </Badge>
@@ -384,37 +388,35 @@ async function PrivacyTab({
       </Card>
 
       <Card className="max-w-md p-6">
-        <p className="text-sm font-semibold text-foreground">Data & account</p>
+        <p className="text-sm font-semibold text-foreground">{t.dataAndAccount}</p>
         <p className="mt-1 text-xs text-muted">
-          Export a copy of your account data, or permanently delete your account. See our{" "}
+          {t.dataAndAccountDescription}{" "}
           <Link href="/privacy-policy" className="text-primary hover:underline">
-            Privacy Policy
+            {t.privacyPolicyLink}
           </Link>{" "}
-          for what each of these does and does not include.
+          {t.forWhatEachDoes}
         </p>
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <a href="/api/account/export" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
-            Export my data
+            {t.exportMyData}
           </a>
           <ConfirmActionButton
             trigger={
               <Button type="button" variant="destructive" size="sm">
-                Delete my account
+                {t.deleteMyAccount}
               </Button>
             }
             action={deleteAccountAction}
-            confirmTitle="Delete your account?"
+            confirmTitle={t.deleteAccountConfirmTitle}
             confirmDescription={deleteConfirmDescription}
-            confirmLabel="Delete account"
+            confirmLabel={t.deleteAccount}
           />
         </div>
       </Card>
 
       <Card className="max-w-md p-6">
-        <p className="text-sm font-semibold text-foreground">Contact support</p>
-        <p className="mt-1 text-xs text-muted">
-          Send a message and we&rsquo;ll get back to you. Available to every member, not just the owner.
-        </p>
+        <p className="text-sm font-semibold text-foreground">{t.contactSupport}</p>
+        <p className="mt-1 text-xs text-muted">{t.contactSupportDescription}</p>
         <div className="mt-4">
           <SupportForm orgSlug={orgSlug} />
         </div>
@@ -428,9 +430,9 @@ async function PrivacyTab({
  * all computation lives in src/server/onboarding/readiness.ts so it stays
  * unit-testable independently of this page.
  */
-async function ReadinessTab({ organizationId, role }: { organizationId: string; role: string }) {
+async function ReadinessTab({ organizationId, role, t }: { organizationId: string; role: string; t: Dictionary["settings"] }) {
   if (role !== "OWNER") {
-    return <p className="text-sm text-muted">Only an organization owner can view product readiness.</p>;
+    return <p className="text-sm text-muted">{t.ownerOnlyReadiness}</p>;
   }
 
   const { checks, readyCount } = await getReadinessState(organizationId);
@@ -438,8 +440,7 @@ async function ReadinessTab({ organizationId, role }: { organizationId: string; 
   return (
     <div className="flex flex-col gap-4">
       <p className="text-sm text-muted">
-        {readyCount} of {checks.length} readiness checks pass. This never shows a credential or environment value —
-        only whether something is configured. See DEPLOYMENT.md to configure a provider.
+        {t.readinessSummary.replace("{ready}", String(readyCount)).replace("{total}", String(checks.length))}
       </p>
       <Card className="overflow-hidden">
         <ul className="divide-y divide-border">
@@ -449,7 +450,7 @@ async function ReadinessTab({ organizationId, role }: { organizationId: string; 
                 <p className="font-medium text-foreground">{check.label}</p>
                 <p className="text-xs text-muted-foreground">{check.detail}</p>
               </div>
-              <Badge tone={check.ready ? "success" : "neutral"}>{check.ready ? "Ready" : "Not ready"}</Badge>
+              <Badge tone={check.ready ? "success" : "neutral"}>{check.ready ? t.ready : t.notReady}</Badge>
             </li>
           ))}
         </ul>
