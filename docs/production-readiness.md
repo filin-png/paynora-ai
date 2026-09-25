@@ -236,11 +236,22 @@ allowance needed). No code change needed.
 `POSTHOG_API_KEY` from a real PostHog project, `POSTHOG_HOST` if EU data
 residency is required.
 
-## 13. Monitoring — NOT IMPLEMENTED (by design, contract defined)
+## 13. Monitoring — PARTIALLY IMPLEMENTED (uncaught errors only)
 
-No Sentry/uptime-monitoring credential or SDK exists in this codebase.
-This phase defines the contract a future integration must honor, not the
-integration itself:
+`src/instrumentation.ts` wires Sentry into the server and edge runtimes
+(`SENTRY_DSN`, optional — unset means no-op, exactly as before this
+existed): any uncaught exception in a Server Component, Server Action, or
+Route Handler now reaches Sentry, with a `beforeSend` scrub that strips
+user context, cookies, auth headers, request bodies, and email-shaped
+substrings in the error text before the event leaves the process. No
+browser/client SDK — this app has never loaded a client-side third-party
+script, and adding one would need a CSP `connect-src` change; that's a
+separate decision, not bundled into this.
+
+That is the crash layer only. The richer contract below — turning
+`recordProviderTelemetry`'s already-structured data (every AI/email/
+billing/wallet provider call, whether it threw or just returned a
+"failure" result) into alerts — is still **not implemented**:
 
 - **What must be logged:** every provider call already goes through
   `recordProviderTelemetry` (`src/server/providers/telemetry.ts`) — a

@@ -203,6 +203,14 @@ const baseEnvSchema = z.object({
   RATE_LIMIT_COMMUNICATION_SEND_PER_HOUR: z.coerce.number().int().positive().default(100),
   RATE_LIMIT_OPERATOR_RUN_PER_HOUR: z.coerce.number().int().positive().default(20),
   RATE_LIMIT_WEB_SEARCH_PER_HOUR: z.coerce.number().int().positive().default(20),
+  // Error-tracking (Sentry) — see instrumentation.ts and
+  // docs/production-readiness.md#monitoring. Entirely optional: when unset,
+  // instrumentation.ts's register() returns without calling Sentry.init(),
+  // and the app runs exactly as it did before this was added. A DSN is not
+  // a secret by Sentry's own design (it's safe to ship in a public client
+  // bundle) — this one happens to be server/edge-only for now, see that
+  // file's doc comment for why.
+  SENTRY_DSN: z.string().trim().url().optional(),
   // Phase 9: `pg.Pool`'s max connections per process — see
   // src/server/db/client.ts and DEPLOYMENT.md#connection-pooling. The
   // default (10) matches node-postgres's own default; deployments running
