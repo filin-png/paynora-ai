@@ -10,6 +10,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { SectionHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableContainer, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { getDictionary, type Dictionary } from "@/lib/i18n";
+import { getLocale } from "@/lib/i18n/get-locale";
 import { isResourceNotFoundError } from "@/lib/not-found";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
 import { formatAssetAmount } from "@/server/wallet/amount";
@@ -20,10 +22,11 @@ import { getWallet } from "@/server/wallet/wallets";
 import {
   RECONCILIATION_TONE,
   TRANSACTION_STATUS_TONE,
-  WALLET_STATUS_LABEL,
   WALLET_STATUS_TONE,
   reconciliationLabel,
   shortenAddress,
+  transactionStatusLabel,
+  walletStatusLabel,
 } from "../format";
 
 export default async function WalletDetailPage({
@@ -32,6 +35,11 @@ export default async function WalletDetailPage({
   params: Promise<{ orgSlug: string; walletId: string }>;
 }) {
   const { orgSlug, walletId } = await params;
+  const locale = await getLocale();
+  const dict = getDictionary(locale);
+  const t = dict.wallet;
+  const WALLET_STATUS_LABEL = walletStatusLabel(t);
+  const TX_STATUS_LABEL = transactionStatusLabel(t);
   const context = await requireOrganizationMembershipForPage(orgSlug);
   const wallet = await getWallet(context.organization.id, walletId).catch((error: unknown) => {
     if (isResourceNotFoundError(error)) notFound();
@@ -47,7 +55,7 @@ export default async function WalletDetailPage({
           className="inline-flex items-center gap-1.5 text-xs font-medium text-muted hover:text-foreground"
         >
           <ArrowLeft className="size-3.5" />
-          Wallet
+          {t.title}
         </Link>
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">
@@ -58,46 +66,43 @@ export default async function WalletDetailPage({
       </div>
 
       <Card className="grid grid-cols-2 gap-6 p-6 sm:grid-cols-4">
-        <Stat label="Network" value={wallet.network} />
-        <Stat label="Provider" value={wallet.providerName} />
-        <Stat label="Address" value={wallet.address} mono />
+        <Stat label={t.columnNetwork} value={wallet.network} />
+        <Stat label={t.columnProvider} value={wallet.providerName} />
+        <Stat label={t.columnAddress} value={wallet.address} mono />
         <Stat
-          label="Connected"
-          value={wallet.connectedAt ? wallet.connectedAt.toISOString().slice(0, 10) : "Not yet verified"}
+          label={t.statLabelConnected}
+          value={wallet.connectedAt ? wallet.connectedAt.toISOString().slice(0, 10) : t.notYetVerified}
         />
       </Card>
 
-      <Alert tone="neutral" title="Security">
+      <Alert tone="neutral" title={t.securityTitle}>
         <div className="flex items-start gap-2">
           <ShieldCheck className="mt-0.5 size-4 shrink-0" />
-          <p>
-            PAYNORA never stores this wallet&rsquo;s private key or seed phrase. This address is monitored read-only —
-            PAYNORA can observe incoming transactions to it, but cannot move funds out of it.
-          </p>
+          <p>{t.securityBody}</p>
         </div>
       </Alert>
 
       <div>
-        <SectionHeader title="Balances" />
+        <SectionHeader title={t.balances} />
         <div className="mt-3">
           <Suspense fallback={<BalancesLoading />}>
-            <BalancesCard organizationId={context.organization.id} walletId={wallet.id} />
+            <BalancesCard organizationId={context.organization.id} walletId={wallet.id} dict={dict} />
           </Suspense>
         </div>
       </div>
 
       <div>
-        <SectionHeader title="Transaction history" />
+        <SectionHeader title={t.transactionHistory} />
         {transactions.length > 0 ? (
           <TableContainer className="mt-3">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Transaction</TableHead>
-                  <TableHead>Asset</TableHead>
-                  <TableHead>Direction</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Reconciliation</TableHead>
+                  <TableHead>{t.columnTransaction}</TableHead>
+                  <TableHead>{t.columnAsset}</TableHead>
+                  <TableHead>{t.columnDirection}</TableHead>
+                  <TableHead>{t.columnStatus}</TableHead>
+                  <TableHead>{t.columnReconciliation}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -105,13 +110,13 @@ export default async function WalletDetailPage({
                   <TableRow key={tx.id}>
                     <TableCell className="font-mono text-xs text-foreground">{shortenAddress(tx.txHash)}</TableCell>
                     <TableCell className="text-muted">{tx.asset}</TableCell>
-                    <TableCell className="text-muted">{tx.direction === "INCOMING" ? "Incoming" : "Outgoing"}</TableCell>
+                    <TableCell className="text-muted">{tx.direction === "INCOMING" ? t.directionIncoming : t.directionOutgoing}</TableCell>
                     <TableCell>
-                      <Badge tone={TRANSACTION_STATUS_TONE[tx.status]}>{tx.status}</Badge>
+                      <Badge tone={TRANSACTION_STATUS_TONE[tx.status]}>{TX_STATUS_LABEL[tx.status]}</Badge>
                     </TableCell>
                     <TableCell>
                       <Badge tone={tx.reconciliationOutcome ? RECONCILIATION_TONE[tx.reconciliationOutcome] : "neutral"}>
-                        {reconciliationLabel(tx.reconciliationOutcome, tx.reconciliationRejectionReason)}
+                        {reconciliationLabel(t, tx.reconciliationOutcome, tx.reconciliationRejectionReason)}
                       </Badge>
                     </TableCell>
                   </TableRow>
@@ -120,7 +125,7 @@ export default async function WalletDetailPage({
             </Table>
           </TableContainer>
         ) : (
-          <EmptyState className="mt-3" title="No transactions yet" description="Nothing has been observed for this wallet yet." />
+          <EmptyState className="mt-3" title={t.noTransactionsTitle} description={t.noTransactionsDescriptionDetail} />
         )}
       </div>
     </div>
@@ -153,13 +158,22 @@ function BalancesLoading() {
  * getWalletBalances, which itself never resolves a provider — see
  * src/server/wallet/balances.ts.
  */
-async function BalancesCard({ organizationId, walletId }: { organizationId: string; walletId: string }) {
+async function BalancesCard({
+  organizationId,
+  walletId,
+  dict,
+}: {
+  organizationId: string;
+  walletId: string;
+  dict: Dictionary;
+}) {
+  const t = dict.wallet;
   if (!isWalletEnabled()) {
     return (
       <EmptyState
         icon={CircleAlert}
-        title="Wallet provider not available"
-        description="No wallet provider is configured for this deployment — balances can't be checked right now."
+        title={t.providerNotAvailableTitle}
+        description={t.providerNotConfiguredDescription}
       />
     );
   }
@@ -171,8 +185,8 @@ async function BalancesCard({ organizationId, walletId }: { organizationId: stri
     return (
       <EmptyState
         icon={CircleAlert}
-        title="Wallet provider not available"
-        description="The configured wallet provider could not be resolved — balances can't be checked right now."
+        title={t.providerNotAvailableTitle}
+        description={t.providerNotResolvedDescription}
       />
     );
   }
@@ -183,8 +197,8 @@ async function BalancesCard({ organizationId, walletId }: { organizationId: stri
     return (
       <EmptyState
         icon={WalletIcon}
-        title="Not connected yet"
-        description="Balances are available once this wallet has completed ownership verification."
+        title={t.notConnectedYetTitle}
+        description={t.notConnectedYetDescription}
       />
     );
   }
@@ -193,14 +207,14 @@ async function BalancesCard({ organizationId, walletId }: { organizationId: stri
     return (
       <EmptyState
         icon={CircleAlert}
-        title="Couldn't load balances"
-        description="The wallet provider didn't respond. Try again shortly."
+        title={t.couldntLoadBalancesTitle}
+        description={t.couldntLoadBalancesDescription}
       />
     );
   }
 
   if (result.balances.length === 0) {
-    return <EmptyState icon={WalletIcon} title="No balances" description="This wallet currently holds no observed assets." />;
+    return <EmptyState icon={WalletIcon} title={t.noBalancesTitle} description={t.noBalancesDescription} />;
   }
 
   return (
@@ -208,17 +222,17 @@ async function BalancesCard({ organizationId, walletId }: { organizationId: stri
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Asset</TableHead>
-            <TableHead>Type</TableHead>
-            <TableHead>Chain</TableHead>
-            <TableHead>Amount</TableHead>
+            <TableHead>{t.columnAsset}</TableHead>
+            <TableHead>{t.columnType}</TableHead>
+            <TableHead>{t.columnChain}</TableHead>
+            <TableHead>{t.columnAmount}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {result.balances.map((balance, index) => (
             <TableRow key={`${balance.chain}-${balance.asset}-${index}`}>
               <TableCell className="font-medium text-foreground">{balance.asset}</TableCell>
-              <TableCell className="text-muted">{balance.assetType === "native" ? "Native" : "Token"}</TableCell>
+              <TableCell className="text-muted">{balance.assetType === "native" ? t.assetTypeNative : t.assetTypeToken}</TableCell>
               <TableCell className="text-muted">{balance.chain}</TableCell>
               <TableCell className="font-mono text-xs text-foreground">
                 {formatAssetAmount(balance.amountMinor, balance.assetDecimals)}
