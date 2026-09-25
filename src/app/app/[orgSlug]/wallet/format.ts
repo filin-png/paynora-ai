@@ -1,4 +1,5 @@
 import type { BadgeProps } from "@/components/ui/badge";
+import type { Dictionary } from "@/lib/i18n";
 
 /** "0x1234...abcd" — never truncated so badly it stops being a recognizable identifier, but short enough for a table cell. */
 export function shortenAddress(address: string): string {
@@ -12,11 +13,13 @@ export const WALLET_STATUS_TONE: Record<string, NonNullable<BadgeProps["tone"]>>
   DISCONNECTED: "neutral",
 };
 
-export const WALLET_STATUS_LABEL: Record<string, string> = {
-  PENDING_VERIFICATION: "Pending verification",
-  ACTIVE: "Active",
-  DISCONNECTED: "Disconnected",
-};
+export function walletStatusLabel(t: Dictionary["wallet"]): Record<string, string> {
+  return {
+    PENDING_VERIFICATION: t.statusPendingVerification,
+    ACTIVE: t.statusActive,
+    DISCONNECTED: t.statusDisconnected,
+  };
+}
 
 export const TRANSACTION_STATUS_TONE: Record<string, NonNullable<BadgeProps["tone"]>> = {
   DETECTED: "neutral",
@@ -26,13 +29,25 @@ export const TRANSACTION_STATUS_TONE: Record<string, NonNullable<BadgeProps["ton
   EXPIRED: "neutral",
 };
 
+export function transactionStatusLabel(t: Dictionary["wallet"]): Record<string, string> {
+  return {
+    DETECTED: t.txStatusDetected,
+    CONFIRMING: t.txStatusConfirming,
+    CONFIRMED: t.txStatusConfirmed,
+    FAILED: t.txStatusFailed,
+    EXPIRED: t.txStatusExpired,
+  };
+}
+
 export const RECONCILIATION_TONE: Record<string, NonNullable<BadgeProps["tone"]>> = {
   MATCHED: "success",
   REJECTED: "warning",
 };
 
-export function reconciliationLabel(outcome: string | null, reason: string | null): string {
-  if (!outcome) return "Pending";
-  if (outcome === "MATCHED") return "Reconciled";
-  return reason ? `Not reconciled — ${reason.toLowerCase().replaceAll("_", " ")}` : "Not reconciled";
+export function reconciliationLabel(t: Dictionary["wallet"], outcome: string | null, reason: string | null): string {
+  if (!outcome) return t.reconciliationPending;
+  if (outcome === "MATCHED") return t.reconciliationReconciled;
+  return reason
+    ? t.reconciliationNotReconciledReason.replace("{reason}", reason.toLowerCase().replaceAll("_", " "))
+    : t.reconciliationNotReconciled;
 }

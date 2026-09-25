@@ -6,6 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader, SectionHeader } from "@/components/ui/page-header";
 import { Table, TableBody, TableCell, TableContainer, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { getDictionary } from "@/lib/i18n";
+import { getLocale } from "@/lib/i18n/get-locale";
 import { isWalletEnabled } from "@/server/wallet/service";
 import { listWalletTransactions } from "@/server/wallet/transactions";
 import { listWallets } from "@/server/wallet/wallets";
@@ -13,10 +15,11 @@ import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
 import {
   RECONCILIATION_TONE,
   TRANSACTION_STATUS_TONE,
-  WALLET_STATUS_LABEL,
   WALLET_STATUS_TONE,
   reconciliationLabel,
   shortenAddress,
+  transactionStatusLabel,
+  walletStatusLabel,
 } from "./format";
 
 /**
@@ -30,6 +33,10 @@ import {
  */
 export default async function WalletPage({ params }: { params: Promise<{ orgSlug: string }> }) {
   const { orgSlug } = await params;
+  const locale = await getLocale();
+  const t = getDictionary(locale).wallet;
+  const WALLET_STATUS_LABEL = walletStatusLabel(t);
+  const TX_STATUS_LABEL = transactionStatusLabel(t);
   const context = await requireOrganizationMembershipForPage(orgSlug);
   const [wallets, transactions] = await Promise.all([
     listWallets(context.organization.id),
@@ -39,31 +46,25 @@ export default async function WalletPage({ params }: { params: Promise<{ orgSlug
 
   return (
     <div className="flex flex-col gap-6">
-      <PageHeader
-        title="Wallet"
-        description="Crypto wallets connected to this organization and the on-chain transactions PAYNORA has observed for them."
-      />
+      <PageHeader title={t.title} description={t.description} />
 
       {!enabled ? (
-        <Alert tone="neutral" title="No production wallet provider connected">
-          This deployment has no live wallet/blockchain provider configured. The wallet architecture — connections,
-          transaction tracking, and payment reconciliation — is built and ready, but no real provider is wired up in
-          this phase, so no crypto payment can actually be received yet. See Settings → Integrations for the current
-          configuration.
+        <Alert tone="neutral" title={t.noProviderTitle}>
+          {t.noProviderBody}
         </Alert>
       ) : null}
 
       <div>
-        <SectionHeader title="Connected wallets" />
+        <SectionHeader title={t.connectedWallets} />
         {wallets.length > 0 ? (
           <TableContainer className="mt-3">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Address</TableHead>
-                  <TableHead>Network</TableHead>
-                  <TableHead>Provider</TableHead>
-                  <TableHead>Status</TableHead>
+                  <TableHead>{t.columnAddress}</TableHead>
+                  <TableHead>{t.columnNetwork}</TableHead>
+                  <TableHead>{t.columnProvider}</TableHead>
+                  <TableHead>{t.columnStatus}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -91,28 +92,24 @@ export default async function WalletPage({ params }: { params: Promise<{ orgSlug
           <EmptyState
             icon={WalletIcon}
             className="mt-3"
-            title="No wallets connected"
-            description={
-              enabled
-                ? "Connect a wallet to start accepting crypto payments against your invoices."
-                : "No production provider is connected in this deployment, so there is nothing to connect yet — see the notice above."
-            }
+            title={t.noWalletsTitle}
+            description={enabled ? t.noWalletsDescriptionEnabled : t.noWalletsDescriptionDisabled}
           />
         )}
       </div>
 
       <div>
-        <SectionHeader title="Recent transactions" description="Across every connected wallet, most recent first." />
+        <SectionHeader title={t.recentTransactions} description={t.recentTransactionsDescription} />
         {transactions.length > 0 ? (
           <TableContainer className="mt-3">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Transaction</TableHead>
-                  <TableHead>Asset</TableHead>
-                  <TableHead>Direction</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Reconciliation</TableHead>
+                  <TableHead>{t.columnTransaction}</TableHead>
+                  <TableHead>{t.columnAsset}</TableHead>
+                  <TableHead>{t.columnDirection}</TableHead>
+                  <TableHead>{t.columnStatus}</TableHead>
+                  <TableHead>{t.columnReconciliation}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -120,13 +117,13 @@ export default async function WalletPage({ params }: { params: Promise<{ orgSlug
                   <TableRow key={tx.id}>
                     <TableCell className="font-mono text-xs text-foreground">{shortenAddress(tx.txHash)}</TableCell>
                     <TableCell className="text-muted">{tx.asset}</TableCell>
-                    <TableCell className="text-muted">{tx.direction === "INCOMING" ? "Incoming" : "Outgoing"}</TableCell>
+                    <TableCell className="text-muted">{tx.direction === "INCOMING" ? t.directionIncoming : t.directionOutgoing}</TableCell>
                     <TableCell>
-                      <Badge tone={TRANSACTION_STATUS_TONE[tx.status]}>{tx.status}</Badge>
+                      <Badge tone={TRANSACTION_STATUS_TONE[tx.status]}>{TX_STATUS_LABEL[tx.status]}</Badge>
                     </TableCell>
                     <TableCell>
                       <Badge tone={tx.reconciliationOutcome ? RECONCILIATION_TONE[tx.reconciliationOutcome] : "neutral"}>
-                        {reconciliationLabel(tx.reconciliationOutcome, tx.reconciliationRejectionReason)}
+                        {reconciliationLabel(t, tx.reconciliationOutcome, tx.reconciliationRejectionReason)}
                       </Badge>
                     </TableCell>
                   </TableRow>
@@ -137,8 +134,8 @@ export default async function WalletPage({ params }: { params: Promise<{ orgSlug
         ) : (
           <EmptyState
             className="mt-3"
-            title="No transactions yet"
-            description="On-chain transactions PAYNORA observes for your connected wallets will appear here."
+            title={t.noTransactionsTitle}
+            description={t.noTransactionsDescriptionList}
           />
         )}
       </div>
