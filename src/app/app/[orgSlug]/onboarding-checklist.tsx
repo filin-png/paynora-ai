@@ -3,6 +3,9 @@ import { Check, ChevronRight, Lock } from "lucide-react";
 
 import { buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { getDictionary } from "@/lib/i18n";
+import { getLocale } from "@/lib/i18n/get-locale";
+import { pluralForm } from "@/lib/i18n/plural";
 import { cn } from "@/lib/utils";
 import { getOnboardingState } from "@/server/onboarding/service";
 
@@ -21,15 +24,23 @@ export async function OnboardingChecklist({
 }) {
   const state = await getOnboardingState(organizationId, orgSlug);
   const percent = Math.round((state.completedCount / state.totalSteps) * 100);
+  const locale = await getLocale();
+  const t = getDictionary(locale).onboarding;
 
   return (
     <Card className="overflow-hidden p-0">
       <details open={!state.isComplete} className="group">
         <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-6 py-4 [&::-webkit-details-marker]:hidden">
           <div>
-            <p className="text-sm font-semibold text-foreground">Getting started</p>
+            <p className="text-sm font-semibold text-foreground">{t.gettingStarted}</p>
             <p className="text-xs text-muted">
-              {state.completedCount} of {state.totalSteps} steps complete
+              {pluralForm(state.totalSteps, locale, {
+                one: t.stepsCompleteOne,
+                few: t.stepsCompleteFew,
+                many: t.stepsCompleteMany,
+              })
+                .replace("{completed}", String(state.completedCount))
+                .replace("{total}", String(state.totalSteps))}
             </p>
           </div>
           <div className="flex items-center gap-3">
