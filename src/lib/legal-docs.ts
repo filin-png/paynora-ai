@@ -15,7 +15,13 @@ import { marked } from "marked";
  * request, so there is no path-traversal surface here despite the
  * `readFile` call.
  */
-export const LEGAL_DOC_SLUGS = ["privacy-policy", "terms-of-service", "data-retention", "subprocessors"] as const;
+export const LEGAL_DOC_SLUGS = [
+  "privacy-policy",
+  "terms-of-service",
+  "data-retention",
+  "subprocessors",
+  "requisites",
+] as const;
 export type LegalDocSlug = (typeof LEGAL_DOC_SLUGS)[number];
 
 export async function renderLegalDocHtml(slug: LegalDocSlug): Promise<string> {
