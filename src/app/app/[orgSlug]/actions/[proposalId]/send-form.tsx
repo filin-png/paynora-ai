@@ -5,6 +5,7 @@ import { useActionState } from "react";
 import { Alert } from "@/components/ui/alert";
 import { Button, buttonVariants, type ButtonProps } from "@/components/ui/button";
 import { Dialog, DialogCancelButton } from "@/components/ui/dialog";
+import type { Dictionary } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { CommunicationFormState } from "./actions";
 
@@ -30,10 +31,11 @@ export function SendCommunicationForm({
   label,
   pendingLabel,
   confirmMessage,
-  confirmTitle = "Are you sure?",
+  confirmTitle,
   confirmLabel,
   confirmVariant = "destructive",
   variant = "primary",
+  dict,
 }: {
   action: BoundAction;
   label: string;
@@ -43,7 +45,9 @@ export function SendCommunicationForm({
   confirmLabel?: string;
   confirmVariant?: ButtonProps["variant"];
   variant?: ButtonProps["variant"];
+  dict?: Dictionary;
 }) {
+  const resolvedConfirmTitle = confirmTitle ?? dict?.actionDetail.areYouSure ?? "Are you sure?";
   const [state, formAction, isPending] = useActionState(action, null);
 
   const form = (
@@ -64,7 +68,7 @@ export function SendCommunicationForm({
           {label}
         </button>
       }
-      title={confirmTitle}
+      title={resolvedConfirmTitle}
       description={confirmMessage}
     >
       <div className="flex flex-col gap-3">
