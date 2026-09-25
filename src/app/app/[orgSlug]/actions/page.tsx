@@ -8,6 +8,9 @@ import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader, SectionHeader } from "@/components/ui/page-header";
 import { CopilotPanel } from "@/components/copilot/copilot-panel";
+import { getDictionary } from "@/lib/i18n";
+import { getLocale } from "@/lib/i18n/get-locale";
+import { pluralForm } from "@/lib/i18n/plural";
 import { cn } from "@/lib/utils";
 import type { Currency } from "@/server/ar/currency";
 import { listInvoicesWithFinancials } from "@/server/ar/invoices";
@@ -23,16 +26,28 @@ const PRIORITY_TONE: Record<string, NonNullable<BadgeProps["tone"]>> = {
   LOW: "neutral",
 };
 
-const ACTION_TYPE_LABEL: Record<string, string> = {
-  SEND_PAYMENT_REMINDER: "Send a payment reminder",
-};
-
 export default async function ActionCenterPage({
   params,
 }: {
   params: Promise<{ orgSlug: string }>;
 }) {
   const { orgSlug } = await params;
+  const locale = await getLocale();
+  const dict = getDictionary(locale);
+  const t = dict.actionCenter;
+  const ACTION_TYPE_LABEL: Record<string, string> = {
+    SEND_PAYMENT_REMINDER: t.actionSendPaymentReminder,
+  };
+  const PRIORITY_LABEL: Record<string, string> = {
+    HIGH: t.priorityHighLabel,
+    MEDIUM: t.priorityMediumLabel,
+    LOW: t.priorityLowLabel,
+  };
+  const TONE_LABEL: Record<string, string> = {
+    SOFT: t.toneSoft,
+    STANDARD: t.toneStandard,
+    FIRM: t.toneFirm,
+  };
   const context = await requireOrganizationMembershipForPage(orgSlug);
   const [pending, decided] = await Promise.all([
     listPendingActionProposals(context.organization.id),
@@ -63,20 +78,31 @@ export default async function ActionCenterPage({
   return (
     <div className="flex flex-col gap-10">
       <PageHeader
-        title="Action Center"
-        description="Every action here needs your approval, and approving doesn't send anything by itself — review and send is a separate, explicit step."
+        title={t.title}
+        description={t.description}
         actions={
           <form action={boundRunOperator}>
             <Button type="submit" variant="outline">
               <RefreshCw className="size-4" />
-              Check for new actions
+              {t.checkForNewActions}
             </Button>
           </form>
         }
       />
 
       <div>
-        <SectionHeader title="Pending your review" description={pending.length > 0 ? `${pending.length} awaiting a decision` : undefined} />
+        <SectionHeader
+          title={t.pendingReview}
+          description={
+            pending.length > 0
+              ? pluralForm(pending.length, locale, {
+                  one: t.awaitingDecisionOne,
+                  few: t.awaitingDecisionFew,
+                  many: t.awaitingDecisionMany,
+                }).replace("{n}", String(pending.length))
+              : undefined
+          }
+        />
         {pending.length > 0 ? (
           <ul className="mt-3 flex flex-col gap-3">
             {pending.map((proposal) => {
@@ -90,23 +116,24 @@ export default async function ActionCenterPage({
                     <div className="flex flex-col gap-1.5">
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge tone={PRIORITY_TONE[proposal.insight.priority] ?? "neutral"}>
-                          {proposal.insight.priority.charAt(0) + proposal.insight.priority.slice(1).toLowerCase()} priority
+                          {PRIORITY_LABEL[proposal.insight.priority] ?? proposal.insight.priority}
                         </Badge>
                         {attention ? <AttentionScoreBadge score={attention.attention.score} /> : null}
                         {impact ? (
-                          <Badge tone="neutral">{formatMoney(impact.outstandingMinor, impact.currency)} at stake</Badge>
+                          <Badge tone="neutral">{t.atStake.replace("{amount}", formatMoney(impact.outstandingMinor, impact.currency))}</Badge>
                         ) : null}
                         <span className="text-sm font-medium text-foreground">
                           {ACTION_TYPE_LABEL[proposal.type] ?? proposal.type}
                         </span>
                         {proposal.suggestedTone ? (
-                          <span className="text-xs text-muted-foreground">({proposal.suggestedTone.toLowerCase()} tone)</span>
+                          <span className="text-xs text-muted-foreground">
+                            {t.toneSuffix.replace("{tone}", TONE_LABEL[proposal.suggestedTone] ?? proposal.suggestedTone.toLowerCase())}
+                          </span>
                         ) : null}
                       </div>
                       <p className="text-sm text-muted">{proposal.reasoning}</p>
                       <p className="text-xs text-muted-foreground">
-                        Detected automatically {proposal.insight.createdAt.toISOString().slice(0, 10)} — this proposal
-                        follows directly from that insight; approving it never sends anything by itself.
+                        {t.detectedAutomatically.replace("{date}", proposal.insight.createdAt.toISOString().slice(0, 10))}
                       </p>
                       {proposal.invoice ? (
                         <Link
@@ -116,18 +143,18 @@ export default async function ActionCenterPage({
                           {proposal.invoice.number} — {proposal.invoice.customer.name}
                         </Link>
                       ) : (
-                        <span className="text-xs text-muted-foreground">Invoice no longer available</span>
+                        <span className="text-xs text-muted-foreground">{t.invoiceNoLongerAvailable}</span>
                       )}
                     </div>
                     <div className="flex shrink-0 gap-2">
                       <form action={boundDismiss}>
                         <button type="submit" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
-                          Dismiss
+                          {t.dismiss}
                         </button>
                       </form>
                       <form action={boundApprove}>
                         <button type="submit" className={cn(buttonVariants({ size: "sm" }))}>
-                          Approve
+                          {t.approve}
                         </button>
                       </form>
                     </div>
@@ -135,7 +162,7 @@ export default async function ActionCenterPage({
                   <CopilotPanel
                     orgSlug={orgSlug}
                     targetId={proposal.id}
-                    questions={[{ type: "why_important", label: "Why is this important?" }]}
+                    questions={[{ type: "why_important", label: t.copilotWhyImportant }]}
                   />
                 </li>
               );
@@ -145,14 +172,14 @@ export default async function ActionCenterPage({
           <EmptyState
             className="mt-3"
             icon={Sparkles}
-            title="Nothing needs your attention"
-            description="Click “Check for new actions” to look for newly overdue invoices."
+            title={t.nothingNeedsAttention}
+            description={t.clickCheckForNewActions}
           />
         )}
       </div>
 
       <div>
-        <SectionHeader title="Recently decided" />
+        <SectionHeader title={t.recentlyDecided} />
         {decided.length > 0 ? (
           <Card className="mt-3 overflow-hidden">
             <ul className="divide-y divide-border">
@@ -172,22 +199,23 @@ export default async function ActionCenterPage({
                         no actor to show for those. */}
                     {proposal.decidedByUser && proposal.decidedAt ? (
                       <span className="text-xs text-muted-foreground">
-                        Decided by {proposal.decidedByUser.name ?? proposal.decidedByUser.email} on{" "}
-                        {proposal.decidedAt.toISOString().slice(0, 10)}
+                        {t.decidedBy
+                          .replace("{name}", proposal.decidedByUser.name ?? proposal.decidedByUser.email)
+                          .replace("{date}", proposal.decidedAt.toISOString().slice(0, 10))}
                       </span>
                     ) : null}
                   </div>
                   {proposal.status === "DISMISSED" ? (
-                    <Badge tone="neutral">Dismissed</Badge>
+                    <Badge tone="neutral">{t.dismissed}</Badge>
                   ) : proposal.status === "STALE" ? (
-                    <Badge tone="neutral">Stale — no longer needed</Badge>
+                    <Badge tone="neutral">{t.stale}</Badge>
                   ) : proposal.status === "EXECUTED" ? (
                     <Link href={`/app/${orgSlug}/actions/${proposal.id}`}>
-                      <Badge tone="success">Sent</Badge>
+                      <Badge tone="success">{t.sent}</Badge>
                     </Link>
                   ) : (
                     <Link href={`/app/${orgSlug}/actions/${proposal.id}`} className="hover:underline">
-                      <Badge tone="warning">Approved — review &amp; send</Badge>
+                      <Badge tone="warning">{t.approvedReviewSend}</Badge>
                     </Link>
                   )}
                 </li>
@@ -195,7 +223,7 @@ export default async function ActionCenterPage({
             </ul>
           </Card>
         ) : (
-          <EmptyState className="mt-3 py-10" title="No decisions made yet" />
+          <EmptyState className="mt-3 py-10" title={t.noDecisionsYet} />
         )}
       </div>
     </div>
