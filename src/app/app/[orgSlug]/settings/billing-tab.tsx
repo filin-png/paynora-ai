@@ -7,6 +7,8 @@ import { ConfirmActionButton } from "@/components/ui/confirm-action-button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PlanComparison } from "@/components/billing/plan-comparison";
 import { formatPlanLimit, PLAN_LABEL } from "@/components/billing/plan-labels";
+import { getDictionary, type Dictionary } from "@/lib/i18n";
+import { getLocale } from "@/lib/i18n/get-locale";
 import { cn } from "@/lib/utils";
 import { formatMoney } from "@/server/ar/money";
 import { getLatestCheckoutSession } from "@/server/billing/checkout";
@@ -22,13 +24,15 @@ import {
   startUpgradeCheckoutAction,
 } from "./billing-actions";
 
-const STATUS_DISPLAY: Record<SubscriptionStatus, { label: string; tone: NonNullable<BadgeProps["tone"]> }> = {
-  ACTIVE: { label: "Active", tone: "success" },
-  TRIALING: { label: "Trialing", tone: "info" },
-  PAST_DUE: { label: "Past due", tone: "warning" },
-  CANCELED: { label: "Canceled", tone: "neutral" },
-  EXPIRED: { label: "Trial expired", tone: "neutral" },
-};
+function statusDisplayMap(t: Dictionary["settingsBilling"]): Record<SubscriptionStatus, { label: string; tone: NonNullable<BadgeProps["tone"]> }> {
+  return {
+    ACTIVE: { label: t.statusActive, tone: "success" },
+    TRIALING: { label: t.statusTrialing, tone: "info" },
+    PAST_DUE: { label: t.statusPastDue, tone: "warning" },
+    CANCELED: { label: t.statusCanceled, tone: "neutral" },
+    EXPIRED: { label: t.statusTrialExpired, tone: "neutral" },
+  };
+}
 
 function formatDateTime(date: Date): string {
   return new Intl.DateTimeFormat("en-US", { dateStyle: "medium" }).format(date);
@@ -53,6 +57,7 @@ export async function BillingTab({
   orgSlug: string;
   role: string;
 }) {
+  const t = getDictionary(await getLocale()).settingsBilling;
   const [overview, payments, latestCheckout] = await Promise.all([
     getOrganizationUsageOverview(organizationId),
     getOrganizationSubscriptionPayments(organizationId),
@@ -60,15 +65,15 @@ export async function BillingTab({
   ]);
   const { plan, effectiveStatus, entitlements, billingPeriod, resourceUsage, aiGenerationUsage, copilotUsageCount } =
     overview;
-  const statusDisplay = STATUS_DISPLAY[effectiveStatus];
+  const statusDisplay = statusDisplayMap(t)[effectiveStatus];
   const isOwner = role === "OWNER";
   const billingConnected = isBillingEnabled();
 
   const usageRows: { label: string; used: number; limit: EntitlementLimit }[] = [
-    { label: "Customers", used: resourceUsage.customers, limit: entitlements.maxCustomers },
-    { label: "Open invoices", used: resourceUsage.openInvoices, limit: entitlements.maxOpenInvoices },
-    { label: "Members", used: resourceUsage.members, limit: entitlements.maxMembers },
-    { label: "AI generations (30 days)", used: aiGenerationUsage.used, limit: aiGenerationUsage.limit },
+    { label: t.usageCustomers, used: resourceUsage.customers, limit: entitlements.maxCustomers },
+    { label: t.usageOpenInvoices, used: resourceUsage.openInvoices, limit: entitlements.maxOpenInvoices },
+    { label: t.usageMembers, used: resourceUsage.members, limit: entitlements.maxMembers },
+    { label: t.usageAiGenerations, used: aiGenerationUsage.used, limit: aiGenerationUsage.limit },
   ];
 
   const otherPlans = PLAN_ORDER.filter((candidate) => candidate !== plan);
@@ -80,11 +85,13 @@ export async function BillingTab({
         <Card className="flex flex-col gap-3 border-primary/30 bg-accent-soft p-5 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="text-sm font-medium text-foreground">
-              Payment pending — upgrade to {PLAN_LABEL[checkoutInProgress.targetPlanId]}
+              {t.paymentPendingUpgrade.replace("{plan}", PLAN_LABEL[checkoutInProgress.targetPlanId])}
             </p>
             <p className="mt-1 text-xs text-muted">
-              {formatMoney(checkoutInProgress.amountMinor, checkoutInProgress.currency as Parameters<typeof formatMoney>[1])}{" "}
-              — waiting for payment confirmation. This updates automatically once the provider confirms it.
+              {t.waitingForConfirmation.replace(
+                "{amount}",
+                formatMoney(checkoutInProgress.amountMinor, checkoutInProgress.currency as Parameters<typeof formatMoney>[1]),
+              )}
             </p>
           </div>
           {checkoutInProgress.checkoutUrl ? (
@@ -92,7 +99,7 @@ export async function BillingTab({
               href={checkoutInProgress.checkoutUrl}
               className={cn(buttonVariants({ variant: "primary", size: "sm" }))}
             >
-              Resume payment
+              {t.resumePayment}
             </a>
           ) : null}
         </Card>
@@ -100,63 +107,65 @@ export async function BillingTab({
 
       <Card className="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <p className="text-sm text-muted">Current plan</p>
+          <p className="text-sm text-muted">{t.currentPlan}</p>
           <p className="mt-1 text-2xl font-semibold tracking-tight text-foreground">{PLAN_LABEL[plan]}</p>
           <p className="mt-1 text-sm text-muted">
             {entitlements.priceMinor === 0n
-              ? "Free"
-              : `${formatMoney(entitlements.priceMinor, entitlements.currency)}/mo`}
+              ? t.free
+              : t.priceMonthly.replace("{amount}", formatMoney(entitlements.priceMinor, entitlements.currency))}
           </p>
         </div>
         <div className="flex flex-col items-start gap-2 sm:items-end">
           <Badge tone={statusDisplay.tone}>{statusDisplay.label}</Badge>
           <p className="text-xs text-muted">
-            Billing period: {formatDateTime(billingPeriod.start)} – {formatDateTime(billingPeriod.end)}
-            {billingPeriod.source === "derived" ? " (estimated)" : ""}
+            {t.billingPeriod
+              .replace("{start}", formatDateTime(billingPeriod.start))
+              .replace("{end}", formatDateTime(billingPeriod.end))}
+            {billingPeriod.source === "derived" ? t.estimatedSuffix : ""}
           </p>
         </div>
       </Card>
 
       <div className="flex flex-col gap-2">
-        <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Usage</p>
+        <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">{t.usage}</p>
         <Card className="flex flex-col divide-y divide-border p-0">
           {usageRows.map((row) => (
             <UsageRow key={row.label} {...row} />
           ))}
           <div className="px-5 py-3.5">
             <div className="flex items-center justify-between text-sm">
-              <span className="text-foreground">Copilot requests (30 days)</span>
+              <span className="text-foreground">{t.copilotRequests}</span>
               <span className="tabular-nums text-muted-foreground">{copilotUsageCount}</span>
             </div>
-            <p className="mt-1 text-xs text-muted">Metered for visibility only — not a separate limit.</p>
+            <p className="mt-1 text-xs text-muted">{t.meteredForVisibility}</p>
           </div>
         </Card>
       </div>
 
       <div className="flex flex-col gap-2">
-        <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Capabilities</p>
+        <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">{t.capabilities}</p>
         <Card className="overflow-hidden">
           <ul className="divide-y divide-border">
-            <CapabilityRow label="Collections Automation" enabled={entitlements.collectionsAutomationEnabled} />
-            <CapabilityRow label="Proactive Copilot" enabled={entitlements.copilotEnabled} />
-            <CapabilityRow label="Wallet" enabled={entitlements.walletEnabled} />
-            <CapabilityRow label="Integrations" enabled={entitlements.integrationsEnabled} />
+            <CapabilityRow label={t.collectionsAutomation} enabled={entitlements.collectionsAutomationEnabled} t={t} />
+            <CapabilityRow label={t.proactiveCopilot} enabled={entitlements.copilotEnabled} t={t} />
+            <CapabilityRow label={t.wallet} enabled={entitlements.walletEnabled} t={t} />
+            <CapabilityRow label={t.integrations} enabled={entitlements.integrationsEnabled} t={t} />
           </ul>
         </Card>
       </div>
 
       <div className="flex flex-col gap-2">
-        <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Subscription payments</p>
+        <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">{t.subscriptionPayments}</p>
         <Card className="overflow-hidden p-0">
           {payments.length > 0 ? (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                    <th className="px-5 py-2.5 font-medium">Date</th>
-                    <th className="px-5 py-2.5 font-medium">Provider</th>
-                    <th className="px-5 py-2.5 font-medium">Status</th>
-                    <th className="px-5 py-2.5 font-medium">Amount</th>
+                    <th className="px-5 py-2.5 font-medium">{t.columnDate}</th>
+                    <th className="px-5 py-2.5 font-medium">{t.columnProvider}</th>
+                    <th className="px-5 py-2.5 font-medium">{t.columnStatus}</th>
+                    <th className="px-5 py-2.5 font-medium">{t.columnAmount}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
@@ -177,35 +186,28 @@ export async function BillingTab({
             </div>
           ) : (
             <EmptyState
-              title="No subscription payments yet"
-              description={
-                billingConnected
-                  ? "No billing webhook deliveries have been recorded for this organization yet."
-                  : "Online payment isn't connected yet for this deployment — there is nothing to show here until it is."
-              }
+              title={t.noPaymentsTitle}
+              description={billingConnected ? t.noPaymentsDescriptionConnected : t.noPaymentsDescriptionNotConnected}
             />
           )}
         </Card>
       </div>
 
       <div className="flex flex-col gap-2">
-        <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Compare plans</p>
+        <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">{t.comparePlans}</p>
         <PlanComparison currentPlan={plan} />
       </div>
 
       {isOwner ? (
         <div className="flex flex-col gap-2">
-          <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Change plan</p>
+          <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">{t.changePlan}</p>
           <Card className="flex flex-col gap-3 p-6">
             {effectiveStatus === "CANCELED" ? (
               <div className="flex items-center justify-between gap-3">
-                <p className="text-sm text-foreground">
-                  This subscription is canceled. Reactivating restores {PLAN_LABEL[plan]} immediately — no payment
-                  step, since none is connected yet.
-                </p>
+                <p className="text-sm text-foreground">{t.subscriptionCanceledNotice.replace("{plan}", PLAN_LABEL[plan])}</p>
                 <form action={reactivateSubscriptionAction.bind(null, orgSlug)}>
                   <button type="submit" className={cn(buttonVariants({ variant: "primary", size: "sm" }))}>
-                    Reactivate
+                    {t.reactivate}
                   </button>
                 </form>
               </div>
@@ -219,33 +221,36 @@ export async function BillingTab({
                       <span className="text-foreground">
                         {PLAN_LABEL[candidate]} —{" "}
                         {candidateEntitlements.priceMinor === 0n
-                          ? "Free"
-                          : `${formatMoney(candidateEntitlements.priceMinor, candidateEntitlements.currency)}/mo`}
+                          ? t.free
+                          : t.priceMonthly.replace(
+                              "{amount}",
+                              formatMoney(candidateEntitlements.priceMinor, candidateEntitlements.currency),
+                            )}
                       </span>
                       {isDowngrade ? (
                         <ConfirmActionButton
                           trigger={
                             <button type="button" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
-                              Downgrade
+                              {t.downgrade}
                             </button>
                           }
                           action={downgradePlanAction.bind(null, orgSlug, candidate)}
-                          confirmTitle={`Downgrade to ${PLAN_LABEL[candidate]}?`}
-                          confirmDescription="Existing customers, invoices, and members are never removed — only new quota-consuming creation is bounded by the new plan's limits from now on."
-                          confirmLabel="Downgrade"
+                          confirmTitle={t.downgradeConfirmTitle.replace("{plan}", PLAN_LABEL[candidate])}
+                          confirmDescription={t.downgradeConfirmDescription}
+                          confirmLabel={t.downgrade}
                         />
                       ) : billingConnected ? (
                         checkoutInProgress ? (
-                          <span className="text-xs text-muted">Checkout already in progress</span>
+                          <span className="text-xs text-muted">{t.checkoutInProgress}</span>
                         ) : (
                           <form action={startUpgradeCheckoutAction.bind(null, orgSlug, candidate)}>
                             <button type="submit" className={cn(buttonVariants({ variant: "primary", size: "sm" }))}>
-                              Upgrade
+                              {t.upgrade}
                             </button>
                           </form>
                         )
                       ) : (
-                        <span className="text-xs text-muted">Payment not connected yet</span>
+                        <span className="text-xs text-muted">{t.paymentNotConnectedYet}</span>
                       )}
                     </div>
                   );
@@ -255,13 +260,13 @@ export async function BillingTab({
                     <ConfirmActionButton
                       trigger={
                         <button type="button" className={cn(buttonVariants({ variant: "destructive", size: "sm" }))}>
-                          Cancel subscription
+                          {t.cancelSubscription}
                         </button>
                       }
                       action={cancelSubscriptionAction.bind(null, orgSlug)}
-                      confirmTitle="Cancel this subscription?"
-                      confirmDescription="Immediately reverts to Free-plan limits. Data is never deleted — reactivating later restores this exact plan, with no payment step, since none is connected yet."
-                      confirmLabel="Cancel subscription"
+                      confirmTitle={t.cancelConfirmTitle}
+                      confirmDescription={t.cancelConfirmDescription}
+                      confirmLabel={t.cancelSubscription}
                     />
                   </div>
                 ) : null}
@@ -271,20 +276,16 @@ export async function BillingTab({
         </div>
       ) : null}
 
-      <p className="text-xs text-muted">
-        {billingConnected
-          ? "A real payment provider is connected for this deployment."
-          : "Online payment is not connected yet — upgrades are handled by PAYNORA directly. Downgrades and cancellation are self-serve and take effect immediately."}
-      </p>
+      <p className="text-xs text-muted">{billingConnected ? t.billingConnectedNote : t.billingNotConnectedNote}</p>
     </div>
   );
 }
 
-function CapabilityRow({ label, enabled }: { label: string; enabled: boolean }) {
+function CapabilityRow({ label, enabled, t }: { label: string; enabled: boolean; t: Dictionary["settingsBilling"] }) {
   return (
     <li className="flex items-center justify-between px-5 py-3.5 text-sm">
       <span className="text-foreground">{label}</span>
-      <Badge tone={enabled ? "success" : "neutral"}>{enabled ? "Available" : "Not available on this plan"}</Badge>
+      <Badge tone={enabled ? "success" : "neutral"}>{enabled ? t.available : t.notAvailableOnPlan}</Badge>
     </li>
   );
 }
