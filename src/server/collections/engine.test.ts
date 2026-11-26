@@ -208,7 +208,7 @@ describe("runAutomationTick — worker vs worker concurrency", () => {
 });
 
 describe("runAutomationTick — catch-up semantics", () => {
-  it("on a fresh sequence, jumping straight to a deep-overdue day executes only the most-advanced step and skips the rest", async () => {
+  it("on a fresh sequence, jumping straight to a deep-overdue day skips the most-advanced owner step without reviving earlier reminders", async () => {
     const { organization, customer } = await createAutomationReadyOrg();
     const invoice = await createTestInvoice(organization.id, customer.id, "2026-01-01");
 
@@ -216,8 +216,8 @@ describe("runAutomationTick — catch-up semantics", () => {
       organizationId: organization.id,
     });
 
-    expect(summary.executed).toBe(1);
-    expect(summary.skipped).toBe(3);
+    expect(summary.executed).toBe(0);
+    expect(summary.skipped).toBe(4);
 
     const executions = await prisma.collectionStepExecution.findMany({
       where: { sequence: { invoiceId: invoice.id } },
@@ -225,12 +225,11 @@ describe("runAutomationTick — catch-up semantics", () => {
     });
     const executed = executions.filter((e) => e.status === "EXECUTED");
     const skipped = executions.filter((e) => e.status === "SKIPPED");
-    expect(executed).toHaveLength(1);
-    expect(executed[0]!.step.daysAfterDue).toBe(14);
-    expect(skipped.map((e) => e.step.daysAfterDue).sort((x, y) => x - y)).toEqual([1, 3, 7]);
+    expect(executed).toHaveLength(0);
+    expect(skipped.map((e) => e.step.daysAfterDue).sort((x, y) => x - y)).toEqual([1, 3, 7, 14]);
   });
 
-  it("a scheduler gap after one executed step catches up to the latest due step without a reminder burst", async () => {
+  it("a scheduler gap after one executed step skips the owner step and superseded reminders", async () => {
     const { organization, customer } = await createAutomationReadyOrg();
     const invoice = await createTestInvoice(organization.id, customer.id, "2026-01-01");
 
@@ -239,15 +238,15 @@ describe("runAutomationTick — catch-up semantics", () => {
       organizationId: organization.id,
     }); // gap: days 3 and 7 never ran
 
-    expect(summary.executed).toBe(1);
-    expect(summary.skipped).toBe(2);
+    expect(summary.executed).toBe(0);
+    expect(summary.skipped).toBe(3);
 
     const executions = await prisma.collectionStepExecution.findMany({
       where: { sequence: { invoiceId: invoice.id } },
       include: { step: true },
     });
-    expect(executions.filter((e) => e.status === "EXECUTED").map((e) => e.step.daysAfterDue).sort((a, b) => a - b)).toEqual([1, 14]);
-    expect(executions.filter((e) => e.status === "SKIPPED").map((e) => e.step.daysAfterDue).sort((a, b) => a - b)).toEqual([3, 7]);
+    expect(executions.filter((e) => e.status === "EXECUTED").map((e) => e.step.daysAfterDue).sort((a, b) => a - b)).toEqual([1]);
+    expect(executions.filter((e) => e.status === "SKIPPED").map((e) => e.step.daysAfterDue).sort((a, b) => a - b)).toEqual([3, 7, 14]);
   });
 });
 
@@ -714,39 +713,29 @@ describe("isAutoSendStillAuthorized — pause/kill-switch/mode-switch race", () 
 });
 
 describe("stuck CLAIMED step", () => {
-  it("does not block later steps from executing, and is never automatically retried", async () => {
+  it("keeps an unproven old claim for review and blocks later due steps", async () => {
     const { organization, customer, policy } = await createAutomationReadyOrg();
     const invoice = await createTestInvoice(organization.id, customer.id, "2026-01-01");
-    await runAutomationTick(new Date("2026-01-01T00:00:00.000Z"), { organizationId: organization.id }); // enroll only, day 0
+    await runAutomationTick(new Date("2026-01-01T00:00:00Z"), { organizationId: organization.id });
 
     const sequence = await prisma.collectionSequence.findFirstOrThrow({ where: { invoiceId: invoice.id } });
     const day1Step = await prisma.collectionPolicyStep.findFirstOrThrow({
       where: { policyId: policy.id, version: sequence.policyVersion, daysAfterDue: 1 },
     });
-    // Simulate a crashed worker: a step claimed but never finalized —
-    // insert a stuck CLAIMED row directly, before any tick would have
-    // reached this step, precisely mirroring "claimed, then the process
-    // died before EXECUTED/SKIPPED".
-    await prisma.collectionStepExecution.create({
-      data: { organizationId: organization.id, sequenceId: sequence.id, stepId: day1Step.id, status: "CLAIMED" },
+    const claim = await prisma.collectionStepExecution.create({
+      data: {
+        organizationId: organization.id, sequenceId: sequence.id, stepId: day1Step.id,
+        status: "CLAIMED", claimedAt: new Date("2026-01-02T00:00:00Z"),
+      },
     });
 
-    const before = await prisma.collectionStepExecution.count({ where: { sequenceId: sequence.id } });
-    // Repeated ticks at later dates must never touch the stuck row, and
-    // must still progress to later steps (day+3 and day+7 are both due by
-    // day+7; day+1 is already "handled" — stuck CLAIMED — so catch-up
-    // supersedes day+3 and executes day+7).
-    await runAutomationTick(new Date("2026-01-08T00:00:00.000Z"), { organizationId: organization.id }); // day+7
-    const after = await prisma.collectionStepExecution.count({ where: { sequenceId: sequence.id } });
-
-    const stuck = await prisma.collectionStepExecution.findFirst({ where: { sequenceId: sequence.id, stepId: day1Step.id } });
-    expect(stuck?.status).toBe("CLAIMED"); // never touched, never auto-recovered
-    expect(after).toBeGreaterThan(before); // but later steps still progressed
-    const day7Execution = await prisma.collectionStepExecution.findFirst({
-      where: { sequenceId: sequence.id, status: "EXECUTED" },
-      include: { step: true },
-    });
-    expect(day7Execution?.step.daysAfterDue).toBe(7);
+    const run = () => runAutomationTick(new Date("2026-01-08T00:00:00Z"), { organizationId: organization.id });
+    expect(await run()).toMatchObject({ recoveryNeedsReview: 1, recovered: 0, executed: 0, blocked: 1 });
+    expect(await run()).toMatchObject({ recoveryNeedsReview: 0, recovered: 0, executed: 0, blocked: 1 });
+    expect(await prisma.collectionStepExecution.findMany({ where: { sequenceId: sequence.id } })).toEqual([
+      expect.objectContaining({ id: claim.id, status: "CLAIMED", note: expect.stringContaining("BUSINESS_EVENT_MISSING") }),
+    ]);
+    expect(await prisma.actionProposal.count({ where: { invoiceId: invoice.id } })).toBe(0);
   });
 });
 
@@ -785,29 +774,29 @@ describe("FAILED communication does not block or get silently treated as deliver
 });
 
 describe("catch-up — exact day+20 scenario with steps at +1/+3/+7/+14", () => {
-  it("the very first tick at day+20 sends exactly one reminder (the most advanced), never four", async () => {
+  it("the first tick at day+20 skips the owner action and does not create a reminder", async () => {
     const { organization, customer } = await createAutomationReadyOrg();
     const invoice = await createTestInvoice(organization.id, customer.id, "2026-01-01");
 
     const summary = await runAutomationTick(new Date("2026-01-21T00:00:00.000Z"), { organizationId: organization.id }); // day+20
 
-    expect(summary.executed).toBe(1);
-    expect(summary.skipped).toBe(3);
-    expect(await prisma.actionProposal.count({ where: { invoiceId: invoice.id } })).toBe(1);
+    expect(summary.executed).toBe(0);
+    expect(summary.skipped).toBe(4);
+    expect(await prisma.actionProposal.count({ where: { invoiceId: invoice.id } })).toBe(0);
     expect(await prisma.communication.count({ where: { invoiceId: invoice.id } })).toBe(0); // APPROVAL_REQUIRED — nothing sent
 
     const executed = await prisma.collectionStepExecution.findFirst({
       where: { sequence: { invoiceId: invoice.id }, status: "EXECUTED" },
       include: { step: true },
     });
-    expect(executed?.step.daysAfterDue).toBe(14);
+    expect(executed).toBeNull();
 
     // Repeating the tick at the exact same date must not create a second
     // reminder or re-run catch-up.
     const repeat = await runAutomationTick(new Date("2026-01-21T00:00:00.000Z"), { organizationId: organization.id });
     expect(repeat.executed).toBe(0);
     expect(repeat.skipped).toBe(0);
-    expect(await prisma.actionProposal.count({ where: { invoiceId: invoice.id } })).toBe(1);
+    expect(await prisma.actionProposal.count({ where: { invoiceId: invoice.id } })).toBe(0);
   });
 });
 

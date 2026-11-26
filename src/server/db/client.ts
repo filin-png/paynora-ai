@@ -1,9 +1,12 @@
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient, type Prisma } from "@prisma/client";
 
 import { env } from "@/lib/env";
 
+import { requireIsolatedTestDatabaseUrl } from "./test-database-target";
+
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
+const isTestProcess = env.NODE_ENV === "test" || process.env.VITEST === "true";
 
 /**
  * `max` bounds this one module instance's own connection pool. Under
@@ -21,12 +24,17 @@ const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
  * P1-8).
  */
 function createPrismaClient() {
-  const adapter = new PrismaPg({ connectionString: env.DATABASE_URL, max: env.DATABASE_POOL_MAX });
+  const connectionString = isTestProcess
+    ? requireIsolatedTestDatabaseUrl(process.env.TEST_DATABASE_URL)
+    : env.DATABASE_URL;
+  const adapter = new PrismaPg({ connectionString, max: env.DATABASE_POOL_MAX });
   return new PrismaClient({ adapter });
 }
 
-export const prisma = globalForPrisma.prisma ?? createPrismaClient();
+export type PrismaWrite = <T>(write: (client: Prisma.TransactionClient) => Promise<T>) => Promise<T>;
 
-if (env.NODE_ENV !== "production") {
+export const prisma = (isTestProcess ? undefined : globalForPrisma.prisma) ?? createPrismaClient();
+
+if (!isTestProcess && env.NODE_ENV !== "production") {
   globalForPrisma.prisma = prisma;
 }

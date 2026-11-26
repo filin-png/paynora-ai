@@ -1,4 +1,4 @@
-import { Prisma, type ActionProposal, type Communication } from "@prisma/client";
+import { Prisma, type Communication } from "@prisma/client";
 
 import type { AiProviderName } from "@/server/ai/service";
 import { tryGenerateStructured } from "@/server/ai/service";
@@ -18,6 +18,7 @@ import {
   CommunicationResourceNotFoundError,
   InvalidActionProposalForCommunicationError,
 } from "./errors";
+import { assertCustomerReminder, reminderOriginSelect } from "./reminder-origin";
 import { buildDeterministicReminderEmail, type ReminderEmailContext } from "./templates";
 
 const UNIQUE_CONSTRAINT_VIOLATION = "P2002";
@@ -25,9 +26,10 @@ const UNIQUE_CONSTRAINT_VIOLATION = "P2002";
 async function getTenantActionProposal(
   organizationId: string,
   actionProposalId: string,
-): Promise<ActionProposal> {
+) {
   const proposal = await prisma.actionProposal.findFirst({
     where: { id: actionProposalId, organizationId },
+    include: reminderOriginSelect,
   });
   if (!proposal) throw new CommunicationResourceNotFoundError("Action proposal");
   return proposal;
@@ -127,6 +129,7 @@ export async function prepareReminderCommunication(
   aiOverride?: AiOverride,
 ): Promise<EnsuredCommunication> {
   const proposal = await getTenantActionProposal(organizationId, actionProposalId);
+  assertCustomerReminder(proposal, organizationId);
 
   const existing = await prisma.communication.findUnique({
     where: { actionProposalId: proposal.id },

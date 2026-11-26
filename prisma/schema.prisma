@@ -105,6 +105,9 @@ model Organization {
   actionProposals          ActionProposal[]
   communications           Communication[]
   deliveryAttempts         DeliveryAttempt[]
+  deliveryProviderEvents   DeliveryProviderEvent[]
+  deliveryResolutions      DeliveryResolution[]
+  deliveryIncidents        DeliveryIncident[]
   collectionPolicies       CollectionPolicy[]
   collectionSequences      CollectionSequence[]
   collectionStepExecutions CollectionStepExecution[]
@@ -513,6 +516,10 @@ enum ActivityEventType {
   COMMUNICATION_SEND_ATTEMPTED
   COMMUNICATION_SENT
   COMMUNICATION_SEND_FAILED
+  DELIVERY_PROVIDER_EVIDENCE_RECORDED
+  DELIVERY_RESOLUTION_RECORDED
+  DELIVERY_INCIDENT_OPENED
+  DELIVERY_INCIDENT_CLOSED
   ACTION_PROPOSAL_EXECUTED
   // Phase 5: Collections Automation — see docs/collections-automation.md.
   // Deliberately no per-tick "ran automation tick" event: a tick that finds
@@ -830,6 +837,7 @@ model Communication {
   @@index([organizationId, status])
   @@index([customerId])
   @@index([invoiceId])
+  @@unique([organizationId, id], map: "communication_scope_uq")
   @@map("communications")
 }
 
@@ -875,16 +883,128 @@ model DeliveryAttempt {
   failureCategory   DeliveryFailureCategory?
   failureMessage    String?
   providerMessageId String?
+  providerAccountRef String?
   startedAt         DateTime                 @default(now())
   completedAt       DateTime?
 
   organization  Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  communication Communication @relation(fields: [communicationId], references: [id], onDelete: Cascade)
+  communication Communication @relation(fields: [organizationId, communicationId], references: [organizationId, id], onDelete: Cascade, onUpdate: NoAction, map: "delivery_attempt_comm_scope_fk")
+  providerEvents DeliveryProviderEvent[]
+  resolutions DeliveryResolution[]
+  incidents DeliveryIncident[]
+
+  @@unique([organizationId, communicationId, id], map: "delivery_attempt_scope_uq")
 
   @@unique([communicationId, attemptNumber])
   @@index([organizationId])
   @@index([communicationId])
   @@map("delivery_attempts")
+}
+
+enum DeliveryResolutionDecision {
+  CONFIRMED_DELIVERED
+  CONFIRMED_NOT_DELIVERED
+  UNRESOLVED
+}
+
+enum DeliveryEvidenceSource {
+  WEBHOOK
+  PROVIDER_LOOKUP
+  TRANSPORT
+}
+
+enum DeliveryEvidenceOutcome {
+  ACCEPTED
+  DELIVERED
+  NOT_DELIVERED
+  INCONCLUSIVE
+}
+
+enum DeliveryIncidentKind {
+  LATE_DELIVERY_CONTRADICTION
+}
+
+enum DeliveryIncidentStatus {
+  OPEN
+  CLOSED
+}
+
+model DeliveryProviderEvent {
+  id                  String                  @id @default(cuid())
+  organizationId      String
+  communicationId     String
+  deliveryAttemptId   String
+  provider            String
+  providerAccountRef  String
+  externalEventId     String
+  source              DeliveryEvidenceSource
+  outcome             DeliveryEvidenceOutcome
+  evidenceHash        String                  @db.Char(64)
+  evidenceMetadata    Json?
+  occurredAt          DateTime?               @db.Timestamptz(3)
+  receivedAt          DateTime                @default(now()) @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "delivery_event_org_fk")
+  attempt DeliveryAttempt @relation(fields: [organizationId, communicationId, deliveryAttemptId], references: [organizationId, communicationId, id], onDelete: NoAction, onUpdate: NoAction, map: "delivery_event_attempt_fk")
+  resolutions DeliveryResolution[]
+  incidents DeliveryIncident[]
+
+  @@unique([provider, providerAccountRef, source, externalEventId], map: "delivery_event_dedupe_uq")
+  @@unique([organizationId, communicationId, deliveryAttemptId, id], map: "delivery_event_scope_uq")
+  @@map("delivery_provider_events")
+}
+
+model DeliveryResolution {
+  id                String                     @id @default(cuid())
+  organizationId    String
+  communicationId   String
+  deliveryAttemptId String
+  revision          Int
+  decision          DeliveryResolutionDecision
+  evidenceEventId   String?
+  operatorId        String
+  reason            String                     @db.VarChar(1000)
+  supersedesId      String?
+  createdAt         DateTime                   @default(now()) @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "delivery_resolution_org_fk")
+  attempt DeliveryAttempt @relation(fields: [organizationId, communicationId, deliveryAttemptId], references: [organizationId, communicationId, id], onDelete: NoAction, onUpdate: NoAction, map: "delivery_resolution_attempt_fk")
+  evidence DeliveryProviderEvent? @relation(fields: [organizationId, communicationId, deliveryAttemptId, evidenceEventId], references: [organizationId, communicationId, deliveryAttemptId, id], onDelete: NoAction, onUpdate: NoAction, map: "delivery_resolution_evidence_fk")
+  previous DeliveryResolution? @relation("ResolutionChain", fields: [organizationId, communicationId, deliveryAttemptId, supersedesId], references: [organizationId, communicationId, deliveryAttemptId, id], onDelete: NoAction, onUpdate: NoAction, map: "delivery_resolution_previous_fk")
+  successors DeliveryResolution[] @relation("ResolutionChain")
+  triggeredIncidents DeliveryIncident[] @relation("IncidentTrigger")
+  closedIncidents DeliveryIncident[] @relation("IncidentClosure")
+
+  @@unique([organizationId, communicationId, deliveryAttemptId, revision], map: "delivery_resolution_revision_uq")
+  @@unique([organizationId, communicationId, deliveryAttemptId, id], map: "delivery_resolution_scope_uq")
+  @@map("delivery_resolutions")
+}
+
+model DeliveryIncident {
+  id                  String                 @id @default(cuid())
+  organizationId      String
+  communicationId     String
+  deliveryAttemptId   String
+  providerEventId     String
+  priorResolutionId   String
+  closingResolutionId String?
+  assignedOperatorId  String?
+  kind                DeliveryIncidentKind   @default(LATE_DELIVERY_CONTRADICTION)
+  status              DeliveryIncidentStatus @default(OPEN)
+  description         String                 @db.VarChar(500)
+  createdAt           DateTime               @default(now()) @db.Timestamptz(3)
+  closedAt            DateTime?              @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "delivery_incident_org_fk")
+  attempt DeliveryAttempt @relation(fields: [organizationId, communicationId, deliveryAttemptId], references: [organizationId, communicationId, id], onDelete: NoAction, onUpdate: NoAction, map: "delivery_incident_attempt_fk")
+  providerEvent DeliveryProviderEvent @relation(fields: [organizationId, communicationId, deliveryAttemptId, providerEventId], references: [organizationId, communicationId, deliveryAttemptId, id], onDelete: NoAction, onUpdate: NoAction, map: "delivery_incident_event_fk")
+  priorResolution DeliveryResolution @relation("IncidentTrigger", fields: [organizationId, communicationId, deliveryAttemptId, priorResolutionId], references: [organizationId, communicationId, deliveryAttemptId, id], onDelete: NoAction, onUpdate: NoAction, map: "delivery_incident_prior_fk")
+  closingResolution DeliveryResolution? @relation("IncidentClosure", fields: [organizationId, communicationId, deliveryAttemptId, closingResolutionId], references: [organizationId, communicationId, deliveryAttemptId, id], onDelete: NoAction, onUpdate: NoAction, map: "delivery_incident_closure_fk")
+
+  @@unique([organizationId, providerEventId, kind], map: "delivery_incident_event_uq")
+  @@index([organizationId, communicationId, status], map: "delivery_incident_guard_idx")
+  @@index([organizationId, status, createdAt], map: "delivery_incident_queue_idx")
+  @@map("delivery_incidents")
 }
 
 // --- Phase 5: Collections Automation -------------------------------------

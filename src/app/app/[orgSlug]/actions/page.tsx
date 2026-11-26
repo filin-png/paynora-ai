@@ -18,6 +18,7 @@ import { formatMoney } from "@/server/ar/money";
 import { getAttentionScoresForInvoiceIds } from "@/server/attention/for-invoices";
 import { listPendingActionProposals, listRecentlyDecidedActionProposals } from "@/server/operator/approval";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
+import { prisma } from "@/server/db/client";
 import { approveProposalAction, dismissProposalAction, runOperatorAction } from "./actions";
 
 const PRIORITY_TONE: Record<string, NonNullable<BadgeProps["tone"]>> = {
@@ -49,9 +50,14 @@ export default async function ActionCenterPage({
     FIRM: t.toneFirm,
   };
   const context = await requireOrganizationMembershipForPage(orgSlug);
-  const [pending, decided] = await Promise.all([
+  const [pending, decided, incidents] = await Promise.all([
     listPendingActionProposals(context.organization.id),
     listRecentlyDecidedActionProposals(context.organization.id),
+    context.role === "OWNER" ? prisma.deliveryIncident.findMany({
+      where: { organizationId: context.organization.id, status: "OPEN" },
+      orderBy: { createdAt: "desc" }, take: 50,
+      select: { id: true, assignedOperatorId: true, attempt: { select: { communication: { select: { actionProposalId: true } } } } },
+    }) : [],
   ]);
 
   // Attention scores for every invoice shown on this page, computed once —
@@ -89,6 +95,25 @@ export default async function ActionCenterPage({
           </form>
         }
       />
+
+      {incidents.length ? (
+        <section>
+          <SectionHeader title={dict.actionDetail.deliveryIncidentTitle} />
+          <ul className="mt-3 space-y-2">
+            {incidents.map((incident) => (
+              <li key={incident.id} className="flex gap-3 text-sm">
+                <Link
+                  className="font-medium text-primary hover:underline"
+                  href={`/app/${orgSlug}/actions/${incident.attempt.communication.actionProposalId}`}
+                >
+                  {incident.id}
+                </Link>
+                {incident.assignedOperatorId === context.user.id ? <Badge tone="warning">{dict.actionDetail.deliveryIncidentAssigned}</Badge> : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       <div>
         <SectionHeader

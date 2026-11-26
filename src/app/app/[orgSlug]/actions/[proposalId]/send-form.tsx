@@ -14,18 +14,7 @@ type BoundAction = (
   formData: FormData,
 ) => Promise<CommunicationFormState>;
 
-/**
- * A single explicit-action button. `confirmMessage`, when set, requires
- * the user to confirm in a real dialog before the Server Action fires —
- * used for the two genuinely hard-to-undo sends here: the first manual
- * send of a DRAFT reminder (a real message to a real customer) and
- * "resend after an uncertain outcome," which may send a duplicate (see
- * docs/communications.md#unknown-outcomes and
- * docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1/P2). Retrying after a
- * definite FAILED is deliberately left without a second confirmation —
- * it's the same already-decided send, not a new decision, and a dialog on
- * every retry would just be noise.
- */
+/** Optional confirmation dialog for an initial manual dispatch. */
 export function SendCommunicationForm({
   action,
   label,

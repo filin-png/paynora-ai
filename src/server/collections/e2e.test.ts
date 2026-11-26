@@ -7,6 +7,7 @@ import { recordPayment } from "@/server/ar/payments";
 import { createTestOrganization } from "@/server/ar/test-fixtures";
 import { setOrganizationPlan } from "@/server/billing/subscription";
 import { prisma } from "@/server/db/client";
+import { resolveTestNonDelivery } from "@/server/communications/delivery-test-fixtures";
 import { resetDatabase } from "@/server/db/test-utils";
 import { approveActionProposal } from "@/server/operator/approval";
 import { prepareReminderCommunication } from "@/server/communications/draft";
@@ -153,12 +154,11 @@ describe("end-to-end: UNCERTAIN delivery blocks the next automated reminder unti
     const status = await getCollectionStatusForInvoice(organization.id, invoice.id);
     expect(status.kind).toBe("blocked_uncertain");
 
-    // A human resolves it by manually resending (acknowledging the risk) —
-    // once delivery is confirmed, the next tick is free to proceed again.
+    // Verified non-delivery clears this exact attempt, allowing a manual retry.
+    await resolveTestNonDelivery(organization.id, communication.id, user.id, sendResult.deliveryAttempt.id);
     const resendProvider = createFakeEmailProvider({ kind: "success", providerMessageId: "resolved-1" });
     const resent = await sendCommunication(organization.id, communication.id, user.id, {
       provider: resendProvider,
-      acknowledgeUncertainRisk: true,
     });
     expect(resent.communication.status).toBe("SENT");
 

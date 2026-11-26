@@ -334,19 +334,39 @@ existing pre-send financial re-check. If any condition no longer holds,
 Action Center flow. See `src/server/collections/engine.test.ts`'s
 `isAutoSendStillAuthorized` describe block for the regression coverage.
 
-**Crash recovery / stuck CLAIMED.** If the process dies between claiming a
-step (`CLAIMED`) and marking it `EXECUTED`/`SKIPPED`, that
-`CollectionStepExecution` row stays `CLAIMED` forever — the unique
-constraint means this exact step can never be reclaimed, so that
-sequence's progression on that specific step is permanently blocked
-without human intervention. This is the same accepted, human-resolvable
-tradeoff as a stuck `Communication.SENDING` row (Phase 4) — not
-auto-retried, not silently worked around, surfaced as a stall a human
-(or a future admin tool) has to notice and fix. No reconciler was built
-for this, per the explicit instruction not to build scheduler/reconciler
-infrastructure without proven necessity. In practice the window is small:
-the claim insert and the `EXECUTED`/`SKIPPED` update that follows are
-each individually fast, non-transaction-spanning operations.
+**Crash recovery / stuck CLAIMED.** On an enabled, entitled organization's
+normal tick, the engine checks up to 25 unresolved claims at least 30
+minutes old, oldest first. It locks each claim for the transaction and
+skips rows another worker has already locked. Writers for the original
+step use the same row lock before persisting an event, insight or proposal.
+An unresolved claim blocks further reminders in its sequence.
+
+Recovery requires a matching `COLLECTION_STEP_DUE` business event whose
+dedupe key is the execution ID. It validates tenant, invoice, customer,
+step and artifact links. It may fill in a missing insight and a pending
+proposal for a current, eligible reminder when the sequence has no other
+unresolved claim. It preserves existing proposals
+and can record a consistent draft with no attempts or confirmed delivery
+backed by one successful attempt. It never drafts, approves, dispatches
+or retries a communication. Recovery writes and the `EXECUTED` audit
+commit together.
+
+Missing or inconsistent evidence, uncertain delivery, and ambiguous
+attempt history leave the execution in `CLAIMED` with a manual review
+note. The `COLLECTION_STEP_SKIPPED` audit explicitly records that recovery
+was skipped and includes the retained status and reason. This decision
+is recorded once. Inspect the linked artifacts and use the existing
+communication review path for `SENDING` or `UNCERTAIN`. Preserve the
+claim and delivery history. There is no operator action to reset a
+collection claim.
+
+When deploying this change, quiesce existing automation ticks before
+resuming the scheduler with the new code. Older workers do not check
+the recovery marker before writing their artifacts.
+
+Stage 4A uses the same historical delivery evaluation in Collections and Recovery.
+An unresolved attempt or open incident on the invoice blocks progression.
+Delivery resolution leaves previously flagged CLAIMED cases for manual review.
 
 ## Auto-send
 
@@ -570,8 +590,8 @@ formatted secret; unconfigured deployment).
    created.
 2. First reminder sent but delivery comes back `UNCERTAIN` (a simulated
    provider timeout) → next due step's tick is `blocked`, nothing sent,
-   nothing created → a human manually resends with
-   `acknowledgeUncertainRisk` and gets `SENT` → the following tick
+   nothing created → OWNER records verified non-delivery → a human can retry
+   and obtains `SENT` → the following tick
    proceeds normally again.
 
 ## Verification
@@ -688,9 +708,15 @@ a structured, secret-free summary:
   "skipped": 5,
   "stopped": 1,
   "blocked": 1,
-  "failed": 0
+  "failed": 0,
+  "recovered": 1,
+  "recoveryNeedsReview": 1
 }
 ```
+
+`recovered` is included in `executed`. `recoveryNeedsReview` counts newly
+flagged claims. Later ticks report active blocked sequences through
+`blocked`; the individual review reasons remain in the activity log.
 
 Never logs an email body, AI provider credential, or the scheduler
 secret. Per-invoice failures are logged separately (id + error name/
@@ -706,7 +732,12 @@ only visible in a log line.
 Two OWNER-visible surfaces build on this, without duplicating it: `GET
 /internal/automation/health` (same bearer auth as the tick endpoint) is
 the operational heartbeat for an external monitor — see
-`src/server/collections/health.ts`. Settings → Readiness (Phase 11.4,
+`src/server/collections/health.ts`. Health keeps scheduler readiness
+separate from `degraded`, which flags errors in the latest enabled tick.
+`lastSuccessfulTickAt` excludes ticks with failures. Ticks count
+`AUTO_SEND` errors and non-`SENT` delivery outcomes in `failed`.
+A policy or invoice check that intentionally prevents sending is not a
+delivery failure. Settings → Readiness (Phase 11.4,
 extended Phase 11.6) reports a simpler, configuration-only "Automation
 scheduler: configured/disabled" signal for whoever is deciding whether to
 turn automation on for their organization — it never queries
@@ -792,9 +823,9 @@ Documented, not silently accepted:
 - The payment↔automation race has an irreducible small window between the
   final pre-send re-check and the actual provider call — see
   [Payment / cancellation safety](#payment--cancellation-safety).
-- A crash between claiming a step and finalizing it leaves that step
-  permanently un-retriable without human/admin intervention — see
-  [Concurrency](#concurrency).
+- A claim without provable lineage or with ambiguous delivery stays
+  blocked for manual review. A draft for an already `EXECUTED` step is
+  left for the ordinary communications flow — see [Concurrency](#concurrency).
 - A `POLICY_DISABLED`-stopped sequence does not auto-resume when the
   policy is re-enabled — a fresh, explicit decision (re-enrollment or a
   future dedicated "resume stopped sequences" action) is required.

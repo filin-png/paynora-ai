@@ -10,24 +10,9 @@ jobs:
     name: Typecheck, lint, test, build
     runs-on: ubuntu-latest
 
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: paynora
-          POSTGRES_PASSWORD: paynora
-          POSTGRES_DB: paynora
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U paynora"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
     env:
-      DATABASE_URL: postgresql://paynora:paynora@localhost:5432/paynora?schema=public
-      TEST_DATABASE_URL: postgresql://paynora:paynora@localhost:5432/paynora_test?schema=public
+      # These credentials are fixtures for the job-local PostgreSQL container.
+      DATABASE_URL: postgresql://paynora_test_runner:ci_test_runner_only@127.0.0.1:55432/paynora_test?schema=public
       # CI-only value — never used for anything real, just needs to satisfy
       # the 32-character minimum in src/lib/env.ts.
       AUTH_SECRET: ci-only-secret-not-used-for-anything-real-00
@@ -52,21 +37,83 @@ jobs:
       - name: Validate Prisma schema
         run: npm run db:validate
 
-      - name: Apply migrations
-        run: npx prisma migrate deploy
+      - name: Test without a database
+        run: npm run test:unit
 
-      - name: Create test database
+      - name: Start isolated test PostgreSQL
         run: |
-          PGPASSWORD=paynora psql -h localhost -U paynora -d postgres \
-            -c "CREATE DATABASE paynora_test OWNER paynora;"
+          # The backend must see the loopback address and port checked by resetDatabase.
+          docker run --detach --rm --name paynora-ci-postgres --network host \
+            --env PGPORT=55432 \
+            --env POSTGRES_USER=paynora_test_admin \
+            --env POSTGRES_PASSWORD=ci_test_admin_only \
+            --env POSTGRES_DB=paynora_test \
+            --env POSTGRES_INITDB_ARGS=--auth=scram-sha-256 \
+            postgres:17-alpine -h 127.0.0.1 -p 55432 -c cluster_name=paynora_test_isolated
+          for attempt in {1..30}; do
+            if docker exec paynora-ci-postgres pg_isready \
+              -h 127.0.0.1 -p 55432 -U paynora_test_admin -d paynora_test; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs paynora-ci-postgres
+          exit 1
 
       - name: Apply migrations to test database
-        run: npx prisma migrate deploy
+        run: |
+          identity=$(docker exec --env PGPASSWORD=ci_test_admin_only paynora-ci-postgres \
+            psql -X -At -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 55432 -U paynora_test_admin -d paynora_test \
+            -c "SELECT current_database() = 'paynora_test'
+                  AND current_user = 'paynora_test_admin'
+                  AND inet_server_addr() = '127.0.0.1'::inet
+                  AND inet_server_port() = 55432
+                  AND current_setting('cluster_name', true) = 'paynora_test_isolated'
+                  AND NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'paynora')")
+          test "$identity" = t
+          npx --no-install prisma migrate deploy
+          npx --no-install prisma migrate status
         env:
-          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+          DATABASE_URL: postgresql://paynora_test_admin:ci_test_admin_only@127.0.0.1:55432/paynora_test?schema=public
+          DIRECT_URL: postgresql://paynora_test_admin:ci_test_admin_only@127.0.0.1:55432/paynora_test?schema=public
+
+      - name: Grant test runner access
+        run: |
+          docker exec -i --env PGPASSWORD=ci_test_admin_only paynora-ci-postgres \
+            psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 55432 -U paynora_test_admin -d paynora_test <<'SQL'
+          BEGIN;
+          CREATE ROLE paynora_test_runner LOGIN NOINHERIT NOSUPERUSER
+            NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD 'ci_test_runner_only';
+          REVOKE ALL ON DATABASE paynora_test FROM PUBLIC;
+          GRANT CONNECT ON DATABASE paynora_test TO paynora_test_runner;
+          REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+          GRANT USAGE ON SCHEMA public TO paynora_test_runner;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO paynora_test_runner;
+          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO paynora_test_runner;
+          REVOKE ALL ON TABLE public._prisma_migrations FROM paynora_test_runner;
+          COMMIT;
+          SQL
+
+      - name: Check test connection identity
+        run: |
+          identity=$(docker exec --env PGPASSWORD=ci_test_runner_only paynora-ci-postgres \
+            psql -X -At -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 55432 -U paynora_test_runner -d paynora_test \
+            -c "SELECT current_database() = 'paynora_test'
+                  AND session_user = 'paynora_test_runner'
+                  AND current_user = 'paynora_test_runner'
+                  AND inet_server_addr() = '127.0.0.1'::inet
+                  AND inet_server_port() = 55432
+                  AND current_schema() = 'public'
+                  AND current_setting('cluster_name', true) = 'paynora_test_isolated'
+                  AND NOT has_schema_privilege('public', 'CREATE')
+                  AND NOT has_table_privilege('public._prisma_migrations', 'DELETE')
+                  AND NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'paynora')")
+          test "$identity" = t
 
       - name: Test
         run: npm run test
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
 
       - name: Build
         run: npm run build

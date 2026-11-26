@@ -6,7 +6,10 @@ import { z } from "zod";
 import { prepareReminderCommunication } from "@/server/communications/draft";
 import { updateCommunicationDraft } from "@/server/communications/editing";
 import { reconcileStaleSendingCommunication, sendCommunication } from "@/server/communications/send";
-import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
+import { requireOrganizationMembershipForPage, requireOrganizationRoleForPage } from "@/server/tenancy/guards";
+import { deliveryResolutionInput, resolveDelivery } from "@/server/communications/delivery-resolutions";
+import { getLocale } from "@/lib/i18n/get-locale";
+import { getDictionary } from "@/lib/i18n";
 
 export type CommunicationFormState = { error: string } | null;
 
@@ -47,52 +50,51 @@ export async function updateCommunicationAction(
   return null;
 }
 
-async function trySend(
-  orgSlug: string,
-  proposalId: string,
-  communicationId: string,
-  options: { acknowledgeUncertainRisk?: boolean },
-): Promise<CommunicationFormState> {
-  const context = await requireOrganizationMembershipForPage(orgSlug);
-  try {
-    await sendCommunication(context.organization.id, communicationId, context.user.id, options);
-  } catch (error) {
-    if (error instanceof Error) {
-      return { error: error.message };
-    }
-    throw error;
-  }
-  revalidateProposalPage(orgSlug, proposalId);
-  return null;
-}
-
 export async function sendCommunicationAction(
   orgSlug: string,
   proposalId: string,
   communicationId: string,
   _prevState: CommunicationFormState,
 ): Promise<CommunicationFormState> {
-  return trySend(orgSlug, proposalId, communicationId, {});
+  const context = await requireOrganizationMembershipForPage(orgSlug);
+  try {
+    await sendCommunication(context.organization.id, communicationId, context.user.id);
+  } catch (error) {
+    if (error instanceof Error) return { error: error.message };
+    throw error;
+  }
+  revalidateProposalPage(orgSlug, proposalId);
+  return null;
 }
 
-export async function resendUncertainCommunicationAction(
+export async function resolveDeliveryAction(
   orgSlug: string,
   proposalId: string,
   communicationId: string,
-  _prevState: CommunicationFormState,
+  attemptId: string,
+  previousId: string | null,
+  _previous: CommunicationFormState,
+  formData: FormData,
 ): Promise<CommunicationFormState> {
-  return trySend(orgSlug, proposalId, communicationId, { acknowledgeUncertainRisk: true });
+  const context = await requireOrganizationRoleForPage(orgSlug, "OWNER");
+  try {
+    const input = deliveryResolutionInput.parse({
+      attemptId, previousId, decision: formData.get("decision"), reason: formData.get("reason"),
+      evidenceEventId: formData.get("evidenceEventId") || undefined,
+      incidentId: formData.get("incidentId") || undefined,
+    });
+    await resolveDelivery(
+      { organizationId: context.organization.id, userId: context.user.id },
+      { communicationId, proposalId },
+      input,
+    );
+  } catch {
+    return { error: getDictionary(await getLocale()).actionDetail.resolutionRejected };
+  }
+  revalidateProposalPage(orgSlug, proposalId);
+  return null;
 }
 
-/**
- * Phase 9 (docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-3): the explicit
- * recovery step for a communication genuinely stuck at SENDING. Never
- * sends anything itself — it only moves the communication to UNCERTAIN
- * (admitting the outcome is unknown), after which the existing, already-
- * tested "Resend anyway" flow (`resendUncertainCommunicationAction`
- * above) is what actually requires acknowledging duplicate-send risk
- * before attempting anything further.
- */
 export async function reconcileStaleSendingCommunicationAction(
   orgSlug: string,
   proposalId: string,

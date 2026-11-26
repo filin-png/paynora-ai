@@ -124,8 +124,8 @@ export function computeInvoiceFinancials(
   };
 }
 
-export async function getPaidMinorForInvoice(invoiceId: string): Promise<bigint> {
-  const result = await prisma.payment.aggregate({
+export async function getPaidMinorForInvoice(invoiceId: string, client: Prisma.TransactionClient = prisma): Promise<bigint> {
+  const result = await client.payment.aggregate({
     where: { invoiceId },
     _sum: { amountMinor: true },
   });
@@ -177,8 +177,8 @@ export async function createInvoice(organizationId: string, rawInput: InvoiceInp
   }
 }
 
-export async function getInvoice(organizationId: string, invoiceId: string) {
-  const invoice = await prisma.invoice.findFirst({
+export async function getInvoice(organizationId: string, invoiceId: string, client: Prisma.TransactionClient = prisma) {
+  const invoice = await client.invoice.findFirst({
     where: { id: invoiceId, organizationId },
     include: { customer: true },
   });
@@ -195,9 +195,14 @@ export async function getInvoice(organizationId: string, invoiceId: string) {
  * it and gets the exact previous behavior (getBusinessToday(), via
  * isPastDue's own default parameter).
  */
-export async function getInvoiceWithFinancials(organizationId: string, invoiceId: string, today?: string) {
-  const invoice = await getInvoice(organizationId, invoiceId);
-  const paidMinor = await getPaidMinorForInvoice(invoice.id);
+export async function getInvoiceWithFinancials(
+  organizationId: string,
+  invoiceId: string,
+  today?: string,
+  client: Prisma.TransactionClient = prisma,
+) {
+  const invoice = await getInvoice(organizationId, invoiceId, client);
+  const paidMinor = await getPaidMinorForInvoice(invoice.id, client);
   return { invoice, financials: computeInvoiceFinancials(invoice, paidMinor, today) };
 }
 

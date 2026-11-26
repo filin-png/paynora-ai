@@ -1,6 +1,6 @@
 import { Prisma, type ActionProposal, type ActionType, type OperatorInsight } from "@prisma/client";
 
-import { prisma } from "@/server/db/client";
+import { prisma, type PrismaWrite } from "@/server/db/client";
 
 const UNIQUE_CONSTRAINT_VIOLATION = "P2002";
 
@@ -42,6 +42,24 @@ function suggestedToneForPriority(priority: OperatorInsight["priority"]): string
 
 export type EnsuredProposal = { proposal: ActionProposal; created: boolean };
 
+export function buildReminderProposalData(
+  organizationId: string,
+  insight: OperatorInsight,
+  tone?: string,
+): Prisma.ActionProposalUncheckedCreateInput {
+  const type: ActionType = "SEND_PAYMENT_REMINDER";
+  assertAllowedActionType(type);
+  return {
+    organizationId,
+    insightId: insight.id,
+    customerId: insight.customerId,
+    invoiceId: insight.invoiceId,
+    type,
+    reasoning: insight.summary,
+    suggestedTone: tone ?? suggestedToneForPriority(insight.priority),
+  };
+}
+
 /**
  * Idempotent: a second call for the same insight finds the existing row
  * via the unique constraint on [organizationId, insightId, type] rather
@@ -62,22 +80,11 @@ export async function ensureReminderProposalForInsight(
   organizationId: string,
   insight: OperatorInsight,
   options: { tone?: string } = {},
+  persist: PrismaWrite = (write) => write(prisma),
 ): Promise<EnsuredProposal> {
-  const type: ActionType = "SEND_PAYMENT_REMINDER";
-  assertAllowedActionType(type);
-
+  const data = buildReminderProposalData(organizationId, insight, options.tone);
   try {
-    const proposal = await prisma.actionProposal.create({
-      data: {
-        organizationId,
-        insightId: insight.id,
-        customerId: insight.customerId,
-        invoiceId: insight.invoiceId,
-        type,
-        reasoning: insight.summary,
-        suggestedTone: options.tone ?? suggestedToneForPriority(insight.priority),
-      },
-    });
+    const proposal = await persist((client) => client.actionProposal.create({ data }));
     return { proposal, created: true };
   } catch (error) {
     if (
@@ -85,7 +92,7 @@ export async function ensureReminderProposalForInsight(
       error.code === UNIQUE_CONSTRAINT_VIOLATION
     ) {
       const existing = await prisma.actionProposal.findUniqueOrThrow({
-        where: { organizationId_insightId_type: { organizationId, insightId: insight.id, type } },
+        where: { organizationId_insightId_type: { organizationId, insightId: insight.id, type: data.type } },
       });
       return { proposal: existing, created: false };
     }

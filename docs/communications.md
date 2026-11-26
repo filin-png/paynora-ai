@@ -143,7 +143,7 @@ DRAFT --Send--> SENDING --success--> SENT
 DRAFT --Send--> SENDING --definite rejection--> FAILED
 DRAFT --Send--> SENDING --timeout/unrecognized error--> UNCERTAIN
 FAILED --Send (retry)--> SENDING --...--> (same three outcomes)
-UNCERTAIN --Send + acknowledgeUncertainRisk--> SENDING --...--> (same three outcomes)
+UNCERTAIN --Send after verified non-delivery--> SENDING --...--> (same three outcomes)
 ```
 
 - `SENT` is terminal. Nothing moves a `SENT` communication back to
@@ -189,7 +189,7 @@ share a commit protocol.
 `src/server/communications/send.ts`'s docstring):
 
 1. **Claim**, in one DB transaction: atomically flip
-   `DRAFT`/`FAILED`[/`UNCERTAIN` with explicit acknowledgement] ->
+   eligible `DRAFT`, `FAILED`, or verified `UNCERTAIN` ->
    `SENDING`, and create a `PENDING` `DeliveryAttempt`. This transaction
    commits *before* any external call is made.
 2. **Dispatch**, outside any transaction: call the `EmailProvider`.
@@ -221,15 +221,19 @@ and the Action Center says exactly that:
 
 > Delivery status uncertain. Do not resend automatically.
 
-Resending from `UNCERTAIN` requires an explicit
-`acknowledgeUncertainRisk: true` — there is no other path back to
-`SENDING` from `UNCERTAIN`. The UI's "Resend anyway (may send a
-duplicate)" button is deliberately separate from the normal Send/Retry
-button and requires a confirmation dialog before submitting — see
-`src/app/app/[orgSlug]/actions/[proposalId]/send-form.tsx`. This is a
-manual, informed decision, never an automatic one, per the project's
-explicit instruction: an ambiguous timeout is never blindly retried as if
-the email definitely wasn't sent.
+Stage 4A checks every attempt before acquiring delivery. An OWNER may
+resolve an UNKNOWN attempt with verified evidence linked to that attempt.
+A later FAILED leaves earlier unresolved attempts blocked. SMTP acceptance
+and the Telegram send response are separate from recipient delivery.
+
+Corrections append a new resolution. Credible late delivery evidence after
+a non-delivery resolution opens an incident and blocks new acquisitions.
+An OWNER records a new verified resolution to close it. Confirmed delivery
+still blocks duplicates. A reused authenticated event identity with
+different content records a separate conflict marker and blocks the
+correlated attempt. It does not overwrite the prior evidence. The
+delivery webhook registry ships empty.
+Already acquired requests may complete and provide later evidence.
 
 ## Failure model
 
@@ -253,14 +257,10 @@ the error's message.
 
 ## Retry policy
 
-- `FAILED -> SENDING` (retry) needs no special flag — a definite
-  rejection means nothing was sent, so retrying is always safe from a
-  duplicate-delivery standpoint. Each retry is a **new**
-  `DeliveryAttempt` row; the failed one is never deleted or overwritten.
-- `UNCERTAIN -> SENDING` (resend) needs `acknowledgeUncertainRisk: true`
-  — see [Unknown outcomes](#unknown-outcomes).
-- There is no automatic/scheduled retry of anything. A human clicks Retry
-  or Resend, or doesn't.
+- A retry requires the shared Delivery Guard, including all historical
+  `UNKNOWN` rows, active attempts, confirmed delivery and incidents.
+- Every eligible retry creates a separate `DeliveryAttempt`. A resolution
+  applies only to its own attempt.
 
 ## ActionProposal integration
 
@@ -438,10 +438,9 @@ list:
 - `DRAFT` -> editable subject/body form ("Save changes") plus a "Send"
   button, with the recipient/channel/invoice/outstanding amount shown
   above.
-- `FAILED` -> the failure reason, plus a "Retry" button.
-- `SENDING`/`UNCERTAIN` -> "Delivery status uncertain. Do not resend
-  automatically." plus a separately-labeled, confirmation-gated "Resend
-  anyway (may send a duplicate)" button.
+- `FAILED` shows the failure and offers Retry only when delivery is eligible.
+- Stale `SENDING` can be reconciled to `UNCERTAIN`. The OWNER sees the
+  decision history and available verified evidence in the Action Center.
 - `SENT` -> "Sent [date/time]", the final subject/body (read-only), and
   the full delivery attempt history.
 
@@ -486,7 +485,7 @@ terminal state.
   `communication.channel` inside the same claim → dispatch → finalize
   state machine — the same atomic conditional claim, the same
   `UNCERTAIN`-never-FAILED-on-ambiguous-outcome rule, the same
-  `acknowledgeUncertainRisk` gate on resend. Proven, not just implied, by
+  full-history Delivery Guard on retry. Covered by
   a Telegram-specific concurrent double-send test in `send.test.ts`.
 - Scheduled/automatic reminder sequences (e.g. due date -> +3d -> +7d) —
   **built in Phase 5** as `CollectionPolicy`/`CollectionSequence`, see

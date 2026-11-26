@@ -2,7 +2,6 @@ import {
   Prisma,
   type ActionProposal,
   type Communication,
-  type CommunicationStatus,
   type DeliveryAttempt,
   type DeliveryFailureCategory,
 } from "@prisma/client";
@@ -21,19 +20,15 @@ import type { MessagingProvider } from "@/server/messaging/types";
 import { RateLimitExceededError } from "@/server/rate-limit/errors";
 import { communicationSendPolicy } from "@/server/rate-limit/policies";
 import { checkRateLimit } from "@/server/rate-limit/service";
-import { CommunicationResourceNotFoundError, InvalidCommunicationTransitionError } from "./errors";
+import { CommunicationChannelBlockedError, CommunicationResourceNotFoundError, InvalidCommunicationTransitionError } from "./errors";
+import { assertCustomerReminder, reminderOriginSelect } from "./reminder-origin";
+import { assessDelivery, deliveryHistorySelect, findBlockedDeliveryInvoices, lockDeliveryCommunication } from "./delivery-guard";
+import { recordLateAcceptance } from "./delivery-provider-events";
 
 /** Who actually triggered this send — encoded in the ActivityEvent's metadata, not a schema change. See docs/communications.md#audit-trail. */
 export type CommunicationActorSource = "USER" | "AUTOMATION";
 
 export type SendCommunicationOptions = {
-  /**
-   * Must be true when the communication's current status is UNCERTAIN.
-   * There is no other way to resend from UNCERTAIN — see
-   * docs/communications.md#unknown-outcomes. Has no effect from any other
-   * status (DRAFT/FAILED are always retryable without it).
-   */
-  acknowledgeUncertainRisk?: boolean;
   /**
    * Test-only dependency injection point. Production code paths never
    * pass this — they always go through `resolveEmailProvider()`, which is
@@ -119,118 +114,123 @@ export type ReconcileStaleSendingResult = {
   deliveryAttempt: DeliveryAttempt;
 };
 
+async function lockSendingAttempt(
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+  communicationId: string,
+) {
+  const communication = await lockDeliveryCommunication(tx, organizationId, communicationId);
+  if (communication.status !== "SENDING") return { communication, pendingAttempt: null };
+
+  const latestAttempt = await tx.deliveryAttempt.findFirst({
+    where: { communicationId, organizationId },
+    orderBy: { attemptNumber: "desc" },
+  });
+  return { communication, pendingAttempt: latestAttempt?.status === "PENDING" ? latestAttempt : null };
+}
+
+/** Called with the parent row locked and the latest pending attempt verified. */
+async function transitionPendingOutcome(
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+  pendingAttempt: DeliveryAttempt,
+  data: {
+    communication: Prisma.CommunicationUpdateManyMutationInput;
+    attempt: Prisma.DeliveryAttemptUpdateManyMutationInput;
+  },
+): Promise<ReconcileStaleSendingResult> {
+  const communicationId = pendingAttempt.communicationId;
+  const communicationUpdate = await tx.communication.updateMany({
+    where: { id: communicationId, organizationId, status: "SENDING" },
+    data: data.communication,
+  });
+  if (communicationUpdate.count !== 1) {
+    throw new InvalidCommunicationTransitionError("SENDING", "the communication could not be finalized");
+  }
+  const attemptUpdate = await tx.deliveryAttempt.updateMany({
+    where: { id: pendingAttempt.id, communicationId, organizationId, status: "PENDING" },
+    data: data.attempt,
+  });
+  if (attemptUpdate.count !== 1) {
+    throw new InvalidCommunicationTransitionError("SENDING", "the active delivery attempt could not be finalized");
+  }
+
+  const communication = await tx.communication.findUniqueOrThrow({ where: { id: communicationId } });
+  const deliveryAttempt = await tx.deliveryAttempt.findUniqueOrThrow({ where: { id: pendingAttempt.id } });
+  return { communication, deliveryAttempt };
+}
+
 /**
- * The recovery path for a `Communication` genuinely stuck at `SENDING` —
- * see docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P1-3 for the finding
- * this closes: previously, `SENDING` was excluded from every
- * `allowedFrom` list in `sendCommunication` *forever*, with no way back
- * in, and the Action Center UI offered a "Resend anyway" button for that
- * exact state that was guaranteed to fail.
- *
- * This does NOT resend anything and does NOT decide whether the original
- * attempt actually reached the customer — a provider may well have
- * accepted the message before the process died. It only moves the
- * communication from the permanently-stuck `SENDING` state to the
- * already-well-understood `UNCERTAIN` state, which — exactly like any
- * other `UNCERTAIN` outcome — still requires an explicit
- * `acknowledgeUncertainRisk: true` from a human before `sendCommunication`
- * will attempt anything further. This function is the "admit we don't
- * know" step; resending (accepting the duplicate-send risk) remains a
- * deliberate, separate, already-existing, already-tested step.
+ * Moves stale SENDING/PENDING to UNCERTAIN/UNKNOWN without dispatching.
+ * Only verified evidence and an OWNER resolution can clear that barrier.
  *
  * Refuses to act on a `SENDING` communication whose most recent attempt
  * is still within `STALE_SENDING_THRESHOLD_MS` — a fresh `SENDING` might
  * genuinely still be in flight, and reconciling it early would be an
  * unsafe, premature judgment call.
  *
- * Concurrency-safe via the same atomic compare-and-swap technique used
- * throughout this codebase: the `SENDING -> UNCERTAIN` transition only
- * commits if the row is still `SENDING` at that instant, so two
- * concurrent reconcile attempts (or a reconcile racing the original
- * attempt actually completing) can never both "win", and can never
- * silently overwrite a `SENT`/`FAILED` outcome that landed in between.
+ * Read the latest attempt and check its age after locking the parent
+ * communication. A retry that started while reconciliation was waiting
+ * cannot inherit the original attempt's stale timestamp.
  */
 export async function reconcileStaleSendingCommunication(
   organizationId: string,
   communicationId: string,
   now: Date = new Date(),
 ): Promise<ReconcileStaleSendingResult> {
-  const communication = await prisma.communication.findFirst({ where: { id: communicationId, organizationId } });
-  if (!communication) throw new CommunicationResourceNotFoundError("Communication");
-  if (communication.status !== "SENDING") {
-    throw new InvalidCommunicationTransitionError(
-      communication.status,
-      "only a communication currently stuck at SENDING can be reconciled",
-    );
-  }
-
-  const pendingAttempt = await prisma.deliveryAttempt.findFirst({
-    where: { communicationId, organizationId, status: "PENDING" },
-    orderBy: { attemptNumber: "desc" },
-  });
-  if (!pendingAttempt) {
-    throw new InvalidCommunicationTransitionError(
-      communication.status,
-      "no pending delivery attempt was found to reconcile",
-    );
-  }
-
-  const ageMs = now.getTime() - pendingAttempt.startedAt.getTime();
-  if (ageMs < STALE_SENDING_THRESHOLD_MS) {
-    throw new InvalidCommunicationTransitionError(
-      communication.status,
-      `this send attempt started only ${Math.round(ageMs / 1000)}s ago and may still be genuinely in flight — wait before reconciling`,
-    );
-  }
-
   return prisma.$transaction(async (tx) => {
-    const claim = await tx.communication.updateMany({
-      where: { id: communicationId, organizationId, status: "SENDING" },
-      data: { status: "UNCERTAIN" },
-    });
-    if (claim.count !== 1) {
-      const current = await tx.communication.findFirst({ where: { id: communicationId, organizationId } });
-      if (!current) throw new CommunicationResourceNotFoundError("Communication");
+    const { communication, pendingAttempt } = await lockSendingAttempt(tx, organizationId, communicationId);
+    if (communication.status !== "SENDING") {
       throw new InvalidCommunicationTransitionError(
-        current.status,
-        "this communication is no longer stuck at SENDING — it may have just been reconciled or resolved concurrently",
+        communication.status,
+        "only a communication currently stuck at SENDING can be reconciled",
+      );
+    }
+    if (!pendingAttempt) {
+      throw new InvalidCommunicationTransitionError(
+        communication.status,
+        "no pending delivery attempt was found to reconcile",
       );
     }
 
-    const updatedAttempt = await tx.deliveryAttempt.update({
-      where: { id: pendingAttempt.id },
-      data: {
+    const ageMs = now.getTime() - pendingAttempt.startedAt.getTime();
+    if (ageMs < STALE_SENDING_THRESHOLD_MS) {
+      throw new InvalidCommunicationTransitionError(
+        communication.status,
+        `this send attempt started only ${Math.round(ageMs / 1000)}s ago and may still be genuinely in flight — wait before reconciling`,
+      );
+    }
+
+    const outcome = await transitionPendingOutcome(tx, organizationId, pendingAttempt, {
+      communication: { status: "UNCERTAIN" },
+      attempt: {
         status: "UNKNOWN",
         failureCategory: "TIMEOUT_OR_UNKNOWN",
         failureMessage: `No delivery confirmation was observed within ${Math.round(STALE_SENDING_THRESHOLD_MS / 60000)} minutes of this attempt starting — the provider may or may not have received it. Reconciled to allow manual review; never auto-retried.`,
         completedAt: now,
       },
     });
-    const updatedCommunication = await tx.communication.findUniqueOrThrow({ where: { id: communicationId } });
 
     await recordActivityEvent(tx, {
       organizationId,
       type: "COMMUNICATION_SEND_FAILED",
-      summary: `Payment reminder delivery status reconciled to uncertain for invoice ${updatedCommunication.invoiceId} (stuck at SENDING with no resolution)`,
-      customerId: updatedCommunication.customerId,
-      invoiceId: updatedCommunication.invoiceId,
+      summary: `Payment reminder delivery status reconciled to uncertain for invoice ${outcome.communication.invoiceId} (stuck at SENDING with no resolution)`,
+      customerId: outcome.communication.customerId,
+      invoiceId: outcome.communication.invoiceId,
       metadata: { outcome: "UNCERTAIN", failureCategory: "TIMEOUT_OR_UNKNOWN", reconciledFromStaleSending: true },
     });
 
-    return { communication: updatedCommunication, deliveryAttempt: updatedAttempt };
+    return outcome;
   });
 }
-
-const ALWAYS_SENDABLE_FROM: CommunicationStatus[] = ["DRAFT", "FAILED"];
-const UNCERTAIN_SENDABLE_FROM: CommunicationStatus[] = ["DRAFT", "FAILED", "UNCERTAIN"];
 
 /**
  * The one function that ever calls an EmailProvider. Two-phase by design
  * — see docs/communications.md#delivery-semantics for why a single DB
  * transaction cannot safely wrap the external call:
  *
- * 1. Atomically claim the communication (DRAFT/FAILED[/UNCERTAIN with
- *    `acknowledgeUncertainRisk`] -> SENDING) and create a PENDING
+ * 1. Check the delivery history, claim an eligible communication as SENDING,
+ *    and create a PENDING
  *    DeliveryAttempt, in one transaction. Only one of any number of
  *    concurrent callers can win this claim — Postgres serializes
  *    concurrent UPDATEs on the same row and re-evaluates the WHERE clause
@@ -271,9 +271,20 @@ export async function sendCommunication(
   // tenant-scoped read, not a write, so it doesn't itself claim anything.
   const channelLookup = await prisma.communication.findFirst({
     where: { id: communicationId, organizationId },
-    select: { channel: true },
+    select: {
+      channel: true,
+      recipient: true,
+      actionProposal: { include: reminderOriginSelect },
+    },
   });
   if (!channelLookup) throw new CommunicationResourceNotFoundError("Communication");
+  assertCustomerReminder(channelLookup.actionProposal, organizationId);
+  if (
+    (channelLookup.channel !== "EMAIL" && channelLookup.channel !== "TELEGRAM") ||
+    !channelLookup.recipient.trim()
+  ) {
+    throw new CommunicationChannelBlockedError("Communication has no supported recipient");
+  }
 
   // Resolved and validated *before* any state changes — a misconfigured
   // or disabled provider must never create a DeliveryAttempt or move the
@@ -313,32 +324,32 @@ export async function sendCommunication(
     );
   }
 
-  const allowedFrom = options.acknowledgeUncertainRisk ? UNCERTAIN_SENDABLE_FROM : ALWAYS_SENDABLE_FROM;
   const actorSource: CommunicationActorSource = options.actorSource ?? "USER";
   const channelLabel = channelLookup.channel === "EMAIL" ? "email" : "Telegram message";
 
   const claimed = await prisma.$transaction(async (tx) => {
+    const current = await lockDeliveryCommunication(tx, organizationId, communicationId);
+    const { invoice } = current;
+    if (invoice.status === "CANCELLED") {
+      throw new InvalidCommunicationTransitionError(current.status, "cannot send a reminder for a cancelled invoice");
+    }
+    const paid = await tx.payment.aggregate({ where: { invoiceId: invoice.id }, _sum: { amountMinor: true } });
+    if ((paid._sum.amountMinor ?? 0n) >= invoice.amountMinor) {
+      throw new InvalidCommunicationTransitionError(current.status, "cannot send a reminder for a fully paid invoice");
+    }
+
+    const history = await tx.communication.findFirstOrThrow({ where: { id: communicationId, organizationId }, select: deliveryHistorySelect });
+    if (!["DRAFT", "FAILED", "UNCERTAIN"].includes(current.status) || assessDelivery(history) ||
+      (await findBlockedDeliveryInvoices(tx, organizationId, [invoice.id], current.id)).size) {
+      throw new InvalidCommunicationTransitionError(current.status, "delivery review is required or another delivery is active or already confirmed");
+    }
+
     const claim = await tx.communication.updateMany({
-      where: { id: communicationId, organizationId, status: { in: allowedFrom } },
+      where: { id: communicationId, organizationId, status: current.status },
       data: { status: "SENDING" },
     });
-
     if (claim.count !== 1) {
-      const current = await tx.communication.findFirst({ where: { id: communicationId, organizationId } });
-      if (!current) throw new CommunicationResourceNotFoundError("Communication");
-      if (current.status === "UNCERTAIN" && !options.acknowledgeUncertainRisk) {
-        throw new InvalidCommunicationTransitionError(
-          current.status,
-          "resending after an uncertain delivery outcome requires explicit acknowledgement that this may send a duplicate email",
-        );
-      }
-      if (current.status === "SENDING") {
-        throw new InvalidCommunicationTransitionError(
-          current.status,
-          "a send is already in progress, or a previous attempt never finished recording its outcome — this is not safe to retry automatically",
-        );
-      }
-      throw new InvalidCommunicationTransitionError(current.status, "cannot send from this status");
+      throw new InvalidCommunicationTransitionError(current.status, "the communication could not be claimed for sending");
     }
 
     const communication = await tx.communication.findUniqueOrThrow({ where: { id: communicationId } });
@@ -365,25 +376,18 @@ export async function sendCommunication(
     });
 
     return { communication, deliveryAttempt };
-  });
+  }, { isolationLevel: "ReadCommitted" });
 
   const { communication, deliveryAttempt } = claimed;
 
+  let dispatch: DispatchOutcome;
   try {
-    const result = await dispatchByChannel(
+    dispatch = await dispatchByChannel(
       communication,
       deliveryAttempt.idempotencyKey,
       from ?? "",
       emailProvider as EmailProvider,
       messagingProvider,
-    );
-    return await finalizeSuccess(
-      organizationId,
-      communication,
-      deliveryAttempt,
-      userId,
-      result.providerMessageId,
-      actorSource,
     );
   } catch (error) {
     if (error instanceof EmailProviderRejectedError || error instanceof MessagingProviderRejectedError) {
@@ -404,6 +408,9 @@ export async function sendCommunication(
       outcome: "UNCERTAIN",
     });
   }
+
+  // Persistence failures must not be classified as provider failures.
+  return finalizeSuccess(organizationId, communication, deliveryAttempt, userId, dispatch.providerMessageId, actorSource);
 }
 
 /**
@@ -414,7 +421,7 @@ export async function sendCommunication(
  * `reconcileStaleSendingCommunication` above) by a stale-SENDING recovery
  * that ran while this call was still genuinely in flight. Both finalize
  * functions gate their `DeliveryAttempt` update on the attempt still being
- * `PENDING` (a compare-and-swap, exactly like the claim step) — a
+ * the current `PENDING` attempt under the communication lock — a
  * late-arriving outcome for an attempt that was already finalized some
  * other way is discarded rather than silently overwriting whatever the
  * authoritative, already-recorded outcome was. Found and fixed during this
@@ -446,24 +453,17 @@ async function finalizeSuccess(
   actorSource: CommunicationActorSource,
 ): Promise<SendCommunicationResult> {
   const channelLabel = communication.channel === "EMAIL" ? "email" : "Telegram message";
-  const result = await prisma.$transaction(async (tx) => {
-    const attemptClaim = await tx.deliveryAttempt.updateMany({
-      where: { id: deliveryAttempt.id, status: "PENDING" },
-      data: { status: "SUCCESS", providerMessageId, completedAt: new Date() },
-    });
-    if (attemptClaim.count !== 1) {
-      return staleDispatchOutcome(tx, communication.id, deliveryAttempt.id, "SUCCESS");
+  const { result, recorded } = await prisma.$transaction(async (tx) => {
+    const { communication: locked, pendingAttempt } = await lockSendingAttempt(tx, organizationId, communication.id);
+    if (!pendingAttempt || pendingAttempt.id !== deliveryAttempt.id) {
+      await recordLateAcceptance(tx, locked, deliveryAttempt, providerMessageId);
+      return { result: await staleDispatchOutcome(tx, communication.id, deliveryAttempt.id, "SUCCESS"), recorded: false };
     }
-    const updatedAttempt = await tx.deliveryAttempt.findUniqueOrThrow({ where: { id: deliveryAttempt.id } });
-    // Guards Communication.status too — always true in practice (this
-    // attempt and its Communication only ever move together, including in
-    // reconcileStaleSendingCommunication), but never claim SENT purely
-    // because the DeliveryAttempt CAS above succeeded.
-    await tx.communication.updateMany({
-      where: { id: communication.id, status: "SENDING" },
-      data: { status: "SENT", sentAt: new Date() },
+
+    const finalized = await transitionPendingOutcome(tx, organizationId, pendingAttempt, {
+      communication: { status: "SENT", sentAt: new Date() },
+      attempt: { status: "SUCCESS", providerMessageId, completedAt: new Date() },
     });
-    const updatedCommunication = await tx.communication.findUniqueOrThrow({ where: { id: communication.id } });
     await recordActivityEvent(tx, {
       organizationId,
       type: "COMMUNICATION_SENT",
@@ -501,9 +501,9 @@ async function finalizeSuccess(
       });
     }
 
-    return { communication: updatedCommunication, deliveryAttempt: updatedAttempt, actionProposal };
+    return { result: { ...finalized, actionProposal }, recorded: true };
   });
-  if (result.communication.status === "SENT") {
+  if (recorded) {
     trackEvent("invoice_sent", { organizationId, properties: { channel: communication.channel } });
   }
   return result;
@@ -522,26 +522,20 @@ async function finalizeTerminal(
   },
 ): Promise<SendCommunicationResult> {
   return prisma.$transaction(async (tx) => {
-    const attemptClaim = await tx.deliveryAttempt.updateMany({
-      where: { id: deliveryAttempt.id, status: "PENDING" },
-      data: {
+    const { pendingAttempt } = await lockSendingAttempt(tx, organizationId, communication.id);
+    if (!pendingAttempt || pendingAttempt.id !== deliveryAttempt.id) {
+      return staleDispatchOutcome(tx, communication.id, deliveryAttempt.id, outcome.outcome);
+    }
+
+    const finalized = await transitionPendingOutcome(tx, organizationId, pendingAttempt, {
+      communication: { status: outcome.communicationStatus },
+      attempt: {
         status: outcome.deliveryStatus,
         failureCategory: outcome.failureCategory,
         failureMessage: outcome.failureMessage,
         completedAt: new Date(),
       },
     });
-    if (attemptClaim.count !== 1) {
-      return staleDispatchOutcome(tx, communication.id, deliveryAttempt.id, outcome.outcome);
-    }
-    const updatedAttempt = await tx.deliveryAttempt.findUniqueOrThrow({ where: { id: deliveryAttempt.id } });
-    // See finalizeSuccess's identical guard above for why this is a CAS
-    // rather than an unconditional update.
-    await tx.communication.updateMany({
-      where: { id: communication.id, status: "SENDING" },
-      data: { status: outcome.communicationStatus },
-    });
-    const updatedCommunication = await tx.communication.findUniqueOrThrow({ where: { id: communication.id } });
     const channelLabel = communication.channel === "EMAIL" ? "email" : "Telegram message";
     await recordActivityEvent(tx, {
       organizationId,
@@ -554,6 +548,6 @@ async function finalizeTerminal(
       invoiceId: communication.invoiceId,
       metadata: { outcome: outcome.outcome, failureCategory: outcome.failureCategory },
     });
-    return { communication: updatedCommunication, deliveryAttempt: updatedAttempt, actionProposal: null };
+    return { ...finalized, actionProposal: null };
   });
 }

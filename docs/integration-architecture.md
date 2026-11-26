@@ -137,7 +137,7 @@ tradeoff, not an oversight: AI generation is explicitly the one category
 where a fallback-after-uncertain-outcome is acceptable (contrast
 [Billing](#billing) and Email's `sendCommunication`, where the same
 uncertainty requires an explicit human
-`acknowledgeUncertainRisk` before any retry — see
+verified non-delivery before any retry — see
 `docs/communications.md#unknown-outcomes`). The accepted cost of falling
 back after an uncertain AI outcome is at most one duplicate vendor call —
 never a duplicate customer-visible side effect, since only the *first

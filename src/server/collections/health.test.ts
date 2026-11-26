@@ -68,6 +68,7 @@ describe("getAutomationHealth", () => {
       "live",
       "ready",
       "automationEnabled",
+      "degraded",
       "lastTickAt",
       "lastTickCrashed",
       "lastSuccessfulTickAt",
@@ -118,8 +119,18 @@ describe("getAutomationHealth — readiness semantics (automationEnabled=true)",
   });
 
   it("a single failed organization within an otherwise-successful tick does not make the run 'crashed' or unready", async () => {
-    await makeRun({ startedAt: new Date("2026-01-01T00:00:00.000Z"), crashed: false, failed: 1, organizationsProcessed: 3 });
-    const health = await getAutomationHealth(new Date("2026-01-01T00:05:00.000Z"), true);
+    await makeRun({ startedAt: new Date("2026-01-01T00:00:00.000Z") });
+    await makeRun({ startedAt: new Date("2026-01-01T01:00:00.000Z"), failed: 1, organizationsProcessed: 3 });
+    const health = await getAutomationHealth(new Date("2026-01-01T01:05:00.000Z"), true);
+
     expect(health.ready).toBe(true);
+    expect(health.degraded).toBe(true);
+    expect(health.recentTicks[0]?.failed).toBe(1);
+    expect(health.lastSuccessfulTickAt).toBe("2026-01-01T00:00:00.000Z");
+
+    await makeRun({ startedAt: new Date("2026-01-01T02:00:00.000Z") });
+    const recovered = await getAutomationHealth(new Date("2026-01-01T02:05:00.000Z"), true);
+    expect(recovered.degraded).toBe(false);
+    expect(recovered.lastSuccessfulTickAt).toBe("2026-01-01T02:00:00.000Z");
   });
 });

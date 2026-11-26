@@ -1,20 +1,23 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import type { Prisma } from "@prisma/client";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { approveActionProposal } from "@/server/operator/approval";
 import { detectInvoiceOverdueEvents } from "@/server/operator/events";
 import { ensureInsightForInvoiceOverdueEvent } from "@/server/operator/insights";
 import { ensureReminderProposalForInsight } from "@/server/operator/proposals";
 import { createCustomer } from "@/server/ar/customers";
-import { createInvoice } from "@/server/ar/invoices";
+import { cancelInvoice, createInvoice } from "@/server/ar/invoices";
 import { majorToMinor } from "@/server/ar/money";
+import { paymentInputSchema, recordPayment, recordPaymentInTransaction } from "@/server/ar/payments";
 import { createTestOrganization } from "@/server/ar/test-fixtures";
 import { EmailDisabledError, EmailProviderRejectedError } from "@/server/email/errors";
 import { createFakeEmailProvider } from "@/server/email/providers/fake";
-import type { EmailMessage, EmailProvider } from "@/server/email/types";
+import type { EmailMessage, EmailProvider, EmailSendResult } from "@/server/email/types";
 import { MessagingDisabledError } from "@/server/messaging/errors";
 import { createFakeMessagingProvider } from "@/server/messaging/providers/fake";
 import type { MessagingMessage, MessagingProvider } from "@/server/messaging/types";
 import { prisma } from "@/server/db/client";
+import { resolveTestNonDelivery } from "./delivery-test-fixtures";
 import { resetDatabase } from "@/server/db/test-utils";
 import { RateLimitExceededError } from "@/server/rate-limit/errors";
 import { communicationSendPolicy } from "@/server/rate-limit/policies";
@@ -22,7 +25,7 @@ import { checkRateLimit } from "@/server/rate-limit/service";
 import { prepareReminderCommunication } from "./draft";
 import { updateCommunicationDraft } from "./editing";
 import { CommunicationResourceNotFoundError, InvalidCommunicationTransitionError } from "./errors";
-import { reconcileStaleSendingCommunication, sendCommunication, STALE_SENDING_THRESHOLD_MS } from "./send";
+import { listDeliveryAttempts, reconcileStaleSendingCommunication, sendCommunication, STALE_SENDING_THRESHOLD_MS } from "./send";
 
 beforeEach(async () => {
   await resetDatabase();
@@ -212,19 +215,20 @@ describe("sendCommunication — unknown/uncertain outcome", () => {
     expect(reloaded.status).toBe("UNCERTAIN");
   });
 
-  it("allows resending an UNCERTAIN communication with explicit acknowledgement", async () => {
+  it("allows retry only after the OWNER records verified non-delivery", async () => {
     const { organization, user, communication } = await setup();
-    await sendCommunication(organization.id, communication.id, user.id, {
+    const initial = await sendCommunication(organization.id, communication.id, user.id, {
       provider: createFakeEmailProvider({ kind: "error", message: "network blip" }),
     });
-
+    await resolveTestNonDelivery(organization.id, communication.id, user.id, initial.deliveryAttempt.id);
     const result = await sendCommunication(organization.id, communication.id, user.id, {
       provider: createFakeEmailProvider({ kind: "success" }),
-      acknowledgeUncertainRisk: true,
     });
-
     expect(result.communication.status).toBe("SENT");
     expect(result.deliveryAttempt.attemptNumber).toBe(2);
+    expect(await listDeliveryAttempts(organization.id, communication.id)).toEqual([
+      expect.objectContaining({ status: "UNKNOWN" }), expect.objectContaining({ status: "SUCCESS" }),
+    ]);
   });
 });
 
@@ -243,7 +247,7 @@ describe("sendCommunication — terminal/stuck state protection", () => {
     await expect(
       sendCommunication(organization.id, communication.id, user.id, {
         provider: createFakeEmailProvider({ kind: "success" }),
-        acknowledgeUncertainRisk: true,
+        ...{ acknowledgeUncertainRisk: true },
       }),
     ).rejects.toThrow(InvalidCommunicationTransitionError);
 
@@ -264,14 +268,11 @@ describe("sendCommunication — terminal/stuck state protection", () => {
         provider: createFakeEmailProvider({ kind: "success" }),
       }),
     ).rejects.toThrow(InvalidCommunicationTransitionError);
-    // The "Resend anyway" acknowledgement only ever unlocks UNCERTAIN, not
-    // a bare SENDING — a stuck send is not safely distinguishable from one
-    // that's genuinely still in flight, so it must never be treated as
-    // equivalent to a confirmed-ambiguous UNCERTAIN outcome.
+    // An older client may still send the retired option. It grants no bypass.
     await expect(
       sendCommunication(organization.id, communication.id, user.id, {
         provider: createFakeEmailProvider({ kind: "success" }),
-        acknowledgeUncertainRisk: true,
+        ...{ acknowledgeUncertainRisk: true },
       }),
     ).rejects.toThrow(InvalidCommunicationTransitionError);
 
@@ -576,28 +577,16 @@ describe("reconcileStaleSendingCommunication", () => {
     );
   });
 
-  it("never resends by itself — actually resending after reconciliation still requires explicit acknowledgement", async () => {
+  it("leaves a reconciled attempt blocked even with a legacy acknowledgement payload", async () => {
     const { organization, user, communication } = await setup();
-    const startedAt = new Date(Date.now() - STALE_SENDING_THRESHOLD_MS - 1000);
-    await simulateStuckSending(organization.id, communication.id, startedAt);
+    await simulateStuckSending(organization.id, communication.id, new Date(Date.now() - STALE_SENDING_THRESHOLD_MS - 1000));
     await reconcileStaleSendingCommunication(organization.id, communication.id);
-
-    // Reconciling only admits the outcome is unknown — it must never itself
-    // dispatch anything, and the ordinary UNCERTAIN-without-acknowledgement
-    // guard must still apply afterward exactly as it does for any other
-    // UNCERTAIN outcome.
-    await expect(
-      sendCommunication(organization.id, communication.id, user.id, {
-        provider: createFakeEmailProvider({ kind: "success" }),
-      }),
-    ).rejects.toThrow(InvalidCommunicationTransitionError);
-
-    const result = await sendCommunication(organization.id, communication.id, user.id, {
-      provider: createFakeEmailProvider({ kind: "success" }),
-      acknowledgeUncertainRisk: true,
-    });
-    expect(result.communication.status).toBe("SENT");
-    expect(result.deliveryAttempt.attemptNumber).toBe(2);
+    const send = vi.fn<EmailProvider["send"]>(async () => ({ provider: "spy" }));
+    const oldOptions = { provider: { name: "spy", send }, acknowledgeUncertainRisk: true };
+    await expect(sendCommunication(organization.id, communication.id, user.id, oldOptions))
+      .rejects.toThrow(InvalidCommunicationTransitionError);
+    expect(send).not.toHaveBeenCalled();
+    expect(await prisma.deliveryAttempt.count({ where: { communicationId: communication.id } })).toBe(1);
   });
 
   it("only lets one of two concurrent reconcile attempts succeed", async () => {
@@ -674,6 +663,253 @@ describe("reconcileStaleSendingCommunication", () => {
     expect(result.deliveryAttempt.id).toBe(pending.id);
     const reloadedFailed = await prisma.deliveryAttempt.findUniqueOrThrow({ where: { id: failed.id } });
     expect(reloadedFailed.status).toBe("FAILED"); // untouched
+  });
+});
+
+describe("sendCommunication — financial eligibility at dispatch claim", () => {
+  it.each(["DRAFT", "FAILED", "UNCERTAIN"] as const)("does not dispatch from %s after full payment", async (status) => {
+    const { organization, user, invoice, communication } = await setup();
+    if (status !== "DRAFT") {
+      const provider = createFakeEmailProvider({
+        kind: status === "FAILED" ? "rejected" : "error", message: "fixture delivery failure",
+      });
+      expect((await sendCommunication(organization.id, communication.id, user.id, { provider })).communication.status)
+        .toBe(status);
+    }
+    await recordPayment(organization.id, invoice.id, { amountMinor: invoice.amountMinor, paidAt: "2020-01-20" });
+    const send = vi.fn<EmailProvider["send"]>(async () => ({ provider: "spy" }));
+
+    await expect(sendCommunication(organization.id, communication.id, user.id, {
+      provider: { name: "spy", send },
+    })).rejects.toThrow("fully paid invoice");
+
+    expect(send).not.toHaveBeenCalled();
+    expect(await prisma.communication.findUnique({ where: { id: communication.id } })).toMatchObject({ status });
+    expect(await prisma.deliveryAttempt.count({ where: { communicationId: communication.id } }))
+      .toBe(status === "DRAFT" ? 0 : 1);
+  });
+
+  it("blocks a cancelled invoice before creating a delivery attempt", async () => {
+    const { organization, user, invoice, communication } = await setup();
+    await cancelInvoice(organization.id, invoice.id);
+    const send = vi.fn<EmailProvider["send"]>(async () => ({ provider: "spy" }));
+
+    await expect(sendCommunication(organization.id, communication.id, user.id, {
+      provider: { name: "spy", send },
+    })).rejects.toThrow("cancelled invoice");
+
+    expect(send).not.toHaveBeenCalled();
+    expect(await prisma.communication.findUnique({ where: { id: communication.id } })).toMatchObject({ status: "DRAFT" });
+    expect(await prisma.deliveryAttempt.count({ where: { communicationId: communication.id } })).toBe(0);
+  });
+
+  it("still permits a reminder for a partially paid invoice", async () => {
+    const { organization, user, invoice, communication } = await setup();
+    await recordPayment(organization.id, invoice.id, { amountMinor: majorToMinor(100), paidAt: "2020-01-20" });
+    const provider = createFakeEmailProvider({ kind: "success" });
+
+    const result = await sendCommunication(organization.id, communication.id, user.id, { provider });
+
+    expect(result.communication.status).toBe("SENT");
+  });
+
+  it("waits for a concurrent payment to commit before deciding whether to dispatch", async () => {
+    const { organization, user, invoice, communication } = await setup();
+    const held = Promise.withResolvers<void>();
+    const commit = Promise.withResolvers<void>();
+    const paying = prisma.$transaction(async (tx) => {
+      await recordPaymentInTransaction(tx, organization.id, invoice.id, paymentInputSchema.parse({
+        amountMinor: invoice.amountMinor, paidAt: "2020-01-20",
+      }));
+      held.resolve();
+      await commit.promise;
+    });
+    void paying.catch(held.reject);
+    await held.promise;
+
+    const original = prisma.$transaction;
+    const sendingPid = Promise.withResolvers<number>();
+    prisma.$transaction = ((run: (tx: Prisma.TransactionClient) => Promise<unknown>) => {
+      prisma.$transaction = original;
+      return original.call(prisma, async (tx) => {
+        const [{ pid }] = await tx.$queryRaw<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
+        sendingPid.resolve(pid);
+        return run(tx);
+      });
+    }) as typeof prisma.$transaction;
+    const send = vi.fn<EmailProvider["send"]>(async () => ({ provider: "spy" }));
+    const sending = sendCommunication(organization.id, communication.id, user.id, {
+      provider: { name: "spy", send },
+    }).then((result) => ({ result }), (error: unknown) => {
+      sendingPid.reject(error);
+      return { error };
+    });
+
+    try {
+      const pid = await sendingPid.promise;
+      await vi.waitFor(async () => {
+        const [row] = await prisma.$queryRaw<{ waiting: boolean }[]>`
+          SELECT cardinality(pg_blocking_pids(${pid}::int)) > 0 AS waiting
+        `;
+        expect(row.waiting).toBe(true);
+      }, { timeout: 2000, interval: 25 });
+      expect(send).not.toHaveBeenCalled();
+
+      commit.resolve();
+      await paying;
+      expect(await sending).toEqual({
+        error: expect.objectContaining({ message: expect.stringContaining("fully paid invoice") }),
+      });
+      expect(send).not.toHaveBeenCalled();
+      expect(await prisma.deliveryAttempt.count({ where: { communicationId: communication.id } })).toBe(0);
+    } finally {
+      commit.resolve();
+      prisma.$transaction = original;
+      await Promise.allSettled([paying, sending]);
+    }
+  }, 10000);
+});
+
+describe("sendCommunication — uncertain retry guard", () => {
+  it("does not let an automated caller acknowledge an uncertain retry", async () => {
+    const { organization, user, communication } = await setup();
+    const unknown = createFakeEmailProvider({ kind: "error", message: "fixture network error" });
+    await sendCommunication(organization.id, communication.id, user.id, { provider: unknown });
+    const send = vi.fn<EmailProvider["send"]>(async () => ({ provider: "spy" }));
+
+    await expect(sendCommunication(organization.id, communication.id, user.id, {
+      provider: { name: "spy", send }, actorSource: "AUTOMATION", ...{ acknowledgeUncertainRisk: true },
+    })).rejects.toThrow(InvalidCommunicationTransitionError);
+
+    expect(send).not.toHaveBeenCalled();
+    expect(await prisma.deliveryAttempt.count({ where: { communicationId: communication.id } })).toBe(1);
+  });
+
+  it("does not start another attempt if older data has a PENDING attempt and an UNCERTAIN communication", async () => {
+    const { organization, user, communication } = await setup();
+    const attempt = await simulateStuckSending(organization.id, communication.id, new Date());
+    await prisma.communication.update({ where: { id: communication.id }, data: { status: "UNCERTAIN" } });
+    const send = vi.fn<EmailProvider["send"]>(async () => ({ provider: "spy" }));
+
+    await expect(sendCommunication(organization.id, communication.id, user.id, {
+      provider: { name: "spy", send },
+    })).rejects.toThrow(InvalidCommunicationTransitionError);
+
+    expect(send).not.toHaveBeenCalled();
+    expect(await prisma.deliveryAttempt.findMany({ where: { communicationId: communication.id } }))
+      .toEqual([expect.objectContaining({ id: attempt.id, status: "PENDING" })]);
+  });
+});
+
+describe("sendCommunication — reconciliation and finalization races", () => {
+  it("does not carry an old reconciliation decision over to a fresh retry", async () => {
+    const { organization, user, communication } = await setup();
+    const firstStarted = Promise.withResolvers<void>();
+    const firstDelivery = Promise.withResolvers<EmailSendResult>();
+    const first = sendCommunication(organization.id, communication.id, user.id, { provider: {
+      name: "first",
+      send: () => { firstStarted.resolve(); return firstDelivery.promise; },
+    } });
+    void first.catch(firstStarted.reject);
+    await firstStarted.promise;
+    const now = new Date();
+    const prior = await prisma.deliveryAttempt.findFirstOrThrow({ where: { communicationId: communication.id } });
+    await prisma.deliveryAttempt.update({
+      where: { id: prior.id }, data: { startedAt: new Date(now.getTime() - STALE_SENDING_THRESHOLD_MS - 1000) },
+    });
+
+    const original = prisma.$transaction;
+    const reconcileReady = Promise.withResolvers<void>();
+    const reconcileMayStart = Promise.withResolvers<void>();
+    prisma.$transaction = (async (run: (tx: Prisma.TransactionClient) => Promise<unknown>) => {
+      prisma.$transaction = original;
+      reconcileReady.resolve();
+      await reconcileMayStart.promise;
+      return original.call(prisma, run);
+    }) as typeof prisma.$transaction;
+    const reconciled = reconcileStaleSendingCommunication(organization.id, communication.id, now)
+      .then((value) => ({ value }), (error: unknown) => ({ error }));
+    const secondStarted = Promise.withResolvers<void>();
+    const secondDelivery = Promise.withResolvers<EmailSendResult>();
+    let retry: Promise<Awaited<ReturnType<typeof sendCommunication>>> | undefined;
+
+    try {
+      await reconcileReady.promise;
+      firstDelivery.reject(new EmailProviderRejectedError("first", "fixture provider rejection"));
+      expect((await first).communication.status).toBe("FAILED");
+      retry = sendCommunication(organization.id, communication.id, user.id, { provider: {
+        name: "second",
+        send: () => { secondStarted.resolve(); return secondDelivery.promise; },
+      } });
+      void retry.catch(secondStarted.reject);
+      await secondStarted.promise;
+      reconcileMayStart.resolve();
+
+      expect(await reconciled).toEqual({
+        error: expect.objectContaining({ message: expect.stringContaining("may still be genuinely in flight") }),
+      });
+      expect(await prisma.deliveryAttempt.findMany({
+        where: { communicationId: communication.id }, orderBy: { attemptNumber: "asc" },
+      })).toEqual([
+        expect.objectContaining({ id: prior.id, status: "FAILED" }),
+        expect.objectContaining({ attemptNumber: 2, status: "PENDING" }),
+      ]);
+      expect(await prisma.communication.findUnique({ where: { id: communication.id } })).toMatchObject({ status: "SENDING" });
+      const failureEvents = await prisma.activityEvent.findMany({
+        where: { invoiceId: communication.invoiceId, type: "COMMUNICATION_SEND_FAILED" },
+      });
+      expect(failureEvents).toEqual([expect.objectContaining({ metadata: expect.objectContaining({ outcome: "FAILED" }) })]);
+
+      secondDelivery.resolve({ provider: "second", providerMessageId: "new-attempt" });
+      const result = await retry;
+      expect(result.communication.status).toBe("SENT");
+      expect(result.deliveryAttempt).toMatchObject({ attemptNumber: 2, status: "SUCCESS" });
+    } finally {
+      reconcileMayStart.resolve();
+      firstDelivery.reject(new EmailProviderRejectedError("first", "fixture cleanup"));
+      secondDelivery.resolve({ provider: "second" });
+      prisma.$transaction = original;
+      await Promise.allSettled([reconciled, first, retry]);
+    }
+  }, 10000);
+
+  it("rolls back a parent transition and suppresses success audit if the attempt CAS loses", async () => {
+    const { organization, user, proposal, communication } = await setup();
+    const original = prisma.$transaction;
+    const provider: EmailProvider = {
+      name: "successful-provider",
+      async send() {
+        prisma.$transaction = ((run: (tx: Prisma.TransactionClient) => Promise<unknown>) => {
+          prisma.$transaction = original;
+          return original.call(prisma, async (tx) => {
+            const attempt = tx.deliveryAttempt;
+            const race = vi.spyOn(attempt, "updateMany").mockResolvedValue({ count: 0 });
+            try {
+              return await run(tx);
+            } finally {
+              race.mockRestore();
+            }
+          });
+        }) as typeof prisma.$transaction;
+        return { provider: "successful-provider", providerMessageId: "fixture-success" };
+      },
+    };
+
+    try {
+      await expect(sendCommunication(organization.id, communication.id, user.id, { provider }))
+        .rejects.toThrow("the active delivery attempt could not be finalized");
+    } finally {
+      prisma.$transaction = original;
+    }
+
+    expect(await prisma.communication.findUnique({ where: { id: communication.id } }))
+      .toMatchObject({ status: "SENDING", sentAt: null });
+    expect(await prisma.deliveryAttempt.findMany({ where: { communicationId: communication.id } }))
+      .toEqual([expect.objectContaining({ status: "PENDING", providerMessageId: null })]);
+    expect(await prisma.actionProposal.findUnique({ where: { id: proposal.id } })).toMatchObject({ status: "APPROVED" });
+    expect(await prisma.activityEvent.count({
+      where: { invoiceId: communication.invoiceId, type: { in: ["COMMUNICATION_SENT", "COMMUNICATION_SEND_FAILED", "ACTION_PROPOSAL_EXECUTED"] } },
+    })).toBe(0);
   });
 });
 

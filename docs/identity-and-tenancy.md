@@ -172,7 +172,10 @@ Beyond Phase 0's setup, Phase 1 needs:
    instance — see DEPLOYMENT.md) and `DATABASE_URL` set.
 2. `AUTH_SECRET` set (`openssl rand -base64 33`).
 3. `npx prisma migrate dev` to create the schema.
-4. A second database for tests (`createdb paynora_test`) — see
-   `vitest.config.mts` and `.env.example`'s `TEST_DATABASE_URL`.
+4. For integration tests, use a separate PostgreSQL cluster on `127.0.0.1:55432`
+   with `cluster_name=paynora_test_isolated`. Migrate its `paynora_test` database
+   with a separate owner and grant `paynora_test_runner` access to application
+   tables. Export `TEST_DATABASE_URL` for that runner before `npm test`.
+   Use `npm run test:unit` for the selected tests that require no database.
 
 None of this requires a paid or foreign-only service.
