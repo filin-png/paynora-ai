@@ -4,6 +4,13 @@ import type { RateLimitPolicy } from "./types";
 const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
 const ONE_HOUR_MS = 60 * 60 * 1000;
 
+// Billing counters use fixed 30-day windows. Keep these scopes grouped so
+// table cleanup can distinguish them from short-lived request limits.
+export const BILLING_USAGE_WINDOW_MS = 30 * 24 * ONE_HOUR_MS;
+export const AI_GENERATION_QUOTA_SCOPE = "billing:ai-generation:quota";
+export const COPILOT_USAGE_SCOPE = "billing:copilot:usage";
+export const BILLING_USAGE_COUNTER_SCOPES = [AI_GENERATION_QUOTA_SCOPE, COPILOT_USAGE_SCOPE];
+
 /**
  * A single source of truth for every named rate-limit policy in the app —
  * see docs/audits/PAYNORA-AUDIT-V1-REMEDIATION.md P0-1/P1-7 for the

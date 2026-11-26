@@ -1,6 +1,7 @@
 import { Prisma, type PlanId, type SubscriptionStatus } from "@prisma/client";
 
 import { prisma } from "@/server/db/client";
+import { AI_GENERATION_QUOTA_SCOPE, BILLING_USAGE_WINDOW_MS, COPILOT_USAGE_SCOPE } from "@/server/rate-limit/policies";
 import { checkRateLimit } from "@/server/rate-limit/service";
 import { PLAN_ENTITLEMENTS, type EntitlementLimit, type PlanEntitlements } from "./plans";
 
@@ -289,16 +290,6 @@ export async function assertCanCreateInvitation(
   }
 }
 
-const AI_GENERATION_QUOTA_SCOPE = "billing:ai-generation:quota";
-/**
- * A fixed 30-day rolling window, not a calendar month — the same simple,
- * documented approximation src/server/rate-limit/service.ts's fixed-window
- * model already makes for its hourly policies, applied at a longer scale.
- * Good enough for a commercial usage ceiling; not a billing-invoice-grade
- * calendar boundary.
- */
-const AI_GENERATION_QUOTA_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
-
 /**
  * Whether this organization's plan still has AI-generation quota left this
  * period — checked (and, if allowed, consumed) BEFORE any AI provider is
@@ -329,7 +320,7 @@ export async function checkAiGenerationQuota(organizationId: string, now: Date =
     const result = await checkRateLimit(
       AI_GENERATION_QUOTA_SCOPE,
       organizationId,
-      { maxAttempts: limit.max, windowMs: AI_GENERATION_QUOTA_WINDOW_MS },
+      { maxAttempts: limit.max, windowMs: BILLING_USAGE_WINDOW_MS },
       now,
     );
     return result.allowed;
@@ -358,7 +349,7 @@ export async function getAiGenerationUsage(
   const limit = entitlements.maxAiGenerationsPerMonth;
   if (limit.kind === "unlimited") return { used: 0, limit };
 
-  const windowStart = new Date(Math.floor(now.getTime() / AI_GENERATION_QUOTA_WINDOW_MS) * AI_GENERATION_QUOTA_WINDOW_MS);
+  const windowStart = new Date(Math.floor(now.getTime() / BILLING_USAGE_WINDOW_MS) * BILLING_USAGE_WINDOW_MS);
   const counter = await prisma.rateLimitCounter.findUnique({
     where: { scope_key_windowStart: { scope: AI_GENERATION_QUOTA_SCOPE, key: organizationId, windowStart } },
   });
@@ -422,8 +413,6 @@ export async function getBillingPeriod(organizationId: string, now: Date = new D
   return deriveRollingMonthlyPeriod(subscription.createdAt, now);
 }
 
-const COPILOT_USAGE_SCOPE = "billing:copilot:usage";
-
 /**
  * Metering only — never denies, and is never itself the entitlement check
  * (that is `assertCopilotEntitled`, plus the existing AI-generation quota
@@ -441,7 +430,7 @@ export async function recordCopilotUsage(organizationId: string, now: Date = new
     await checkRateLimit(
       COPILOT_USAGE_SCOPE,
       organizationId,
-      { maxAttempts: Number.MAX_SAFE_INTEGER, windowMs: AI_GENERATION_QUOTA_WINDOW_MS },
+      { maxAttempts: Number.MAX_SAFE_INTEGER, windowMs: BILLING_USAGE_WINDOW_MS },
       now,
     );
   } catch (error) {
@@ -452,7 +441,7 @@ export async function recordCopilotUsage(organizationId: string, now: Date = new
 
 /** Read-only view of the current Copilot usage count — same non-mutating read pattern as getAiGenerationUsage. */
 export async function getCopilotUsage(organizationId: string, now: Date = new Date()): Promise<number> {
-  const windowStart = new Date(Math.floor(now.getTime() / AI_GENERATION_QUOTA_WINDOW_MS) * AI_GENERATION_QUOTA_WINDOW_MS);
+  const windowStart = new Date(Math.floor(now.getTime() / BILLING_USAGE_WINDOW_MS) * BILLING_USAGE_WINDOW_MS);
   const counter = await prisma.rateLimitCounter.findUnique({
     where: { scope_key_windowStart: { scope: COPILOT_USAGE_SCOPE, key: organizationId, windowStart } },
   });
