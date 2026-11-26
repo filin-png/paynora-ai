@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { prisma } from "@/server/db/client";
 import { resetDatabase } from "@/server/db/test-utils";
+import { AI_GENERATION_QUOTA_SCOPE, BILLING_USAGE_WINDOW_MS, COPILOT_USAGE_SCOPE } from "./policies";
 import { checkRateLimit, resetRateLimit } from "./service";
 
 beforeEach(async () => {
@@ -96,6 +97,48 @@ describe("resetRateLimit", () => {
 });
 
 describe("data hygiene", () => {
+  it("cleans expired counters without reopening active billing windows", async () => {
+    const now = new Date("2026-11-26T17:03:07.000Z");
+    const billingWindowStart = new Date(Math.floor(now.getTime() / BILLING_USAGE_WINDOW_MS) * BILLING_USAGE_WINDOW_MS);
+    const expiredBillingWindowStart = new Date(billingWindowStart.getTime() - BILLING_USAGE_WINDOW_MS);
+    const expiredRequestWindowStart = new Date("2026-11-24T00:00:00.000Z");
+    const key = "billing-org";
+
+    await prisma.rateLimitCounter.createMany({
+      data: [
+        { scope: AI_GENERATION_QUOTA_SCOPE, key, windowStart: billingWindowStart, count: 20 },
+        { scope: COPILOT_USAGE_SCOPE, key, windowStart: billingWindowStart, count: 7 },
+        { scope: AI_GENERATION_QUOTA_SCOPE, key, windowStart: expiredBillingWindowStart, count: 20 },
+        { scope: COPILOT_USAGE_SCOPE, key, windowStart: expiredBillingWindowStart, count: 7 },
+        { scope: "test", key: "expired-request", windowStart: expiredRequestWindowStart, count: 1 },
+      ],
+    });
+
+    const random = vi.spyOn(Math, "random").mockReturnValue(0);
+    try {
+      await checkRateLimit("test", "active-request", policy, now);
+      const quota = await checkRateLimit(
+        AI_GENERATION_QUOTA_SCOPE,
+        key,
+        { maxAttempts: 20, windowMs: BILLING_USAGE_WINDOW_MS },
+        now,
+      );
+
+      expect(quota.allowed).toBe(false);
+      expect(await prisma.rateLimitCounter.findMany({
+        where: { key },
+        orderBy: { scope: "asc" },
+        select: { scope: true, windowStart: true, count: true },
+      })).toEqual([
+        { scope: AI_GENERATION_QUOTA_SCOPE, windowStart: billingWindowStart, count: 21 },
+        { scope: COPILOT_USAGE_SCOPE, windowStart: billingWindowStart, count: 7 },
+      ]);
+      expect(await prisma.rateLimitCounter.findFirst({ where: { scope: "test", key: "expired-request" } })).toBeNull();
+    } finally {
+      random.mockRestore();
+    }
+  });
+
   it("never persists anything beyond scope/key/windowStart/count — no request metadata, IP details, or identifiers beyond the caller-supplied key", async () => {
     await checkRateLimit("test", "key-shape", policy, new Date("2026-01-01T00:00:00.000Z"));
     const rows = await prisma.rateLimitCounter.findMany({ where: { scope: "test", key: "key-shape" } });

@@ -1,4 +1,5 @@
 import { prisma } from "@/server/db/client";
+import { BILLING_USAGE_COUNTER_SCOPES, BILLING_USAGE_WINDOW_MS } from "./policies";
 import type { RateLimitPolicy, RateLimitResult } from "./types";
 
 /**
@@ -23,8 +24,16 @@ function currentWindowStart(windowMs: number, now: Date): Date {
  */
 async function opportunisticCleanup(now: Date): Promise<void> {
   if (Math.random() >= 1 / 200) return;
-  const cutoff = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-  await prisma.rateLimitCounter.deleteMany({ where: { windowStart: { lt: cutoff } } }).catch(() => {
+  const requestCutoff = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const billingCutoff = new Date(now.getTime() - BILLING_USAGE_WINDOW_MS);
+  await prisma.rateLimitCounter.deleteMany({
+    where: {
+      OR: [
+        { scope: { notIn: BILLING_USAGE_COUNTER_SCOPES }, windowStart: { lt: requestCutoff } },
+        { scope: { in: BILLING_USAGE_COUNTER_SCOPES }, windowStart: { lte: billingCutoff } },
+      ],
+    },
+  }).catch(() => {
     // Best-effort only — never let cleanup failure affect the caller's
     // actual rate-limit check.
   });
