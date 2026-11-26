@@ -40,7 +40,13 @@ export async function buildDeterministicInvoiceContext(
   invoiceId: string,
   today: string = getBusinessToday(),
 ): Promise<DeterministicInvoiceContext> {
-  const { invoice, financials } = await getInvoiceWithFinancials(organizationId, invoiceId, today);
+  return formatDeterministicInvoiceContext(await getInvoiceWithFinancials(organizationId, invoiceId, today), today);
+}
+
+export function formatDeterministicInvoiceContext(
+  { invoice, financials }: Awaited<ReturnType<typeof getInvoiceWithFinancials>>,
+  today: string,
+): DeterministicInvoiceContext {
   const currency = invoice.currency as Currency;
   const dueDateStr = toDateOnlyString(invoice.dueDate);
 

@@ -1,0 +1,7 @@
+{
+  "git": {
+    "deploymentEnabled": {
+      "checkpoint/paynora-2.0-stage4a": false
+    }
+  }
+}

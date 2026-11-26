@@ -302,6 +302,16 @@ the full design.
 
 ## Organization deletion: irreversible cascade, no product UI path (Phase 9)
 
+Stage 4A adds append-only delivery resolutions and provider evidence.
+Delete triggers prevent independent purges through a communication or attempt,
+and history tables reject TRUNCATE, including cascading truncation.
+Organization deletion with history is administrative. It cascades to the
+three new tables. The isolated runner exception matches the test role,
+loopback port, database and cluster marker. Deploy with a runtime role
+distinct from the table owner and without inherited owner privileges.
+Full-graph CASCADE with legacy RESTRICT links remains a PostgreSQL 17
+acceptance test.
+
 Every business-data table's `organizationId` foreign key is
 `onDelete: Cascade` (`prisma/schema.prisma`) — deleting an `Organization`
 row deletes every `Customer`, `Invoice`, `Payment`, `ActivityEvent`,

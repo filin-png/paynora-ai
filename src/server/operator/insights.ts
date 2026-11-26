@@ -1,6 +1,6 @@
 import { Prisma, type BusinessEvent, type InsightPriority, type OperatorInsight } from "@prisma/client";
 
-import { prisma } from "@/server/db/client";
+import { prisma, type PrismaWrite } from "@/server/db/client";
 import { tryGenerateStructured } from "@/server/ai/service";
 import { formatMoney } from "@/server/ar/money";
 import { buildDeterministicInvoiceContext, type DeterministicInvoiceContext } from "@/server/ar/reminder-context";
@@ -61,6 +61,22 @@ async function generateInsightSummary(
 
 export type EnsuredInsight = { insight: OperatorInsight; created: boolean };
 
+export function buildInvoiceOverdueInsightData(
+  organizationId: string,
+  event: BusinessEvent,
+  context: DeterministicInvoiceContext,
+  generated: GeneratedSummary = { summary: buildDeterministicSummary(context), aiGenerated: false },
+): Prisma.OperatorInsightUncheckedCreateInput {
+  return {
+    organizationId,
+    businessEventId: event.id,
+    customerId: event.customerId,
+    invoiceId: event.invoiceId,
+    priority: computeOverduePriority(context.daysOverdue),
+    ...generated,
+  };
+}
+
 /**
  * Idempotent: a second call for the same BusinessEvent finds the existing
  * row via the unique constraint on [organizationId, businessEventId]
@@ -80,27 +96,21 @@ export type EnsuredInsight = { insight: OperatorInsight; created: boolean };
 export async function ensureInsightForInvoiceOverdueEvent(
   organizationId: string,
   event: BusinessEvent,
+  persist: PrismaWrite = (write) => write(prisma),
 ): Promise<EnsuredInsight> {
   if (!event.invoiceId) {
     throw new Error("INVOICE_OVERDUE event is missing an invoiceId");
   }
+  const where = { organizationId_businessEventId: { organizationId, businessEventId: event.id } };
+  const existing = await prisma.operatorInsight.findUnique({ where });
+  if (existing) return { insight: existing, created: false };
+
   const context = await buildDeterministicInvoiceContext(organizationId, event.invoiceId);
-  const priority = computeOverduePriority(context.daysOverdue);
-  const { summary, aiGenerated, aiProvider } = await generateInsightSummary(organizationId, context);
+  const generated = await generateInsightSummary(organizationId, context);
 
   try {
-    const insight = await prisma.operatorInsight.create({
-      data: {
-        organizationId,
-        businessEventId: event.id,
-        customerId: event.customerId,
-        invoiceId: event.invoiceId,
-        priority,
-        summary,
-        aiGenerated,
-        aiProvider,
-      },
-    });
+    const data = buildInvoiceOverdueInsightData(organizationId, event, context, generated);
+    const insight = await persist((client) => client.operatorInsight.create({ data }));
     return { insight, created: true };
   } catch (error) {
     if (

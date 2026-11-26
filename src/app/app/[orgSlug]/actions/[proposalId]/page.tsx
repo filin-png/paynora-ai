@@ -13,18 +13,21 @@ import { getLocale } from "@/lib/i18n/get-locale";
 import { isResourceNotFoundError } from "@/lib/not-found";
 import { resolveCommunicationDestination } from "@/server/communications/channel";
 import { getCommunicationForProposal } from "@/server/communications/draft";
+import { assessDelivery, deliveryHistorySelect, findBlockedDeliveryInvoices, resolutionChain } from "@/server/communications/delivery-guard";
+import { prisma } from "@/server/db/client";
 import { listDeliveryAttempts, STALE_SENDING_THRESHOLD_MS } from "@/server/communications/send";
 import { getActionProposal } from "@/server/operator/approval";
 import { requireOrganizationMembershipForPage } from "@/server/tenancy/guards";
 import {
   prepareCommunicationAction,
   reconcileStaleSendingCommunicationAction,
-  resendUncertainCommunicationAction,
+  resolveDeliveryAction,
   sendCommunicationAction,
   updateCommunicationAction,
 } from "./actions";
 import { EditCommunicationForm } from "./edit-form";
 import { SendCommunicationForm } from "./send-form";
+import { DeliveryResolutionForm } from "./delivery-resolution-form";
 
 export default async function ActionProposalPage({
   params,
@@ -41,9 +44,23 @@ export default async function ActionProposalPage({
     throw error;
   });
   const communication = await getCommunicationForProposal(context.organization.id, proposalId);
-  const deliveryAttempts = communication
-    ? await listDeliveryAttempts(context.organization.id, communication.id)
-    : [];
+  const isOwner = context.role === "OWNER";
+  const [deliveryAttempts, history, blockedInvoices, incidents, resolutions] = communication ? await Promise.all([
+    listDeliveryAttempts(context.organization.id, communication.id),
+    prisma.communication.findFirstOrThrow({
+      where: { id: communication.id, organizationId: context.organization.id }, select: deliveryHistorySelect,
+    }),
+    findBlockedDeliveryInvoices(prisma, context.organization.id, [communication.invoiceId], communication.id),
+    isOwner ? prisma.deliveryIncident.findMany({
+      where: { organizationId: context.organization.id, communicationId: communication.id, status: "OPEN" },
+      select: { id: true, deliveryAttemptId: true, providerEventId: true },
+    }) : [],
+    isOwner ? prisma.deliveryResolution.findMany({
+      where: { organizationId: context.organization.id, communicationId: communication.id },
+      orderBy: { revision: "asc" },
+      select: { id: true, deliveryAttemptId: true, revision: true, decision: true, reason: true },
+    }) : [],
+  ]) : [[], null, new Set<string>(), [], []] as const;
 
   const boundPrepare = prepareCommunicationAction.bind(null, orgSlug, proposalId);
 
@@ -113,9 +130,43 @@ export default async function ActionProposalPage({
           proposalId={proposalId}
           communication={communication}
           deliveryAttempts={deliveryAttempts}
+          blocked={!!history && (!!assessDelivery(history) || blockedInvoices.size > 0)}
           dict={dict}
         />
       )}
+      {isOwner && communication && history ? history.deliveryAttempts
+        .filter((attempt) => attempt.status === "UNKNOWN")
+        .map((attempt) => {
+          const chain = resolutionChain(attempt);
+          return (
+            <Card key={attempt.id} className="p-5">
+              <SectionHeader title={t.deliveryAttemptReview} description={attempt.id} />
+              <ol className="mt-2 space-y-1 text-sm">
+                {resolutions.filter((row) => row.deliveryAttemptId === attempt.id).map((row) => (
+                  <li key={row.id}>
+                    {row.revision}. {row.decision === "CONFIRMED_DELIVERED" ? t.resolutionDelivered :
+                      row.decision === "CONFIRMED_NOT_DELIVERED" ? t.resolutionNotDelivered : t.resolutionUnresolved}
+                    {" · "}{row.reason}
+                  </li>
+                ))}
+              </ol>
+              {chain.valid ? (
+                <DeliveryResolutionForm
+                  action={resolveDeliveryAction.bind(null, orgSlug, proposalId, communication.id, attempt.id, chain.head?.id ?? null)}
+                  copy={{
+                    resolutionDecision: t.resolutionDecision, resolutionUnresolved: t.resolutionUnresolved,
+                    resolutionDelivered: t.resolutionDelivered, resolutionNotDelivered: t.resolutionNotDelivered,
+                    resolutionEvidence: t.resolutionEvidence, resolutionNoEvidence: t.resolutionNoEvidence,
+                    resolutionIncident: t.resolutionIncident, resolutionKeepIncident: t.resolutionKeepIncident,
+                    resolutionReason: t.resolutionReason, resolutionSave: t.resolutionSave, updatingEllipsis: t.updatingEllipsis,
+                  }}
+                  evidence={attempt.providerEvents.map(({ id, outcome }) => ({ id, outcome }))}
+                  incidents={incidents.filter((incident) => incident.deliveryAttemptId === attempt.id)}
+                />
+              ) : <Alert tone="danger">{t.resolutionRejected}</Alert>}
+            </Card>
+          );
+        }) : null}
     </div>
   );
 }
@@ -131,7 +182,7 @@ export default async function ActionProposalPage({
 // the one impure `Date.now()` read lives outside any component render —
 // see docs/product-ui.md for why this codebase always threads "now" in
 // explicitly rather than reading the clock inside a component.
-function isSendingStale(communication: Communication, deliveryAttempts: DeliveryAttempt[]): boolean {
+function isSendingStale(communication: Communication, deliveryAttempts: readonly DeliveryAttempt[]): boolean {
   if (communication.status !== "SENDING") return false;
   const pendingAttempt = deliveryAttempts.find((attempt) => attempt.status === "PENDING");
   if (!pendingAttempt) return false;
@@ -143,12 +194,14 @@ function CommunicationReview({
   proposalId,
   communication,
   deliveryAttempts,
+  blocked,
   dict,
 }: {
   orgSlug: string;
   proposalId: string;
   communication: Communication;
-  deliveryAttempts: DeliveryAttempt[];
+  deliveryAttempts: readonly DeliveryAttempt[];
+  blocked: boolean;
   dict: Dictionary;
 }) {
   const t = dict.actionDetail;
@@ -167,7 +220,6 @@ function CommunicationReview({
   };
   const boundUpdate = updateCommunicationAction.bind(null, orgSlug, proposalId, communication.id);
   const boundSend = sendCommunicationAction.bind(null, orgSlug, proposalId, communication.id);
-  const boundResendUncertain = resendUncertainCommunicationAction.bind(null, orgSlug, proposalId, communication.id);
   const boundReconcile = reconcileStaleSendingCommunicationAction.bind(null, orgSlug, proposalId, communication.id);
   const sendingIsStale = isSendingStale(communication, deliveryAttempts);
   const channelLabel = communication.channel === "EMAIL" ? t.channelEmailLower : t.channelTelegramMessage;
@@ -206,7 +258,7 @@ function CommunicationReview({
             defaultBody={communication.body}
             dict={dict}
           />
-          <div>
+          {!blocked ? <div>
             <p className="mb-2 text-xs text-muted">{t.sendingCallsProvider}</p>
             <SendCommunicationForm
               action={boundSend}
@@ -217,7 +269,7 @@ function CommunicationReview({
               confirmLabel={t.send}
               confirmVariant="primary"
             />
-          </div>
+          </div> : null}
         </>
       ) : (
         <Card className="p-5">
@@ -231,7 +283,7 @@ function CommunicationReview({
       {communication.status === "FAILED" ? (
         <div className="flex flex-col gap-3">
           <Alert tone="danger">{deliveryAttempts.at(-1)?.failureMessage ?? t.providerRejected}</Alert>
-          <SendCommunicationForm action={boundSend} label={t.retry} pendingLabel={t.retryingEllipsis} variant="outline" />
+          {!blocked ? <SendCommunicationForm action={boundSend} label={t.retry} pendingLabel={t.retryingEllipsis} variant="outline" /> : null}
         </div>
       ) : null}
 
@@ -255,21 +307,12 @@ function CommunicationReview({
         </Alert>
       ) : null}
 
-      {communication.status === "UNCERTAIN" ? (
-        <Alert tone="warning" title={t.uncertainTitle}>
-          <p>{t.uncertainBody}</p>
-          <div className="mt-3">
-            <SendCommunicationForm
-              action={boundResendUncertain}
-              label={t.resendAnyway}
-              pendingLabel={t.sendingEllipsis}
-              variant="outline"
-              confirmTitle={t.resendThisEmail}
-              confirmMessage={t.resendConfirmMessage}
-              confirmLabel={t.resend}
-            />
-          </div>
-        </Alert>
+      {blocked && communication.status !== "SENT" && communication.status !== "SENDING" ? (
+        <Alert tone="warning">{t.deliveryBlocked}</Alert>
+      ) : null}
+
+      {communication.status === "UNCERTAIN" && !blocked ? (
+        <SendCommunicationForm action={boundSend} label={t.retry} pendingLabel={t.retryingEllipsis} variant="outline" />
       ) : null}
 
       {deliveryAttempts.length > 0 ? (

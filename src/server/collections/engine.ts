@@ -11,16 +11,25 @@ import { ensureInsightForInvoiceOverdueEvent } from "@/server/operator/insights"
 import { ensureReminderProposalForInsight } from "@/server/operator/proposals";
 import { prepareReminderCommunication, type AiOverride } from "@/server/communications/draft";
 import { sendCommunication } from "@/server/communications/send";
+import { findBlockedDeliveryInvoices } from "@/server/communications/delivery-guard";
 import { recordActivityEvent } from "@/server/ar/activity";
 import { daysBetween, toDateOnlyString } from "@/server/ar/dates";
 import { getInvoiceWithFinancials, listInvoicesWithFinancials } from "@/server/ar/invoices";
 import { buildDeterministicInvoiceContext } from "@/server/ar/reminder-context";
 import { isCollectionsAutomationEntitled } from "@/server/billing/entitlements";
-import { prisma } from "@/server/db/client";
+import { prisma, type PrismaWrite } from "@/server/db/client";
 import type { EmailProvider } from "@/server/email/types";
 import type { MessagingProvider } from "@/server/messaging/types";
 import { env } from "@/lib/env";
 import { enrollEligibleInvoices } from "./enrollment";
+import {
+  CollectionClaimLostError,
+  collectionStepEventKey,
+  completeCollectionClaim,
+  eventMatchesStep,
+  writeWithCollectionClaim,
+} from "./execution";
+import { recoverStaleCollectionClaims } from "./recovery";
 
 const UNIQUE_CONSTRAINT_VIOLATION = "P2002";
 
@@ -43,6 +52,8 @@ export type AutomationTickSummary = {
   stopped: number;
   blocked: number;
   failed: number;
+  recovered: number;
+  recoveryNeedsReview: number;
 };
 
 function emptySummary(globallyDisabled: boolean): AutomationTickSummary {
@@ -58,6 +69,8 @@ function emptySummary(globallyDisabled: boolean): AutomationTickSummary {
     stopped: 0,
     blocked: 0,
     failed: 0,
+    recovered: 0,
+    recoveryNeedsReview: 0,
   };
 }
 
@@ -138,6 +151,7 @@ export async function runAutomationTick(
         const counts = await processOrganizationTick(
           organizationId,
           today,
+          now,
           options.emailProvider,
           options.messagingProvider,
           options.aiOverride,
@@ -150,6 +164,8 @@ export async function runAutomationTick(
         summary.stopped += counts.stopped;
         summary.blocked += counts.blocked;
         summary.failed += counts.failed;
+        summary.recovered += counts.recovered;
+        summary.recoveryNeedsReview += counts.recoveryNeedsReview;
       } catch (error) {
         // One organization's bulk-fetch or policy data blowing up must
         // never take the rest of the batch down with it.
@@ -253,10 +269,15 @@ type OrgCounts = {
   stopped: number;
   blocked: number;
   failed: number;
+  recovered: number;
+  recoveryNeedsReview: number;
 };
 
 function emptyOrgCounts(): OrgCounts {
-  return { scanned: 0, enrolled: 0, claimed: 0, executed: 0, skipped: 0, stopped: 0, blocked: 0, failed: 0 };
+  return {
+    scanned: 0, enrolled: 0, claimed: 0, executed: 0, skipped: 0, stopped: 0, blocked: 0, failed: 0,
+    recovered: 0, recoveryNeedsReview: 0,
+  };
 }
 
 /**
@@ -274,6 +295,7 @@ function emptyOrgCounts(): OrgCounts {
 async function processOrganizationTick(
   organizationId: string,
   today: string,
+  now: Date,
   emailProvider?: EmailProvider,
   messagingProvider?: MessagingProvider,
   aiOverride?: AiOverride,
@@ -290,6 +312,12 @@ async function processOrganizationTick(
   // exactly like "no active policy" or "no active sequences" already do
   // below. See src/server/billing/entitlements.ts#isCollectionsAutomationEntitled.
   if (!(await isCollectionsAutomationEntitled(organizationId))) return counts;
+
+  const recovery = await recoverStaleCollectionClaims(organizationId, now, today);
+  counts.recovered = recovery.recovered;
+  counts.recoveryNeedsReview = recovery.needsReview;
+  counts.executed = recovery.recovered;
+  counts.failed = recovery.failed;
 
   const activePolicy = await prisma.collectionPolicy.findFirst({
     where: { organizationId, isDefault: true, enabled: true },
@@ -314,15 +342,12 @@ async function processOrganizationTick(
   const policyIds = [...new Set(activeSequences.map((sequence) => sequence.policyId))];
   const sequenceIds = activeSequences.map((sequence) => sequence.id);
 
-  const [allInvoices, policies, allSteps, existingExecutions, blockingCommunications] = await Promise.all([
+  const [allInvoices, policies, allSteps, existingExecutions, blockedInvoiceIds] = await Promise.all([
     listInvoicesWithFinancials(organizationId, "all", { today }),
     prisma.collectionPolicy.findMany({ where: { id: { in: policyIds } } }),
     prisma.collectionPolicyStep.findMany({ where: { policyId: { in: policyIds } } }),
     prisma.collectionStepExecution.findMany({ where: { sequenceId: { in: sequenceIds } } }),
-    prisma.communication.findMany({
-      where: { invoiceId: { in: invoiceIds }, status: { in: ["SENDING", "UNCERTAIN"] } },
-      select: { invoiceId: true },
-    }),
+    findBlockedDeliveryInvoices(prisma, organizationId, invoiceIds),
   ]);
 
   const financialsByInvoiceId = new Map(allInvoices.map((entry) => [entry.invoice.id, entry]));
@@ -335,21 +360,23 @@ async function processOrganizationTick(
     stepsByVersionKey.set(key, list);
   }
   const executedStepIdsBySequence = new Map<string, Set<string>>();
+  const claimedSequenceIds = new Set<string>();
   for (const execution of existingExecutions) {
+    if (execution.status === "CLAIMED") claimedSequenceIds.add(execution.sequenceId);
     const set = executedStepIdsBySequence.get(execution.sequenceId) ?? new Set<string>();
     set.add(execution.stepId);
     executedStepIdsBySequence.set(execution.sequenceId, set);
   }
-  const blockedInvoiceIds = new Set(blockingCommunications.map((communication) => communication.invoiceId));
 
   for (const sequence of activeSequences) {
+    if (recovery.recoveredSequences.has(sequence.id)) continue;
     try {
       const outcome = await processSequenceTick(sequence, today, {
         financialsEntry: financialsByInvoiceId.get(sequence.invoiceId),
         policy: policyById.get(sequence.policyId),
         steps: stepsByVersionKey.get(`${sequence.policyId}:${sequence.policyVersion}`) ?? [],
         executedStepIds: executedStepIdsBySequence.get(sequence.id) ?? new Set<string>(),
-        isBlocked: blockedInvoiceIds.has(sequence.invoiceId),
+        isBlocked: blockedInvoiceIds.has(sequence.invoiceId) || claimedSequenceIds.has(sequence.id),
         emailProvider,
         messagingProvider,
         aiOverride,
@@ -359,6 +386,7 @@ async function processOrganizationTick(
       counts.skipped += outcome.skipped;
       counts.stopped += outcome.stopped;
       counts.blocked += outcome.blocked;
+      counts.failed += outcome.failed;
     } catch (error) {
       counts.failed += 1;
       logSequenceFailure(organizationId, sequence.id, error);
@@ -368,10 +396,10 @@ async function processOrganizationTick(
   return counts;
 }
 
-type SequenceOutcome = { claimed: number; executed: number; skipped: number; stopped: number; blocked: number };
+type SequenceOutcome = { claimed: number; executed: number; skipped: number; stopped: number; blocked: number; failed: number };
 
 function emptyOutcome(): SequenceOutcome {
-  return { claimed: 0, executed: 0, skipped: 0, stopped: 0, blocked: 0 };
+  return { claimed: 0, executed: 0, skipped: 0, stopped: 0, blocked: 0, failed: 0 };
 }
 
 type SequenceTickContext = {
@@ -440,8 +468,21 @@ async function processSequenceTick(
     if (skipped) outcome.skipped += 1;
   }
 
+  if (stepToExecute.action !== "SEND_PAYMENT_REMINDER") {
+    const skipped = await claimStepExecution(
+      sequence,
+      stepToExecute,
+      "SKIPPED",
+      stepToExecute.action === "NOTIFY_OWNER"
+        ? "Owner notification requires internal delivery"
+        : "Unsupported collection step action",
+    );
+    if (skipped) outcome.skipped += 1;
+    return outcome;
+  }
+
   const claim = await claimStepExecution(sequence, stepToExecute, "CLAIMED", null);
-  if (!claim) return outcome; // lost the race to another worker, or a prior tick left a stuck CLAIMED row
+  if (!claim) return outcome; // another worker already acquired this execution
   outcome.claimed = 1;
 
   // Pause↔worker race: the sequence may have been paused/stopped by a
@@ -468,23 +509,23 @@ async function processSequenceTick(
     return outcome;
   }
 
-  const { businessEvent, proposal } = await runStepThroughOperator(sequence, stepToExecute, claim.id, today);
-
-  await prisma.collectionStepExecution.update({
-    where: { id: claim.id },
-    data: { status: "EXECUTED", businessEventId: businessEvent.id, actionProposalId: proposal.id, completedAt: new Date() },
-  });
-  await recordActivityEvent(prisma, {
-    organizationId: sequence.organizationId,
-    type: "COLLECTION_STEP_EXECUTED",
-    summary: `Collection step executed (day ${stepToExecute.daysAfterDue}, ${stepToExecute.action})`,
-    invoiceId: sequence.invoiceId,
-    customerId: sequence.customerId,
-  });
+  const persist: PrismaWrite = (write) => writeWithCollectionClaim(sequence.organizationId, claim.id, write);
+  let operator: Awaited<ReturnType<typeof runStepThroughOperator>>;
+  try {
+    operator = await runStepThroughOperator(sequence, stepToExecute, claim.id, today, persist);
+  } catch (error) {
+    if (error instanceof CollectionClaimLostError) return outcome;
+    throw error;
+  }
+  const { businessEvent, proposal } = operator;
+  const executed = await prisma.$transaction((tx) =>
+    completeCollectionClaim(tx, sequence, stepToExecute, claim.id, businessEvent.id, proposal.id),
+  );
+  if (!executed) return outcome;
   outcome.executed = 1;
 
   if (policy.automationMode === "AUTO_SEND" && policy.autoSendEnabledByUserId) {
-    await executeAutoSend(
+    const delivery = await executeAutoSend(
       sequence,
       proposal.id,
       policy.autoSendEnabledByUserId,
@@ -493,6 +534,7 @@ async function processSequenceTick(
       messagingProvider,
       aiOverride,
     );
+    if (delivery === "failed") outcome.failed += 1;
   }
 
   return outcome;
@@ -531,8 +573,8 @@ async function claimStepExecution(
   status: "CLAIMED" | "SKIPPED",
   note: string | null,
 ): Promise<{ id: string } | null> {
-  try {
-    const execution = await prisma.collectionStepExecution.create({
+  const createExecution = (client: Prisma.TransactionClient) =>
+    client.collectionStepExecution.create({
       data: {
         organizationId: sequence.organizationId,
         sequenceId: sequence.id,
@@ -542,18 +584,29 @@ async function claimStepExecution(
         completedAt: status === "SKIPPED" ? new Date() : undefined,
       },
     });
-    if (status === "SKIPPED") {
-      await recordActivityEvent(prisma, {
+
+  let executionInserted = false;
+  try {
+    if (status === "CLAIMED") return await createExecution(prisma);
+
+    return await prisma.$transaction(async (tx) => {
+      const execution = await createExecution(tx);
+      executionInserted = true;
+      await recordActivityEvent(tx, {
         organizationId: sequence.organizationId,
         type: "COLLECTION_STEP_SKIPPED",
         summary: `Collection step skipped (day ${step.daysAfterDue}) — ${note}`,
         invoiceId: sequence.invoiceId,
         customerId: sequence.customerId,
       });
-    }
-    return execution;
+      return execution;
+    });
   } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === UNIQUE_CONSTRAINT_VIOLATION) {
+    if (
+      !executionInserted &&
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === UNIQUE_CONSTRAINT_VIOLATION
+    ) {
       return null;
     }
     throw error;
@@ -565,16 +618,20 @@ async function markStepExecutionSkipped(
   executionId: string,
   note: string,
 ): Promise<void> {
-  await prisma.collectionStepExecution.update({
-    where: { id: executionId },
-    data: { status: "SKIPPED", note, completedAt: new Date() },
-  });
-  await recordActivityEvent(prisma, {
-    organizationId: sequence.organizationId,
-    type: "COLLECTION_STEP_SKIPPED",
-    summary: `Collection step skipped — ${note}`,
-    invoiceId: sequence.invoiceId,
-    customerId: sequence.customerId,
+  await prisma.$transaction(async (tx) => {
+    const transition = await tx.collectionStepExecution.updateMany({
+      where: { id: executionId, organizationId: sequence.organizationId, status: "CLAIMED", note: null, completedAt: null },
+      data: { status: "SKIPPED", note, completedAt: new Date() },
+    });
+    if (transition.count !== 1) return;
+
+    await recordActivityEvent(tx, {
+      organizationId: sequence.organizationId,
+      type: "COLLECTION_STEP_SKIPPED",
+      summary: `Collection step skipped — ${note}`,
+      invoiceId: sequence.invoiceId,
+      customerId: sequence.customerId,
+    });
   });
 }
 
@@ -584,25 +641,27 @@ async function stopSequence(
   status: "COMPLETED" | "STOPPED",
   stopReason: CollectionStopReason,
 ): Promise<boolean> {
-  const now = new Date();
-  const result = await prisma.collectionSequence.updateMany({
-    where: { id: sequence.id, status: "ACTIVE" },
-    data: {
-      status,
-      stopReason,
-      stoppedAt: status === "STOPPED" ? now : undefined,
-      completedAt: status === "COMPLETED" ? now : undefined,
-    },
+  return prisma.$transaction(async (tx) => {
+    const now = new Date();
+    const result = await tx.collectionSequence.updateMany({
+      where: { id: sequence.id, organizationId: sequence.organizationId, status: "ACTIVE" },
+      data: {
+        status,
+        stopReason,
+        stoppedAt: status === "STOPPED" ? now : undefined,
+        completedAt: status === "COMPLETED" ? now : undefined,
+      },
+    });
+    if (result.count !== 1) return false;
+    await recordActivityEvent(tx, {
+      organizationId: sequence.organizationId,
+      type: "COLLECTION_SEQUENCE_STOPPED",
+      summary: `Collections sequence stopped (${stopReason})`,
+      invoiceId: sequence.invoiceId,
+      customerId: sequence.customerId,
+    });
+    return true;
   });
-  if (result.count !== 1) return false;
-  await recordActivityEvent(prisma, {
-    organizationId: sequence.organizationId,
-    type: "COLLECTION_SEQUENCE_STOPPED",
-    summary: `Collections sequence stopped (${stopReason})`,
-    invoiceId: sequence.invoiceId,
-    customerId: sequence.customerId,
-  });
-  return true;
 }
 
 /**
@@ -617,52 +676,55 @@ async function runStepThroughOperator(
   step: CollectionPolicyStep,
   stepExecutionId: string,
   today: string,
+  persist: PrismaWrite,
 ) {
-  const context = await buildDeterministicInvoiceContext(sequence.organizationId, sequence.invoiceId, today);
-
-  let businessEvent;
-  try {
-    businessEvent = await prisma.businessEvent.create({
-      data: {
-        organizationId: sequence.organizationId,
-        type: "COLLECTION_STEP_DUE",
-        customerId: sequence.customerId,
-        invoiceId: sequence.invoiceId,
-        dedupeKey: stepExecutionId,
+  const key = collectionStepEventKey(sequence.organizationId, stepExecutionId);
+  const eventKey = { organizationId_type_dedupeKey: key };
+  let businessEvent = await prisma.businessEvent.findUnique({ where: eventKey });
+  if (!businessEvent) {
+    const context = await buildDeterministicInvoiceContext(sequence.organizationId, sequence.invoiceId, today);
+    try {
+      businessEvent = await persist((tx) => tx.businessEvent.create({
         data: {
-          invoiceNumber: context.invoiceNumber,
-          currency: context.currency,
-          outstandingAmount: context.outstandingAmount,
-          dueDate: context.dueDate,
-          daysOverdue: context.daysOverdue,
-          stepDaysAfterDue: step.daysAfterDue,
-          stepAction: step.action,
-          stepTone: step.tone,
-        },
-      },
-    });
-  } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === UNIQUE_CONSTRAINT_VIOLATION) {
-      businessEvent = await prisma.businessEvent.findUniqueOrThrow({
-        where: {
-          organizationId_type_dedupeKey: {
-            organizationId: sequence.organizationId,
-            type: "COLLECTION_STEP_DUE",
-            dedupeKey: stepExecutionId,
+          ...key,
+          customerId: sequence.customerId,
+          invoiceId: sequence.invoiceId,
+          data: {
+            invoiceNumber: context.invoiceNumber,
+            currency: context.currency,
+            outstandingAmount: context.outstandingAmount,
+            dueDate: context.dueDate,
+            daysOverdue: context.daysOverdue,
+            stepDaysAfterDue: step.daysAfterDue,
+            stepAction: step.action,
+            stepTone: step.tone,
           },
         },
-      });
-    } else {
-      throw error;
+      }));
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === UNIQUE_CONSTRAINT_VIOLATION) {
+        businessEvent = await prisma.businessEvent.findUniqueOrThrow({ where: eventKey });
+      } else {
+        throw error;
+      }
     }
   }
 
-  const { insight } = await ensureInsightForInvoiceOverdueEvent(sequence.organizationId, businessEvent);
+  if (!eventMatchesStep(businessEvent, sequence, step)) {
+    throw new Error("Collection step and existing business event do not match");
+  }
+
+  const { insight } = await ensureInsightForInvoiceOverdueEvent(sequence.organizationId, businessEvent, persist);
+  if (insight.invoiceId !== sequence.invoiceId || insight.customerId !== sequence.customerId) {
+    throw new Error("Collection step and existing insight do not match");
+  }
   const { proposal } = await ensureReminderProposalForInsight(sequence.organizationId, insight, {
     tone: step.tone.toLowerCase(),
-  });
-
-  return { businessEvent, insight, proposal };
+  }, persist);
+  if (proposal.invoiceId !== sequence.invoiceId || proposal.customerId !== sequence.customerId) {
+    throw new Error("Collection step and existing proposal do not match");
+  }
+  return { businessEvent, proposal };
 }
 
 /**
@@ -682,7 +744,7 @@ async function executeAutoSend(
   emailProvider?: EmailProvider,
   messagingProvider?: MessagingProvider,
   aiOverride?: AiOverride,
-): Promise<void> {
+): Promise<"sent" | "skipped" | "failed"> {
   try {
     await approveActionProposal(sequence.organizationId, proposalId, actingUserId);
     const { communication } = await prepareReminderCommunication(sequence.organizationId, proposalId, aiOverride);
@@ -695,7 +757,7 @@ async function executeAutoSend(
     // the organization kill switch, or switched the policy back to
     // APPROVAL_REQUIRED while drafting was in flight. None of those are
     // re-checked anywhere else between the claim and this point.
-    if (!(await isAutoSendStillAuthorized(sequence))) return;
+    if (!(await isAutoSendStillAuthorized(sequence))) return "skipped";
 
     // Fresh financial re-check for the same reason (section 12).
     const fresh = await getInvoiceWithFinancials(sequence.organizationId, sequence.invoiceId, today);
@@ -703,19 +765,21 @@ async function executeAutoSend(
       // Do not send. The proposal/communication are left as-is (APPROVED/
       // DRAFT) for a human to review; the next tick's payment/cancellation
       // check stops the sequence properly. Never call sendCommunication here.
-      return;
+      return "skipped";
     }
 
-    await sendCommunication(sequence.organizationId, communication.id, actingUserId, {
+    const result = await sendCommunication(sequence.organizationId, communication.id, actingUserId, {
       provider: emailProvider,
       messagingProvider,
       actorSource: "AUTOMATION",
     });
+    return result.communication.status === "SENT" ? "sent" : "failed";
   } catch (error) {
     // Not retried automatically within this tick — surfaced via the
     // Communication's own FAILED/UNCERTAIN status and the existing manual
     // retry flow (section 23: no new retry infrastructure).
     logAutoSendFailure(sequence.organizationId, proposalId, error);
+    return "failed";
   }
 }
 

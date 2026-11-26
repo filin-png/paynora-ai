@@ -23,6 +23,8 @@ export type AutomationHealth = {
    */
   ready: boolean;
   automationEnabled: boolean;
+  /** The latest tick had errors while automation was enabled, even if the scheduler remains ready. */
+  degraded: boolean;
   lastTickAt: string | null;
   lastTickCrashed: boolean | null;
   lastSuccessfulTickAt: string | null;
@@ -60,7 +62,7 @@ export async function getAutomationHealth(
   });
 
   const lastRun = recentRuns[0] ?? null;
-  const lastSuccessfulRun = recentRuns.find((run) => !run.crashed && !run.globallyDisabled) ?? null;
+  const lastSuccessfulRun = recentRuns.find((run) => !run.crashed && !run.globallyDisabled && run.failed === 0) ?? null;
 
   const isStale = !lastRun || now.getTime() - lastRun.startedAt.getTime() > STALE_TICK_THRESHOLD_MS;
   const ready = !automationEnabled || (!isStale && lastRun !== null && !lastRun.crashed);
@@ -69,6 +71,7 @@ export async function getAutomationHealth(
     live: true,
     ready,
     automationEnabled,
+    degraded: automationEnabled && (lastRun?.failed ?? 0) > 0,
     lastTickAt: lastRun?.startedAt.toISOString() ?? null,
     lastTickCrashed: lastRun?.crashed ?? null,
     lastSuccessfulTickAt: lastSuccessfulRun?.startedAt.toISOString() ?? null,

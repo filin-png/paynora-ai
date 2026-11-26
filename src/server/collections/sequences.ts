@@ -1,7 +1,8 @@
-import type { CollectionSequence, CollectionStopReason } from "@prisma/client";
+import type { CollectionSequence, CollectionStopReason, Prisma } from "@prisma/client";
 
 import { recordActivityEvent } from "@/server/ar/activity";
 import { prisma } from "@/server/db/client";
+import { findBlockedDeliveryInvoices } from "@/server/communications/delivery-guard";
 import { CollectionsResourceNotFoundError, InvalidSequenceTransitionError } from "./errors";
 
 export async function getCollectionSequenceForInvoice(organizationId: string, invoiceId: string) {
@@ -38,86 +39,77 @@ export async function pauseCollectionSequence(
   organizationId: string,
   sequenceId: string,
 ): Promise<CollectionSequence> {
-  const result = await prisma.collectionSequence.updateMany({
-    where: { id: sequenceId, organizationId, status: "ACTIVE" },
-    data: { status: "PAUSED", pausedAt: new Date() },
+  return transitionSequence(organizationId, sequenceId, {
+    from: ["ACTIVE"],
+    target: "PAUSED",
+    data: { pausedAt: new Date() },
+    action: "pause",
+    auditType: "COLLECTION_SEQUENCE_PAUSED",
+    summary: "Collections sequence paused",
   });
-  if (result.count === 1) {
-    const updated = await prisma.collectionSequence.findUniqueOrThrow({ where: { id: sequenceId } });
-    await recordActivityEvent(prisma, {
-      organizationId,
-      type: "COLLECTION_SEQUENCE_PAUSED",
-      summary: "Collections sequence paused",
-      invoiceId: updated.invoiceId,
-      customerId: updated.customerId,
-    });
-    return updated;
-  }
-  return resolveNonTransition(organizationId, sequenceId, "PAUSED", "pause");
 }
 
-/**
- * Resuming never bursts stale reminders: it only flips status back to
- * ACTIVE. It does NOT retroactively execute any step whose daysAfterDue
- * already passed while paused — the next tick's normal catch-up logic
- * (src/server/collections/engine.ts) decides what, if anything, is still
- * due, using the same single-most-advanced-step rule as any other
- * catch-up gap. See docs/collections-automation.md#catch-up.
- */
+/** Catch-up on the next tick decides which step, if any, is still due. */
 export async function resumeCollectionSequence(
   organizationId: string,
   sequenceId: string,
 ): Promise<CollectionSequence> {
-  const result = await prisma.collectionSequence.updateMany({
-    where: { id: sequenceId, organizationId, status: "PAUSED" },
-    data: { status: "ACTIVE", pausedAt: null },
+  return transitionSequence(organizationId, sequenceId, {
+    from: ["PAUSED"],
+    target: "ACTIVE",
+    data: { pausedAt: null },
+    action: "resume",
+    auditType: "COLLECTION_SEQUENCE_RESUMED",
+    summary: "Collections sequence resumed",
   });
-  if (result.count === 1) {
-    const updated = await prisma.collectionSequence.findUniqueOrThrow({ where: { id: sequenceId } });
-    await recordActivityEvent(prisma, {
-      organizationId,
-      type: "COLLECTION_SEQUENCE_RESUMED",
-      summary: "Collections sequence resumed",
-      invoiceId: updated.invoiceId,
-      customerId: updated.customerId,
-    });
-    return updated;
-  }
-  return resolveNonTransition(organizationId, sequenceId, "ACTIVE", "resume");
 }
 
 export async function stopCollectionSequenceManually(
   organizationId: string,
   sequenceId: string,
 ): Promise<CollectionSequence> {
-  const result = await prisma.collectionSequence.updateMany({
-    where: { id: sequenceId, organizationId, status: { in: ["ACTIVE", "PAUSED"] } },
-    data: { status: "STOPPED", stopReason: "MANUAL", stoppedAt: new Date() },
+  return transitionSequence(organizationId, sequenceId, {
+    from: ["ACTIVE", "PAUSED"],
+    target: "STOPPED",
+    data: { stopReason: "MANUAL", stoppedAt: new Date() },
+    action: "stop",
+    auditType: "COLLECTION_SEQUENCE_STOPPED",
+    summary: "Collections sequence stopped manually",
   });
-  if (result.count === 1) {
-    const updated = await prisma.collectionSequence.findUniqueOrThrow({ where: { id: sequenceId } });
-    await recordActivityEvent(prisma, {
-      organizationId,
-      type: "COLLECTION_SEQUENCE_STOPPED",
-      summary: "Collections sequence stopped manually",
-      invoiceId: updated.invoiceId,
-      customerId: updated.customerId,
-    });
-    return updated;
-  }
-  return resolveNonTransition(organizationId, sequenceId, "STOPPED", "stop");
 }
 
-async function resolveNonTransition(
+async function transitionSequence(
   organizationId: string,
   sequenceId: string,
-  idempotentTargetStatus: CollectionSequence["status"],
-  action: string,
+  transition: {
+    from: CollectionSequence["status"][];
+    target: CollectionSequence["status"];
+    data: Pick<Prisma.CollectionSequenceUpdateManyMutationInput, "pausedAt" | "stoppedAt" | "stopReason">;
+    action: "pause" | "resume" | "stop";
+    auditType: "COLLECTION_SEQUENCE_PAUSED" | "COLLECTION_SEQUENCE_RESUMED" | "COLLECTION_SEQUENCE_STOPPED";
+    summary: string;
+  },
 ): Promise<CollectionSequence> {
-  const current = await prisma.collectionSequence.findFirst({ where: { id: sequenceId, organizationId } });
-  if (!current) throw new CollectionsResourceNotFoundError("Collection sequence");
-  if (current.status === idempotentTargetStatus) return current;
-  throw new InvalidSequenceTransitionError(current.status, action);
+  return prisma.$transaction(async (tx) => {
+    const result = await tx.collectionSequence.updateMany({
+      where: { id: sequenceId, organizationId, status: { in: transition.from } },
+      data: { ...transition.data, status: transition.target },
+    });
+    const current = await tx.collectionSequence.findFirst({ where: { id: sequenceId, organizationId } });
+    if (!current) throw new CollectionsResourceNotFoundError("Collection sequence");
+    if (result.count === 1) {
+      await recordActivityEvent(tx, {
+        organizationId,
+        type: transition.auditType,
+        summary: transition.summary,
+        invoiceId: current.invoiceId,
+        customerId: current.customerId,
+      });
+      return current;
+    }
+    if (current.status === transition.target) return current;
+    throw new InvalidSequenceTransitionError(current.status, transition.action);
+  });
 }
 
 export type CollectionStatusView =
@@ -148,10 +140,8 @@ export async function getCollectionStatusForInvoice(
   if (sequence.status === "STOPPED") return { kind: "stopped", stopReason: sequence.stopReason };
   if (sequence.status === "PAUSED") return { kind: "paused", sequenceId: sequence.id };
 
-  const blockingCommunication = await prisma.communication.findFirst({
-    where: { invoiceId, status: { in: ["SENDING", "UNCERTAIN"] } },
-  });
-  if (blockingCommunication) return { kind: "blocked_uncertain", sequenceId: sequence.id };
+  const blockedInvoices = await findBlockedDeliveryInvoices(prisma, organizationId, [invoiceId]);
+  if (blockedInvoices.has(invoiceId)) return { kind: "blocked_uncertain", sequenceId: sequence.id };
 
   const [steps, executions] = await Promise.all([
     prisma.collectionPolicyStep.findMany({
